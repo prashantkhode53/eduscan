@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: eduscan-backend
+    env: node
+    region: oregon
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        value: postgresql://neondb_owner:npg_WtykALs7i9NF@ep-crimson-brook-aqxs1ja7-pooler.c-8.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 8h
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        value: your_email@gmail.com
+      - key: SMTP_PASS
+        value: your_app_password
+      - key: SMTP_FROM
+        value: EduScan <your_email@gmail.com>
+      - key: PORT
+        value: "3000"

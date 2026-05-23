@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(ls \"d:\\\\EduScan\\\\23052026\\\\backend\\\\src\" -Recurse | Where-Object { !$_.PSIsContainer } | Format-Table Name, FullName -AutoSize)",
+      "PowerShell(cd \"d:\\\\EduScan\\\\23052026\\\\backend\"; npm install; $exitCode = $LASTEXITCODE; Write-Host \"Exit: $exitCode\")"
+    ]
+  }
+}
