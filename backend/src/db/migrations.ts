@@ -1,9 +1,7 @@
 import { pool } from './pool';
 import bcrypt from 'bcrypt';
-import dotenv from 'dotenv';
-dotenv.config();
 
-async function runMigrations(): Promise<void> {
+export async function runMigrations(): Promise<void> {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -135,9 +133,3 @@ async function runMigrations(): Promise<void> {
     client.release();
   }
 }
-
-runMigrations()
-  .then(() => process.exit(0))
-  .catch(() => process.exit(1));
-
-export { runMigrations };

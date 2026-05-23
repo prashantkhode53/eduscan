@@ -21,7 +21,6 @@ import settingsRoutes from './routes/settings';
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// CORS — allow all origins so Flutter mobile app works on any network
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -34,7 +33,6 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(defaultLimiter);
 
-// Health check — Render pings this; keep-alive also uses it
 app.get('/api/health', async (_req, res) => {
   try {
     await pool.query('SELECT 1');
@@ -62,11 +60,12 @@ app.use('/api/settings', settingsRoutes);
 app.use(notFound);
 app.use(errorHandler);
 
-async function bootstrap(): Promise<void> {
+async function start(): Promise<void> {
   try {
     await runMigrations();
     console.log('✅ Database migrations complete');
-    app.listen(Number(PORT), '0.0.0.0', () => {
+
+    const server = app.listen(Number(PORT), '0.0.0.0', () => {
       console.log(`🚀 EduScan backend running on port ${PORT}`);
       console.log(`🌍 Environment: ${process.env.NODE_ENV}`);
       console.log(`🗄️  Database: Neon PostgreSQL`);
@@ -74,12 +73,27 @@ async function bootstrap(): Promise<void> {
       const serverUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
       startKeepAlive(serverUrl);
     });
+
+    server.on('error', (err) => {
+      console.error('❌ Server error:', err);
+      process.exit(1);
+    });
   } catch (err) {
-    console.error('❌ Failed to start server:', err);
+    console.error('❌ Fatal startup error:', err);
     process.exit(1);
   }
 }
 
-bootstrap();
+process.on('uncaughtException', (err) => {
+  console.error('❌ Uncaught Exception:', err);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('❌ Unhandled Rejection:', reason);
+  process.exit(1);
+});
+
+start();
 
 export default app;

@@ -2,23 +2,26 @@ import { Pool } from 'pg';
 import dotenv from 'dotenv';
 dotenv.config();
 
-export const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false,
-  },
-  max: 10,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 5000,
-});
+let _pool: Pool | null = null;
 
-pool.on('connect', () => console.log('✅ Connected to Neon PostgreSQL'));
-pool.on('error', (err) => console.error('❌ Neon pool error:', err));
+export function getPool(): Pool {
+  if (!_pool) {
+    _pool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: { rejectUnauthorized: false },
+      max: 5,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 10000,
+    });
+    _pool.on('connect', () => console.log('✅ Connected to Neon PostgreSQL'));
+    _pool.on('error', (err) => console.error('❌ Pool error:', err));
+  }
+  return _pool;
+}
 
-export async function query<T = unknown>(
-  text: string,
-  params?: unknown[]
-): Promise<T[]> {
+export const pool = getPool();
+
+export async function query<T = any>(text: string, params?: any[]): Promise<T[]> {
   const client = await pool.connect();
   try {
     const result = await client.query(text, params);
@@ -28,10 +31,7 @@ export async function query<T = unknown>(
   }
 }
 
-export async function queryOne<T = unknown>(
-  text: string,
-  params?: unknown[]
-): Promise<T | null> {
+export async function queryOne<T = any>(text: string, params?: any[]): Promise<T | null> {
   const rows = await query<T>(text, params);
   return rows[0] ?? null;
 }
