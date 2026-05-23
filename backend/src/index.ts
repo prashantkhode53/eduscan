@@ -19,7 +19,7 @@ import reportRoutes from './routes/reports';
 import settingsRoutes from './routes/settings';
 
 const app = express();
-const PORT = process.env.PORT ?? 3000;
+const PORT = process.env.PORT || 3000;
 
 // CORS — allow all origins so Flutter mobile app works on any network
 app.use(cors({
@@ -66,14 +66,14 @@ async function bootstrap(): Promise<void> {
   try {
     await runMigrations();
     console.log('✅ Database migrations complete');
-    app.listen(PORT, () => {
+    app.listen(Number(PORT), '0.0.0.0', () => {
       console.log(`🚀 EduScan backend running on port ${PORT}`);
-      console.log(`🌍 Environment: ${process.env.NODE_ENV ?? 'development'}`);
+      console.log(`🌍 Environment: ${process.env.NODE_ENV}`);
       console.log(`🗄️  Database: Neon PostgreSQL`);
-    });
 
-    const serverUrl = process.env.RENDER_EXTERNAL_URL ?? `http://localhost:${PORT}`;
-    startKeepAlive(serverUrl);
+      const serverUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+      startKeepAlive(serverUrl);
+    });
   } catch (err) {
     console.error('❌ Failed to start server:', err);
     process.exit(1);
