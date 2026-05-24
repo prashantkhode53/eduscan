@@ -14,11 +14,10 @@ class SyncService {
     if (_syncing) return;
     _syncing = true;
 
-    final results = await Connectivity().checkConnectivity();
-    final isOnline = results.any((r) =>
-        r == ConnectivityResult.mobile ||
-        r == ConnectivityResult.wifi ||
-        r == ConnectivityResult.ethernet);
+    final result = await Connectivity().checkConnectivity();
+    final isOnline = result == ConnectivityResult.mobile ||
+        result == ConnectivityResult.wifi ||
+        result == ConnectivityResult.ethernet;
 
     if (!isOnline) {
       _syncing = false;
