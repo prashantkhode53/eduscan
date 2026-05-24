@@ -8,6 +8,7 @@ import '../models/scan_result.dart';
 import '../providers/connectivity_provider.dart';
 import '../services/api_service.dart';
 import '../services/local_db_service.dart';
+import '../services/storage_service.dart';
 import '../services/sync_service.dart';
 import '../widgets/face_overlay_painter.dart';
 
@@ -23,6 +24,7 @@ class _CheckinCheckoutScreenState extends State<CheckinCheckoutScreen> {
   bool _cameraReady = false;
   String _mode = 'checkin';
   String _selectedClass = '10-A';
+  String? _kioskKey;
   ScanResult? _lastResult;
   FaceOverlayState _overlayState = FaceOverlayState.idle;
   bool _debouncing = false;
@@ -39,11 +41,27 @@ class _CheckinCheckoutScreenState extends State<CheckinCheckoutScreen> {
   void initState() {
     super.initState();
     _now = DateTime.now();
-    // FaceService is all-static, no init needed
+    _loadKioskKey();
     _initCamera();
     _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() => _now = DateTime.now());
     });
+  }
+
+  Future<void> _loadKioskKey() async {
+    _kioskKey = await StorageService.getKioskKey();
+    if (_kioskKey == null || _kioskKey!.isEmpty) {
+      try {
+        final settings = await ApiService.getSettings();
+        final key = settings['kiosk_api_key'] as String?;
+        if (key != null && key.isNotEmpty) {
+          _kioskKey = key;
+          await StorageService.saveKioskKey(key);
+        }
+      } catch (e) {
+        debugPrint('Failed to load kiosk key: $e');
+      }
+    }
   }
 
   Future<void> _initCamera() async {

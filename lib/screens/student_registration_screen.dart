@@ -262,7 +262,7 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
           backgroundColor: Colors.green,
         ),
       );
-      Navigator.of(context).pop();
+      Navigator.of(context).pop(true); // signal list to refresh
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(

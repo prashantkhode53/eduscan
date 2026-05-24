@@ -81,7 +81,7 @@ class Attendance {
       };
 
   String get studentFullName =>
-      [firstName, lastName].where((p) => p != null && p!.isNotEmpty).join(' ');
+      [firstName, lastName].where((p) => p != null && p.isNotEmpty).join(' ');
 
   String get durationLabel {
     if (durationMins == null || durationMins! <= 0) return '-';

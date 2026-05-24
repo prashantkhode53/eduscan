@@ -38,7 +38,7 @@ export async function scan(req: Request, res: Response, next: NextFunction): Pro
 
     const hoursStart = settings['school_hours_start'] ?? '07:00';
     const hoursEnd   = settings['school_hours_end']   ?? '18:00';
-    const threshold  = parseFloat(settings['face_threshold'] ?? '0.6');
+    const threshold  = parseFloat(settings['face_threshold'] ?? '0.4');
 
     // Check school hours
     const scanTime = timestamp ? new Date(timestamp) : new Date();
@@ -83,6 +83,8 @@ export async function scan(req: Request, res: Response, next: NextFunction): Pro
     }));
 
     const match = findBestMatch(embedding, studentsWithEmbedding, threshold);
+
+    console.log(`[scan] class=${class_id} students=${studentsWithEmbedding.length} threshold=${threshold} bestScore=${match?.confidence ?? 'no_match'}`);
 
     if (!match) {
       const response: ScanResponse = {
