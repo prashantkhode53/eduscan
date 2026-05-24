@@ -70,12 +70,34 @@ class Student {
       return [];
     }
 
+    // node-postgres returns DECIMAL/NUMERIC as strings; parse defensively
+    double? parseDouble(dynamic v) {
+      if (v == null) return null;
+      if (v is num) return v.toDouble();
+      return double.tryParse(v.toString());
+    }
+
+    // node-postgres returns INT as num, but guard against string just in case
+    int? parseInt(dynamic v) {
+      if (v == null) return null;
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      return int.tryParse(v.toString());
+    }
+
+    // node-postgres returns DATE as ISO string or DateTime; take date part only
+    String parseDate(dynamic v) {
+      if (v == null) return '';
+      final s = v.toString();
+      return s.length >= 10 ? s.substring(0, 10) : s;
+    }
+
     return Student(
       id: json['id'] as String,
       firstName: json['first_name'] as String,
       middleName: json['middle_name'] as String?,
       lastName: json['last_name'] as String,
-      dob: json['dob'] as String,
+      dob: parseDate(json['dob']),
       gender: json['gender'] as String,
       bloodGroup: json['blood_group'] as String?,
       nationality: json['nationality'] as String?,
@@ -84,9 +106,9 @@ class Student {
       academicYear: json['academic_year'] as String,
       classGrade: json['class_grade'] as String,
       division: json['division'] as String,
-      rollNo: json['roll_no'] as int?,
+      rollNo: parseInt(json['roll_no']),
       stream: json['stream'] as String?,
-      admissionDate: json['admission_date'] as String,
+      admissionDate: parseDate(json['admission_date']),
       parentName: json['parent_name'] as String,
       parentRelation: json['parent_relation'] as String?,
       mobile: json['mobile'] as String,
@@ -97,7 +119,7 @@ class Student {
       emergencyContact: json['emergency_contact'] as String?,
       transportRoute: json['transport_route'] as String?,
       faceEmbedding: parseEmbedding(json['face_embedding']),
-      faceQuality: (json['face_quality'] as num?)?.toDouble(),
+      faceQuality: parseDouble(json['face_quality']),
       status: json['status'] as String? ?? 'active',
       createdAt: json['created_at'] as String?,
       updatedAt: json['updated_at'] as String?,

@@ -90,6 +90,9 @@ export async function createStudent(req: Request, res: Response, next: NextFunct
 
     const id = await generateStudentId();
 
+    const rollNo = body.roll_no != null ? parseInt(String(body.roll_no), 10) : null;
+    const faceQuality = body.face_quality != null ? parseFloat(String(body.face_quality)) : null;
+
     await query(
       `INSERT INTO students (
         id, first_name, middle_name, last_name, dob, gender, blood_group, nationality, govt_id,
@@ -103,11 +106,11 @@ export async function createStudent(req: Request, res: Response, next: NextFunct
         id, body.first_name, body.middle_name ?? null, body.last_name,
         body.dob, body.gender, body.blood_group ?? null, body.nationality ?? null, body.govt_id ?? null,
         body.institution, body.academic_year, body.class_grade, body.division,
-        body.roll_no ?? null, body.stream ?? null, body.admission_date,
+        rollNo, body.stream ?? null, body.admission_date,
         body.parent_name, body.parent_relation ?? null, body.mobile,
         body.email ?? null, body.address ?? null, body.known_allergies ?? null,
         body.medical_conditions ?? null, body.emergency_contact ?? null, body.transport_route ?? null,
-        JSON.stringify(embedding), body.face_quality ?? null, 'active',
+        JSON.stringify(embedding), faceQuality, 'active',
       ]
     );
 
