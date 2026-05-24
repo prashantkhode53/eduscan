@@ -2,7 +2,7 @@ class ApiEndpoints {
   // ── CHANGE THIS to your Render URL after deployment ───────────────────────
   // Example: https://eduscan-backend.onrender.com
   // Do NOT use localhost or 192.168.x.x — those only work on local network.
-  static const String baseUrl = 'https://eduscan-backend.onrender.com';
+  static const String baseUrl = 'https://eduscan-j4cg.onrender.com';
   // ──────────────────────────────────────────────────────────────────────────
 
   // Auth
