@@ -1,158 +1,116 @@
-import 'package:flutter/foundation.dart';
+import 'dart:math';
+import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
-import 'package:image/image.dart' as img;
-import 'package:tflite_flutter/tflite_flutter.dart';
 
 class FaceService {
   static final FaceService instance = FaceService._();
   FaceService._();
 
-  late final FaceDetector _detector;
-  Interpreter? _interpreter;
-  bool _initialized = false;
+  static final FaceDetector _detector = FaceDetector(
+    options: FaceDetectorOptions(
+      enableLandmarks: true,
+      enableContours: true,
+      enableClassification: true,
+      performanceMode: FaceDetectorMode.accurate,
+    ),
+  );
 
-  Future<void> init() async {
-    if (_initialized) return;
-    _detector = FaceDetector(
-      options: FaceDetectorOptions(
-        enableLandmarks: true,
-        enableClassification: true,
-        enableTracking: true,
-        performanceMode: FaceDetectorMode.accurate,
-        minFaceSize: 0.15,
+  // No-op — TFLite removed, ML Kit initialises lazily on first use
+  Future<void> init() async {}
+
+  // Convert CameraImage to InputImage for ML Kit
+  static InputImage? cameraImageToInputImage(
+    CameraImage image,
+    CameraDescription camera,
+  ) {
+    final format = InputImageFormatValue.fromRawValue(image.format.raw);
+    if (format == null) return null;
+    final plane = image.planes.first;
+    return InputImage.fromBytes(
+      bytes: plane.bytes,
+      metadata: InputImageMetadata(
+        size: Size(image.width.toDouble(), image.height.toDouble()),
+        rotation: InputImageRotation.rotation0deg,
+        format: format,
+        bytesPerRow: plane.bytesPerRow,
       ),
     );
-    _interpreter = await Interpreter.fromAsset('assets/models/mobilefacenet.tflite');
-    _initialized = true;
   }
 
-  Future<List<Face>> detectFaces(CameraImage cameraImage, InputImageRotation rotation) async {
-    final inputImage = _cameraImageToInputImage(cameraImage, rotation);
-    if (inputImage == null) return [];
+  // Detect faces in an InputImage (file path or bytes)
+  static Future<List<Face>> detectFaces(InputImage inputImage) async {
     return _detector.processImage(inputImage);
   }
 
-  InputImage? _cameraImageToInputImage(CameraImage cameraImage, InputImageRotation rotation) {
-    try {
-      final WriteBuffer allBytes = WriteBuffer();
-      for (final Plane plane in cameraImage.planes) {
-        allBytes.putUint8List(plane.bytes);
-      }
-      final bytes = allBytes.done().buffer.asUint8List();
+  // Generate a 128-d pseudo-embedding from ML Kit landmarks.
+  // No TFLite required — uses normalised landmark positions + pairwise
+  // distances, then L2-normalises to unit length for cosine matching.
+  static List<double>? extractEmbedding(Face face) {
+    final box = face.boundingBox;
+    final w = box.width;
+    final h = box.height;
+    if (w <= 0 || h <= 0) return null;
 
-      final inputImageData = InputImageMetadata(
-        size: Size(cameraImage.width.toDouble(), cameraImage.height.toDouble()),
-        rotation: rotation,
-        format: InputImageFormat.nv21,
-        bytesPerRow: cameraImage.planes[0].bytesPerRow,
-      );
+    const landmarkTypes = [
+      FaceLandmarkType.leftEye,
+      FaceLandmarkType.rightEye,
+      FaceLandmarkType.noseBase,
+      FaceLandmarkType.leftEar,
+      FaceLandmarkType.rightEar,
+      FaceLandmarkType.leftCheek,
+      FaceLandmarkType.rightCheek,
+      FaceLandmarkType.leftMouth,
+      FaceLandmarkType.rightMouth,
+      FaceLandmarkType.bottomMouth,
+    ];
 
-      return InputImage.fromBytes(bytes: bytes, metadata: inputImageData);
-    } catch (_) {
-      return null;
+    // Normalised (x, y) for each landmark — 20 values
+    final pts = <double>[];
+    for (final type in landmarkTypes) {
+      final lm = face.landmarks[type];
+      pts.add(lm != null ? (lm.position.x - box.left) / w : 0.5);
+      pts.add(lm != null ? (lm.position.y - box.top) / h : 0.5);
     }
-  }
 
-  Future<List<double>?> extractEmbedding(CameraImage cameraImage, Face face) async {
-    if (_interpreter == null) return null;
-    try {
-      final box = face.boundingBox;
-
-      final WriteBuffer allBytes = WriteBuffer();
-      for (final Plane plane in cameraImage.planes) {
-        allBytes.putUint8List(plane.bytes);
-      }
-      final bytes = allBytes.done().buffer.asUint8List();
-
-      img.Image? image = _decodeYuv420(bytes, cameraImage.width, cameraImage.height);
-      if (image == null) return null;
-
-      final left   = (box.left.toInt()).clamp(0, image.width - 1);
-      final top    = (box.top.toInt()).clamp(0, image.height - 1);
-      final width  = (box.width.toInt()).clamp(1, image.width - left);
-      final height = (box.height.toInt()).clamp(1, image.height - top);
-
-      final cropped = img.copyCrop(image, x: left, y: top, width: width, height: height);
-      final resized = img.copyResize(cropped, width: 112, height: 112);
-
-      final input = _imageToFloat32(resized);
-      final output = List.filled(128, 0.0).reshape([1, 128]);
-
-      _interpreter!.run(input.reshape([1, 112, 112, 3]), output);
-
-      return List<double>.from(output[0] as List);
-    } catch (_) {
-      return null;
-    }
-  }
-
-  img.Image? _decodeYuv420(Uint8List bytes, int width, int height) {
-    try {
-      final buffer = img.Image(width: width, height: height);
-      final ySize = width * height;
-      for (int j = 0; j < height; j++) {
-        for (int i = 0; i < width; i++) {
-          final y = bytes[j * width + i];
-          final uvIndex = ySize + (j ~/ 2) * width + (i & ~1);
-          final u = (uvIndex + 1 < bytes.length) ? bytes[uvIndex + 1] - 128 : 0;
-          final v = (uvIndex < bytes.length) ? bytes[uvIndex] - 128 : 0;
-          final r = (y + 1.402 * v).round().clamp(0, 255);
-          final g = (y - 0.344136 * u - 0.714136 * v).round().clamp(0, 255);
-          final b = (y + 1.772 * u).round().clamp(0, 255);
-          buffer.setPixelRgba(i, j, r, g, b, 255);
-        }
-      }
-      return buffer;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  Float32List _imageToFloat32(img.Image image) {
-    final result = Float32List(1 * 112 * 112 * 3);
-    int idx = 0;
-    for (int y = 0; y < 112; y++) {
-      for (int x = 0; x < 112; x++) {
-        final pixel = image.getPixel(x, y);
-        result[idx++] = (pixel.r / 127.5) - 1.0;
-        result[idx++] = (pixel.g / 127.5) - 1.0;
-        result[idx++] = (pixel.b / 127.5) - 1.0;
+    // Pairwise Euclidean distances — 10×9/2 = 45 values
+    final n = pts.length ~/ 2;
+    final dist = <double>[];
+    for (int i = 0; i < n; i++) {
+      for (int j = i + 1; j < n; j++) {
+        final dx = pts[i * 2] - pts[j * 2];
+        final dy = pts[i * 2 + 1] - pts[j * 2 + 1];
+        dist.add(sqrt(dx * dx + dy * dy));
       }
     }
-    return result;
+
+    // 20 + 45 = 65 features; zero-pad to 128 for interface compatibility
+    final raw = [...pts, ...dist];
+    final vec = List<double>.filled(128, 0.0);
+    for (int i = 0; i < raw.length && i < 128; i++) {
+      vec[i] = raw[i];
+    }
+
+    // L2 normalise so cosine similarity == dot product
+    final norm = sqrt(vec.fold(0.0, (s, v) => s + v * v));
+    if (norm == 0) return vec;
+    return vec.map((v) => v / norm).toList();
   }
 
+  // Average multiple embeddings for robust registration
   List<double> averageEmbeddings(List<List<double>> embeddings) {
-    if (embeddings.isEmpty) return [];
+    if (embeddings.isEmpty) return List.filled(128, 0.0);
     final result = List<double>.filled(128, 0.0);
     for (final emb in embeddings) {
-      for (int i = 0; i < 128; i++) {
+      for (int i = 0; i < 128 && i < emb.length; i++) {
         result[i] += emb[i];
       }
     }
-    for (int i = 0; i < 128; i++) {
-      result[i] /= embeddings.length;
-    }
-    return result;
-  }
-
-  double computeBrightnessScore(img.Image image) {
-    double total = 0;
-    int count = 0;
-    for (int y = 0; y < image.height; y++) {
-      for (int x = 0; x < image.width; x++) {
-        final pixel = image.getPixel(x, y);
-        total += (pixel.r * 0.299 + pixel.g * 0.587 + pixel.b * 0.114) / 255.0;
-        count++;
-      }
-    }
-    return count > 0 ? total / count : 0.0;
+    final n = embeddings.length.toDouble();
+    return result.map((v) => v / n).toList();
   }
 
   void dispose() {
     _detector.close();
-    _interpreter?.close();
-    _initialized = false;
   }
 }

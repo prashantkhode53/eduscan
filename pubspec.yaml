@@ -10,8 +10,6 @@ dependencies:
     sdk: flutter
   camera: ^0.10.5+9
   google_mlkit_face_detection: ^0.9.0
-  tflite_flutter: ^0.10.4
-  image: ^4.1.7
   image_picker: ^1.0.7
   provider: ^6.1.2
   http: ^1.2.1
@@ -36,7 +34,6 @@ dev_dependencies:
 
 flutter:
   assets:
-    - assets/models/mobilefacenet.tflite
     - assets/sounds/beep_success.mp3
     - assets/sounds/beep_error.mp3
     - assets/images/logo.png
