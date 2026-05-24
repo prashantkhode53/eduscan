@@ -108,21 +108,6 @@ export async function runMigrations(): Promise<void> {
     await client.query(`CREATE INDEX IF NOT EXISTS idx_students_class        ON students(class_grade, division)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_students_status       ON students(status)`);
 
-    // Seed default admin (username: admin, password: Admin@123)
-    const existing = await client.query(
-      `SELECT id FROM admins WHERE username = $1`,
-      ['admin']
-    );
-    if (existing.rows.length === 0) {
-      const hash = await bcrypt.hash('Admin@123', 12);
-      await client.query(
-        `INSERT INTO admins (username, password_hash, email, full_name, role)
-         VALUES ($1, $2, $3, $4, $5)`,
-        ['admin', hash, 'admin@eduscan.local', 'System Administrator', 'superadmin']
-      );
-      console.log('✅ Default admin seeded: username=admin password=Admin@123');
-    }
-
     await client.query('COMMIT');
     console.log('✅ All migrations completed successfully');
   } catch (err) {
@@ -132,4 +117,13 @@ export async function runMigrations(): Promise<void> {
   } finally {
     client.release();
   }
+
+  // Seed default admin outside the transaction so it is always attempted
+  const passwordHash = await bcrypt.hash('Admin@123', 10);
+  await pool.query(`
+    INSERT INTO admins (username, password_hash, email, full_name, role)
+    VALUES ('admin', $1, 'admin@eduscan.com', 'Admin', 'admin')
+    ON CONFLICT (username) DO NOTHING
+  `, [passwordHash]);
+  console.log('✅ Default admin seeded');
 }
