@@ -74,7 +74,7 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
   @override
   void initState() {
     super.initState();
-    FaceService.instance.init();
+    // FaceService is all-static, no init needed
   }
 
   Future<void> _initCamera() async {
@@ -146,7 +146,7 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
         _brightnessScore = 0.75;
       });
       if (_currentSample >= 4) {
-        _finalEmbedding = FaceService.instance.averageEmbeddings(_samples);
+        _finalEmbedding = FaceService.averageEmbeddings(_samples);
         _scanTimer?.cancel();
         setState(() => _overlayState = FaceOverlayState.successCheckin);
       }

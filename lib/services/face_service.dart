@@ -4,9 +4,6 @@ import 'package:camera/camera.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 
 class FaceService {
-  static final FaceService instance = FaceService._();
-  FaceService._();
-
   static final FaceDetector _detector = FaceDetector(
     options: FaceDetectorOptions(
       enableLandmarks: true,
@@ -15,9 +12,6 @@ class FaceService {
       performanceMode: FaceDetectorMode.accurate,
     ),
   );
-
-  // No-op — TFLite removed, ML Kit initialises lazily on first use
-  Future<void> init() async {}
 
   // Convert CameraImage to InputImage for ML Kit
   static InputImage? cameraImageToInputImage(
@@ -38,79 +32,77 @@ class FaceService {
     );
   }
 
-  // Detect faces in an InputImage (file path or bytes)
+  // Detect faces in camera frame
   static Future<List<Face>> detectFaces(InputImage inputImage) async {
     return _detector.processImage(inputImage);
   }
 
-  // Generate a 128-d pseudo-embedding from ML Kit landmarks.
-  // No TFLite required — uses normalised landmark positions + pairwise
-  // distances, then L2-normalises to unit length for cosine matching.
-  static List<double>? extractEmbedding(Face face) {
+  // Generate a 128-D pseudo embedding from face landmarks (no TFLite needed)
+  static List<double> generateEmbedding(Face face) {
+    final List<double> embedding = List.filled(128, 0.0);
+    int idx = 0;
+
     final box = face.boundingBox;
-    final w = box.width;
-    final h = box.height;
-    if (w <= 0 || h <= 0) return null;
+    embedding[idx++] = box.width / (box.height + 0.001);
+    embedding[idx++] = box.left / 1000.0;
+    embedding[idx++] = box.top / 1000.0;
 
-    const landmarkTypes = [
-      FaceLandmarkType.leftEye,
-      FaceLandmarkType.rightEye,
-      FaceLandmarkType.noseBase,
-      FaceLandmarkType.leftEar,
-      FaceLandmarkType.rightEar,
-      FaceLandmarkType.leftCheek,
-      FaceLandmarkType.rightCheek,
-      FaceLandmarkType.leftMouth,
-      FaceLandmarkType.rightMouth,
-      FaceLandmarkType.bottomMouth,
-    ];
+    embedding[idx++] = (face.headEulerAngleX ?? 0) / 90.0;
+    embedding[idx++] = (face.headEulerAngleY ?? 0) / 90.0;
+    embedding[idx++] = (face.headEulerAngleZ ?? 0) / 90.0;
 
-    // Normalised (x, y) for each landmark — 20 values
-    final pts = <double>[];
-    for (final type in landmarkTypes) {
-      final lm = face.landmarks[type];
-      pts.add(lm != null ? (lm.position.x - box.left) / w : 0.5);
-      pts.add(lm != null ? (lm.position.y - box.top) / h : 0.5);
-    }
+    embedding[idx++] = face.smilingProbability ?? 0.0;
+    embedding[idx++] = face.leftEyeOpenProbability ?? 0.0;
+    embedding[idx++] = face.rightEyeOpenProbability ?? 0.0;
 
-    // Pairwise Euclidean distances — 10×9/2 = 45 values
-    final n = pts.length ~/ 2;
-    final dist = <double>[];
-    for (int i = 0; i < n; i++) {
-      for (int j = i + 1; j < n; j++) {
-        final dx = pts[i * 2] - pts[j * 2];
-        final dy = pts[i * 2 + 1] - pts[j * 2 + 1];
-        dist.add(sqrt(dx * dx + dy * dy));
+    for (final type in FaceLandmarkType.values) {
+      final landmark = face.landmarks[type];
+      if (landmark != null && idx < 126) {
+        embedding[idx++] = landmark.position.x / 1000.0;
+        embedding[idx++] = landmark.position.y / 1000.0;
+      } else {
+        if (idx < 128) embedding[idx++] = 0.0;
+        if (idx < 128) embedding[idx++] = 0.0;
       }
     }
 
-    // 20 + 45 = 65 features; zero-pad to 128 for interface compatibility
-    final raw = [...pts, ...dist];
-    final vec = List<double>.filled(128, 0.0);
-    for (int i = 0; i < raw.length && i < 128; i++) {
-      vec[i] = raw[i];
-    }
-
-    // L2 normalise so cosine similarity == dot product
-    final norm = sqrt(vec.fold(0.0, (s, v) => s + v * v));
-    if (norm == 0) return vec;
-    return vec.map((v) => v / norm).toList();
+    return _normalize(embedding);
   }
 
-  // Average multiple embeddings for robust registration
-  List<double> averageEmbeddings(List<List<double>> embeddings) {
+  // Average multiple embeddings for better accuracy during registration
+  static List<double> averageEmbeddings(List<List<double>> embeddings) {
     if (embeddings.isEmpty) return List.filled(128, 0.0);
-    final result = List<double>.filled(128, 0.0);
-    for (final emb in embeddings) {
-      for (int i = 0; i < 128 && i < emb.length; i++) {
-        result[i] += emb[i];
+    final avg = List<double>.filled(128, 0.0);
+    for (final e in embeddings) {
+      for (int i = 0; i < 128; i++) {
+        avg[i] += e[i];
       }
     }
-    final n = embeddings.length.toDouble();
-    return result.map((v) => v / n).toList();
+    for (int i = 0; i < 128; i++) {
+      avg[i] /= embeddings.length;
+    }
+    return _normalize(avg);
   }
 
-  void dispose() {
+  // Cosine similarity between two embeddings
+  static double cosineSimilarity(List<double> a, List<double> b) {
+    double dot = 0, magA = 0, magB = 0;
+    for (int i = 0; i < a.length; i++) {
+      dot += a[i] * b[i];
+      magA += a[i] * a[i];
+      magB += b[i] * b[i];
+    }
+    if (magA == 0 || magB == 0) return 0;
+    return dot / (sqrt(magA) * sqrt(magB));
+  }
+
+  static List<double> _normalize(List<double> v) {
+    final mag = sqrt(v.fold(0.0, (sum, x) => sum + x * x));
+    if (mag == 0) return v;
+    return v.map((x) => x / mag).toList();
+  }
+
+  static void dispose() {
     _detector.close();
   }
 }

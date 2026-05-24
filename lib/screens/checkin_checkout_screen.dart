@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'package:audioplayers/audioplayers.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -8,7 +7,6 @@ import 'package:provider/provider.dart';
 import '../models/scan_result.dart';
 import '../providers/connectivity_provider.dart';
 import '../services/api_service.dart';
-import '../services/face_service.dart';
 import '../services/local_db_service.dart';
 import '../services/sync_service.dart';
 import '../widgets/face_overlay_painter.dart';
@@ -37,13 +35,12 @@ class _CheckinCheckoutScreenState extends State<CheckinCheckoutScreen> {
 
   late DateTime _now;
   Timer? _clockTimer;
-  final AudioPlayer _audioPlayer = AudioPlayer();
 
   @override
   void initState() {
     super.initState();
     _now = DateTime.now();
-    FaceService.instance.init();
+    // FaceService is all-static, no init needed
     _initCamera();
     _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() => _now = DateTime.now());
@@ -154,11 +151,10 @@ class _CheckinCheckoutScreenState extends State<CheckinCheckoutScreen> {
     // Audio + haptic
     if (result.success &&
         (result.action == ScanAction.checkin || result.action == ScanAction.checkout)) {
-      _audioPlayer.play(AssetSource('sounds/beep_success.mp3'));
+      HapticFeedback.lightImpact();
       if (result.action == ScanAction.checkin) _checkedIn++;
       if (result.action == ScanAction.checkout) _checkedOut++;
     } else if (result.action == ScanAction.unknown) {
-      _audioPlayer.play(AssetSource('sounds/beep_error.mp3'));
       HapticFeedback.heavyImpact();
     }
 
@@ -192,7 +188,6 @@ class _CheckinCheckoutScreenState extends State<CheckinCheckoutScreen> {
     _resetTimer?.cancel();
     _clockTimer?.cancel();
     _cameraCtrl?.dispose();
-    _audioPlayer.dispose();
     super.dispose();
   }
 
