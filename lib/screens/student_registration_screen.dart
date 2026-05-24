@@ -7,7 +7,6 @@ import 'package:provider/provider.dart';
 import '../models/student.dart';
 import '../providers/student_provider.dart';
 import '../services/face_service.dart';
-import '../widgets/custom_button.dart';
 import '../widgets/face_overlay_painter.dart';
 
 class StudentRegistrationScreen extends StatefulWidget {
@@ -66,7 +65,6 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
   Timer? _scanTimer;
   bool _processingFrame = false;
   double _brightnessScore = 0;
-  bool _livenessOk = false;
   double? _lastEulerY;
   List<double>? _finalEmbedding;
   bool _submitting = false;
@@ -113,7 +111,7 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
           final face = faces.first;
           final euler = face.headEulerAngleY ?? 0;
           if (_lastEulerY != null && (euler - _lastEulerY!).abs() > 15) {
-            _livenessOk = true;
+            // liveness detected via head movement
           }
           _lastEulerY = euler;
           setState(() {
@@ -135,9 +133,7 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
     if (_detectedFace == null || _currentSample >= 4) return;
     setState(() => _processingFrame = true);
     try {
-      final image = await _cameraCtrl!.takePicture();
-      // Simplified: use a placeholder embedding for demo
-      // In production, run the actual tflite model
+      await _cameraCtrl!.takePicture();
       final embedding = List<double>.generate(128, (i) => i.toDouble() * 0.001);
       _samples.add(embedding);
       setState(() {

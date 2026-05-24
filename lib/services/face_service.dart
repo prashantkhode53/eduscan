@@ -13,19 +13,21 @@ class FaceService {
     ),
   );
 
-  // Convert CameraImage to InputImage for ML Kit
   static InputImage? cameraImageToInputImage(
     CameraImage image,
     CameraDescription camera,
   ) {
+    final rotation = InputImageRotationValue.fromRawValue(camera.sensorOrientation);
+    if (rotation == null) return null;
     final format = InputImageFormatValue.fromRawValue(image.format.raw);
     if (format == null) return null;
+    if (image.planes.isEmpty) return null;
     final plane = image.planes.first;
     return InputImage.fromBytes(
       bytes: plane.bytes,
       metadata: InputImageMetadata(
         size: Size(image.width.toDouble(), image.height.toDouble()),
-        rotation: InputImageRotation.rotation0deg,
+        rotation: rotation,
         format: format,
         bytesPerRow: plane.bytesPerRow,
       ),

@@ -25,7 +25,6 @@ class _CheckinCheckoutScreenState extends State<CheckinCheckoutScreen> {
   String _selectedClass = '10-A';
   ScanResult? _lastResult;
   FaceOverlayState _overlayState = FaceOverlayState.idle;
-  bool _scanning = false;
   bool _debouncing = false;
   Timer? _scanTimer;
   Timer? _resetTimer;
@@ -264,7 +263,7 @@ class _CheckinCheckoutScreenState extends State<CheckinCheckoutScreen> {
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 12, vertical: 4),
                             decoration: BoxDecoration(
-                              color: Colors.orange.withOpacity(0.85),
+                              color: Colors.orange.withValues(alpha: 0.85),
                               borderRadius: BorderRadius.circular(20),
                             ),
                             child: const Text('Offline — syncing when connected',
@@ -392,7 +391,7 @@ class _CheckinCheckoutScreenState extends State<CheckinCheckoutScreen> {
               children: [
                 CircleAvatar(
                   radius: 28,
-                  backgroundColor: Colors.white.withOpacity(0.2),
+                  backgroundColor: Colors.white.withValues(alpha: 0.2),
                   child: Text(
                     (_lastResult!.studentName ?? '??')
                         .split(' ')
@@ -422,16 +421,16 @@ class _CheckinCheckoutScreenState extends State<CheckinCheckoutScreen> {
                       Text(
                         'Class ${_lastResult!.classGrade ?? ''}-${_lastResult!.division ?? ''}  Roll: ${_lastResult!.rollNo ?? '-'}',
                         style: TextStyle(
-                            color: textColor.withOpacity(0.8), fontSize: 12),
+                            color: textColor.withValues(alpha: 0.8), fontSize: 12),
                       ),
                       if (_lastResult!.timeIn != null)
                         Text('In: ${_lastResult!.timeIn}',
                             style: TextStyle(
-                                color: textColor.withOpacity(0.8), fontSize: 12)),
+                                color: textColor.withValues(alpha: 0.8), fontSize: 12)),
                       if (_lastResult!.timeOut != null)
                         Text('Out: ${_lastResult!.timeOut}  ${_lastResult!.durationLabel}',
                             style: TextStyle(
-                                color: textColor.withOpacity(0.8), fontSize: 12)),
+                                color: textColor.withValues(alpha: 0.8), fontSize: 12)),
                     ],
                   ),
                 ),
@@ -439,7 +438,7 @@ class _CheckinCheckoutScreenState extends State<CheckinCheckoutScreen> {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.2),
+                    color: Colors.white.withValues(alpha: 0.2),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(
