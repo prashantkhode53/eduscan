@@ -18,7 +18,7 @@ class StudentRegistrationScreen extends StatefulWidget {
 }
 
 class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
-  int _step = 0;
+  int _currentStep = 0;
   final _formKey1 = GlobalKey<FormState>();
   final _formKey2 = GlobalKey<FormState>();
   final _formKey3 = GlobalKey<FormState>();
@@ -72,8 +72,75 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
   @override
   void initState() {
     super.initState();
-    // FaceService is all-static, no init needed
   }
+
+  // ── Validation ────────────────────────────────────────────────────────────
+
+  bool _validateCurrentStep() {
+    switch (_currentStep) {
+      case 0:
+        if (_firstNameCtrl.text.trim().isEmpty) {
+          _snack('First name is required');
+          return false;
+        }
+        if (_lastNameCtrl.text.trim().isEmpty) {
+          _snack('Last name is required');
+          return false;
+        }
+        if (_dob == null) {
+          _snack('Date of birth is required');
+          return false;
+        }
+        if (!(_formKey1.currentState?.validate() ?? false)) return false;
+        return true;
+
+      case 1:
+        if (_institutionCtrl.text.trim().isEmpty) {
+          _snack('Institution name is required');
+          return false;
+        }
+        if (_classGradeCtrl.text.trim().isEmpty) {
+          _snack('Class / Grade is required');
+          return false;
+        }
+        if (_admissionDate == null) {
+          _snack('Admission date is required');
+          return false;
+        }
+        if (!(_formKey2.currentState?.validate() ?? false)) return false;
+        return true;
+
+      case 2:
+        if (_parentNameCtrl.text.trim().isEmpty) {
+          _snack('Parent / Guardian name is required');
+          return false;
+        }
+        if (_mobileCtrl.text.trim().isEmpty) {
+          _snack('Mobile number is required');
+          return false;
+        }
+        if (!(_formKey3.currentState?.validate() ?? false)) return false;
+        return true;
+
+      case 3:
+        if (_finalEmbedding == null) {
+          _snack('Please capture all 4 face samples before submitting');
+          return false;
+        }
+        return true;
+
+      default:
+        return true;
+    }
+  }
+
+  void _snack(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: Colors.red.shade700),
+    );
+  }
+
+  // ── Camera ────────────────────────────────────────────────────────────────
 
   Future<void> _initCamera() async {
     _cameras = await availableCameras();
@@ -150,7 +217,9 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
     setState(() => _processingFrame = false);
   }
 
-  Future<void> _submit() async {
+  // ── Submit ────────────────────────────────────────────────────────────────
+
+  Future<void> _submitRegistration() async {
     if (_finalEmbedding == null) return;
     setState(() => _submitting = true);
     final reg = StudentRegistration(
@@ -228,34 +297,61 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
     super.dispose();
   }
 
+  // ── Build ─────────────────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Register Student'),
-      ),
+      appBar: AppBar(title: const Text('Register Student')),
       body: Stepper(
-        currentStep: _step,
-        onStepCancel: _step > 0 ? () => setState(() => _step--) : null,
-        onStepContinue: _onContinue,
+        currentStep: _currentStep,
+        onStepContinue: () {
+          if (_validateCurrentStep()) {
+            if (_currentStep < 3) {
+              setState(() => _currentStep++);
+              if (_currentStep == 3) _initCamera();
+            } else {
+              _submitRegistration();
+            }
+          }
+        },
+        onStepCancel: () {
+          if (_currentStep > 0) setState(() => _currentStep--);
+        },
+        onStepTapped: (step) {
+          if (step < _currentStep) setState(() => _currentStep = step);
+        },
         controlsBuilder: (context, details) {
           return Padding(
             padding: const EdgeInsets.only(top: 16),
             child: Row(
               children: [
-                FilledButton(
-                  onPressed: _step == 3 ? (_submitting ? null : _submit) : details.onStepContinue,
-                  child: _step == 3
-                      ? (_submitting
-                          ? const SizedBox(
-                              width: 18, height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                          : const Text('Submit'))
-                      : const Text('Next'),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: _currentStep == 3 && _submitting
+                        ? null
+                        : details.onStepContinue,
+                    child: _currentStep == 3
+                        ? (_submitting
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2, color: Colors.white),
+                              )
+                            : const Text('Submit'))
+                        : const Text('Next'),
+                  ),
                 ),
-                const SizedBox(width: 8),
-                if (_step > 0)
-                  TextButton(onPressed: details.onStepCancel, child: const Text('Back')),
+                if (_currentStep > 0) ...[
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: details.onStepCancel,
+                      child: const Text('Back'),
+                    ),
+                  ),
+                ],
               ],
             ),
           );
@@ -263,25 +359,25 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
         steps: [
           Step(
             title: const Text('Personal Info'),
-            isActive: _step >= 0,
-            state: _step > 0 ? StepState.complete : StepState.indexed,
+            isActive: _currentStep >= 0,
+            state: _currentStep > 0 ? StepState.complete : StepState.indexed,
             content: _buildStep1(),
           ),
           Step(
             title: const Text('Academic Info'),
-            isActive: _step >= 1,
-            state: _step > 1 ? StepState.complete : StepState.indexed,
+            isActive: _currentStep >= 1,
+            state: _currentStep > 1 ? StepState.complete : StepState.indexed,
             content: _buildStep2(),
           ),
           Step(
             title: const Text('Contact & Medical'),
-            isActive: _step >= 2,
-            state: _step > 2 ? StepState.complete : StepState.indexed,
+            isActive: _currentStep >= 2,
+            state: _currentStep > 2 ? StepState.complete : StepState.indexed,
             content: _buildStep3(),
           ),
           Step(
             title: const Text('Face Capture'),
-            isActive: _step >= 3,
+            isActive: _currentStep >= 3,
             content: _buildStep4(),
           ),
         ],
@@ -289,16 +385,7 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
     );
   }
 
-  void _onContinue() {
-    if (_step == 0 && _formKey1.currentState!.validate() && _dob != null) {
-      setState(() => _step = 1);
-    } else if (_step == 1 && _formKey2.currentState!.validate() && _admissionDate != null) {
-      setState(() => _step = 2);
-    } else if (_step == 2 && _formKey3.currentState!.validate()) {
-      setState(() => _step = 3);
-      _initCamera();
-    }
-  }
+  // ── Step content ──────────────────────────────────────────────────────────
 
   Widget _field(String label, TextEditingController ctrl,
       {bool required = false, TextInputType? keyboardType, int maxLines = 1}) {
@@ -309,7 +396,9 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
         keyboardType: keyboardType,
         maxLines: maxLines,
         decoration: InputDecoration(labelText: label),
-        validator: required ? (v) => (v == null || v.trim().isEmpty) ? '$label is required' : null : null,
+        validator: required
+            ? (v) => (v == null || v.trim().isEmpty) ? '$label is required' : null
+            : null,
       ),
     );
   }
@@ -318,22 +407,29 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
     return Form(
       key: _formKey1,
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _field('First Name', _firstNameCtrl, required: true),
           _field('Middle Name', _middleNameCtrl),
           _field('Last Name', _lastNameCtrl, required: true),
           ListTile(
             contentPadding: EdgeInsets.zero,
-            title: Text(_dob == null
-                ? 'Date of Birth *'
-                : 'DOB: ${DateFormat('dd MMM yyyy').format(_dob!)}'),
+            title: Text(
+              _dob == null
+                  ? 'Date of Birth *'
+                  : 'DOB: ${DateFormat('dd MMM yyyy').format(_dob!)}',
+              style: TextStyle(
+                color: _dob == null ? Colors.grey.shade600 : null,
+              ),
+            ),
             trailing: const Icon(Icons.calendar_today),
             onTap: () async {
               final d = await showDatePicker(
-                  context: context,
-                  initialDate: DateTime(2010),
-                  firstDate: DateTime(1990),
-                  lastDate: DateTime.now());
+                context: context,
+                initialDate: DateTime(2010),
+                firstDate: DateTime(1990),
+                lastDate: DateTime.now(),
+              );
               if (d != null) setState(() => _dob = d);
             },
           ),
@@ -350,7 +446,8 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
             value: _bloodGroup,
             decoration: const InputDecoration(labelText: 'Blood Group'),
             items: [null, 'A+', 'A-', 'B+', 'B-', 'O+', 'O-', 'AB+', 'AB-']
-                .map((g) => DropdownMenuItem(value: g, child: Text(g ?? 'Not specified')))
+                .map((g) =>
+                    DropdownMenuItem(value: g, child: Text(g ?? 'Not specified')))
                 .toList(),
             onChanged: (v) => setState(() => _bloodGroup = v),
           ),
@@ -366,6 +463,7 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
     return Form(
       key: _formKey2,
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _field('Institution Name', _institutionCtrl, required: true),
           DropdownButtonFormField<String>(
@@ -387,21 +485,26 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
             onChanged: (v) => setState(() => _division = v!),
           ),
           const SizedBox(height: 12),
-          _field('Roll Number', _rollNoCtrl,
-              keyboardType: TextInputType.number),
+          _field('Roll Number', _rollNoCtrl, keyboardType: TextInputType.number),
           _field('Stream / Medium', _streamCtrl),
           ListTile(
             contentPadding: EdgeInsets.zero,
-            title: Text(_admissionDate == null
-                ? 'Admission Date *'
-                : 'Admitted: ${DateFormat('dd MMM yyyy').format(_admissionDate!)}'),
+            title: Text(
+              _admissionDate == null
+                  ? 'Admission Date *'
+                  : 'Admitted: ${DateFormat('dd MMM yyyy').format(_admissionDate!)}',
+              style: TextStyle(
+                color: _admissionDate == null ? Colors.grey.shade600 : null,
+              ),
+            ),
             trailing: const Icon(Icons.calendar_today),
             onTap: () async {
               final d = await showDatePicker(
-                  context: context,
-                  initialDate: DateTime.now(),
-                  firstDate: DateTime(2000),
-                  lastDate: DateTime.now());
+                context: context,
+                initialDate: DateTime.now(),
+                firstDate: DateTime(2000),
+                lastDate: DateTime.now(),
+              );
               if (d != null) setState(() => _admissionDate = d);
             },
           ),
@@ -414,6 +517,7 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
     return Form(
       key: _formKey3,
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _field('Parent / Guardian Name', _parentNameCtrl, required: true),
           DropdownButtonFormField<String>(
@@ -441,6 +545,7 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
 
   Widget _buildStep4() {
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (_cameraReady && _cameraCtrl != null)
           Stack(
@@ -479,7 +584,9 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
             return Column(
               children: [
                 Icon(
-                  _samplesCaptured[i] ? Icons.check_circle : Icons.radio_button_unchecked,
+                  _samplesCaptured[i]
+                      ? Icons.check_circle
+                      : Icons.radio_button_unchecked,
                   color: _samplesCaptured[i] ? Colors.green : Colors.grey,
                 ),
                 Text(['Front', 'Left', 'Right', 'Up'][i],
@@ -510,7 +617,7 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
           ),
         const SizedBox(height: 12),
         if (_finalEmbedding == null)
-          FilledButton.icon(
+          ElevatedButton.icon(
             onPressed: _detectedFace != null ? _captureSample : null,
             icon: const Icon(Icons.camera_alt),
             label: Text('Capture Sample ${_currentSample + 1}/4'),
@@ -521,7 +628,8 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
             children: [
               Icon(Icons.check_circle, color: Colors.green),
               SizedBox(width: 8),
-              Text('Face captured. Click Submit.', style: TextStyle(color: Colors.green)),
+              Text('Face captured. Tap Submit.',
+                  style: TextStyle(color: Colors.green)),
             ],
           ),
       ],
