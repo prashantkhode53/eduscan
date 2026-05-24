@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import '../constants/db_constants.dart';
@@ -19,13 +20,18 @@ class LocalDbService {
   }
 
   Future<Database> _open() async {
-    final dbPath = await getDatabasesPath();
-    final path = join(dbPath, DbConstants.dbName);
-    return openDatabase(
-      path,
-      version: DbConstants.dbVersion,
-      onCreate: _onCreate,
-    );
+    try {
+      final dbPath = await getDatabasesPath();
+      final path = join(dbPath, DbConstants.dbName);
+      return openDatabase(
+        path,
+        version: DbConstants.dbVersion,
+        onCreate: _onCreate,
+      );
+    } catch (e) {
+      debugPrint('LocalDbService open error: $e');
+      rethrow;
+    }
   }
 
   Future<void> _onCreate(Database db, int version) async {

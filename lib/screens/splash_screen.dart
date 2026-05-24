@@ -27,52 +27,63 @@ class _SplashScreenState extends State<SplashScreen>
     _opacity = Tween<double>(begin: 0.0, end: 1.0)
         .animate(CurvedAnimation(parent: _controller, curve: Curves.easeIn));
     _controller.forward();
-    _initApp();
+    Future.delayed(Duration.zero, () {
+      try {
+        _initApp();
+      } catch (e) {
+        debugPrint('Splash init error: $e');
+        if (mounted) Navigator.pushReplacementNamed(context, '/login');
+      }
+    });
   }
 
   Future<void> _initApp() async {
-    await Future.delayed(const Duration(milliseconds: 800));
+    try {
+      await Future.delayed(const Duration(milliseconds: 800));
 
-    setState(() {
-      _statusMessage = 'Connecting to server...';
-      _isWakingUp = true;
-    });
-
-    // Retry up to 6 times (30 s total) to handle Render free-tier cold start
-    bool serverReady = false;
-    int attempts = 0;
-    while (!serverReady && attempts < 6) {
-      serverReady = await ApiService.checkHealth();
-      if (!serverReady) {
-        attempts++;
-        if (attempts == 1 && mounted) {
-          setState(() {
-            _statusMessage =
-                'Waking up server\n(first launch may take ~30s)...';
-          });
-        }
-        await Future.delayed(const Duration(seconds: 5));
+      if (mounted) {
+        setState(() {
+          _statusMessage = 'Connecting to server...';
+          _isWakingUp = true;
+        });
       }
-    }
 
-    if (!mounted) return;
-    setState(() => _isWakingUp = false);
+      bool serverReady = false;
+      int attempts = 0;
+      while (!serverReady && attempts < 6) {
+        serverReady = await ApiService.checkHealth();
+        if (!serverReady) {
+          attempts++;
+          if (attempts == 1 && mounted) {
+            setState(() {
+              _statusMessage = 'Waking up server\n(first launch may take ~30s)...';
+            });
+          }
+          await Future.delayed(const Duration(seconds: 5));
+        }
+      }
 
-    if (!serverReady) {
-      // Proceed to login anyway — offline mode will handle missing connectivity
-      Navigator.of(context).pushReplacementNamed('/login');
-      return;
-    }
+      if (!mounted) return;
+      setState(() => _isWakingUp = false);
 
-    setState(() => _statusMessage = 'Loading...');
+      if (!serverReady) {
+        Navigator.of(context).pushReplacementNamed('/login');
+        return;
+      }
 
-    final token = await StorageService.getToken();
-    if (!mounted) return;
+      setState(() => _statusMessage = 'Loading...');
 
-    if (token != null && !JwtDecoder.isExpired(token)) {
-      Navigator.of(context).pushReplacementNamed('/dashboard');
-    } else {
-      Navigator.of(context).pushReplacementNamed('/login');
+      final token = await StorageService.getToken();
+      if (!mounted) return;
+
+      if (token != null && !JwtDecoder.isExpired(token)) {
+        Navigator.of(context).pushReplacementNamed('/dashboard');
+      } else {
+        Navigator.of(context).pushReplacementNamed('/login');
+      }
+    } catch (e) {
+      debugPrint('Splash init error: $e');
+      if (mounted) Navigator.of(context).pushReplacementNamed('/login');
     }
   }
 
@@ -103,7 +114,7 @@ class _SplashScreenState extends State<SplashScreen>
                     borderRadius: BorderRadius.circular(24),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.2),
+                        color: Colors.black.withValues(alpha:0.2),
                         blurRadius: 20,
                         offset: const Offset(0, 8),
                       ),
@@ -125,7 +136,7 @@ class _SplashScreenState extends State<SplashScreen>
                 Text(
                   "Know who's present. Always.",
                   style: theme.textTheme.bodyMedium?.copyWith(
-                    color: Colors.white.withOpacity(0.85),
+                    color: Colors.white.withValues(alpha:0.85),
                     letterSpacing: 0.5,
                   ),
                 ),
@@ -142,7 +153,7 @@ class _SplashScreenState extends State<SplashScreen>
                   _statusMessage,
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                      fontSize: 13, color: Colors.white.withOpacity(0.7)),
+                      fontSize: 13, color: Colors.white.withValues(alpha:0.7)),
                 ),
               ],
             ),
@@ -156,7 +167,7 @@ class _SplashScreenState extends State<SplashScreen>
           child: Text(
             'v1.0.0',
             style: TextStyle(
-              color: Colors.white.withOpacity(0.5),
+              color: Colors.white.withValues(alpha:0.5),
               fontSize: 12,
             ),
           ),
