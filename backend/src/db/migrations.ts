@@ -94,7 +94,7 @@ export async function runMigrations(): Promise<void> {
         ('school_logo_url',    ''),
         ('school_hours_start', '07:00'),
         ('school_hours_end',   '18:00'),
-        ('face_threshold',     '0.6'),
+        ('face_threshold',     '0.35'),
         ('kiosk_api_key',      gen_random_uuid()::text),
         ('auto_mark_absent',   'true'),
         ('absent_alert_days',  '3'),
@@ -107,6 +107,12 @@ export async function runMigrations(): Promise<void> {
     await client.query(`CREATE INDEX IF NOT EXISTS idx_attendance_date_class ON attendance(date, student_id)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_students_class        ON students(class_grade, division)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_students_status       ON students(status)`);
+
+    // Lower face threshold from old default 0.6 → 0.35 on existing deployments
+    await client.query(`
+      UPDATE settings SET value = '0.35', updated_at = NOW()
+      WHERE key = 'face_threshold' AND value = '0.6'
+    `);
 
     await client.query('COMMIT');
     console.log('✅ All migrations completed successfully');

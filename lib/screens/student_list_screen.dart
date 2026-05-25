@@ -114,6 +114,37 @@ class _StudentListScreenState extends State<StudentListScreen> {
             ),
           ),
           const SizedBox(height: 4),
+          // Show API errors prominently so auth/network issues are visible
+          if (provider.error != null)
+            Container(
+              width: double.infinity,
+              margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.red.shade50,
+                border: Border.all(color: Colors.red.shade200),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.error_outline, color: Colors.red.shade700, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      provider.error!,
+                      style: TextStyle(color: Colors.red.shade700, fontSize: 13),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.refresh, size: 18),
+                    color: Colors.red.shade700,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    onPressed: () => _load(refresh: true),
+                  ),
+                ],
+              ),
+            ),
           Expanded(
             child: provider.loading && provider.students.isEmpty
                 ? const ShimmerLoader()
@@ -127,10 +158,24 @@ class _StudentListScreenState extends State<StudentListScreen> {
                                 color:
                                     theme.colorScheme.onSurface.withValues(alpha:0.3)),
                             const SizedBox(height: 12),
-                            Text('No students found',
+                            Text(
+                              provider.error != null
+                                  ? 'Could not load students'
+                                  : 'No students found',
+                              style: TextStyle(
+                                  color: theme.colorScheme.onSurface
+                                      .withValues(alpha:0.5))),
+                            if (provider.error == null) ...[
+                              const SizedBox(height: 8),
+                              Text(
+                                'Tap "Register Student" to add the first student',
                                 style: TextStyle(
+                                    fontSize: 12,
                                     color: theme.colorScheme.onSurface
-                                        .withValues(alpha:0.5))),
+                                        .withValues(alpha:0.4)),
+                                textAlign: TextAlign.center,
+                              ),
+                            ],
                           ],
                         ),
                       )
