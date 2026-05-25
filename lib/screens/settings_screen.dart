@@ -46,14 +46,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _load() async {
     setState(() => _loadingSettings = true);
     final savedUrl = await StorageService.getApiBaseUrl();
-    _urlCtrl.text = savedUrl ?? 'http://localhost:3000';
+    _urlCtrl.text = savedUrl ?? 'https://eduscan-j4cg.onrender.com';
     try {
       final data = await ApiService.getSettings();
-      _serverSettings = Map<String, String>.fromEntries(
-        (data['settings'] as List? ?? []).map((s) =>
-            MapEntry(s['key'] as String, s['value'] as String)),
-      );
+      // API returns a flat key→value map: {school_name: "...", kiosk_api_key: "...", ...}
+      _serverSettings = data.map((k, v) => MapEntry(k, v.toString()));
       _kioskKey = _serverSettings['kiosk_api_key'];
+      // Persist kiosk key so the scan screen can use it immediately
+      if (_kioskKey != null && _kioskKey!.isNotEmpty) {
+        await StorageService.saveKioskKey(_kioskKey!);
+      }
     } catch (_) {}
     setState(() => _loadingSettings = false);
   }
@@ -208,7 +210,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         CircleAvatar(
                           radius: 28,
                           backgroundColor:
-                              theme.colorScheme.primary.withOpacity(0.15),
+                              theme.colorScheme.primary.withValues(alpha: 0.15),
                           child: Text(
                             (auth.admin?.displayName ?? 'A').substring(0, 1).toUpperCase(),
                             style: TextStyle(
@@ -228,7 +230,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               Text(auth.admin?.email ?? '',
                                   style: TextStyle(
                                       color: theme.colorScheme.onSurface
-                                          .withOpacity(0.6),
+                                          .withValues(alpha: 0.6),
                                       fontSize: 13)),
                               Text('Role: ${auth.admin?.role ?? 'admin'}',
                                   style: TextStyle(
@@ -307,7 +309,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           Text('Current Kiosk Key',
                               style: theme.textTheme.bodySmall?.copyWith(
                                   color: theme.colorScheme.onSurface
-                                      .withOpacity(0.6))),
+                                      .withValues(alpha: 0.6))),
                           const SizedBox(height: 4),
                           SelectableText(
                             _kioskKey!,
@@ -343,7 +345,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           Text('Kiosk key not available',
                               style: TextStyle(
                                   color: theme.colorScheme.onSurface
-                                      .withOpacity(0.5))),
+                                      .withValues(alpha: 0.5))),
                       ],
                     ),
                   ),
@@ -455,7 +457,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   child: Text(
                     'EduScan v1.0.0',
                     style: TextStyle(
-                        color: theme.colorScheme.onSurface.withOpacity(0.4),
+                        color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
                         fontSize: 12),
                   ),
                 ),

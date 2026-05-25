@@ -175,7 +175,7 @@ class _ReportsScreenState extends State<ReportsScreen>
                                 : 0,
                             minHeight: 12,
                             backgroundColor:
-                                theme.colorScheme.surfaceVariant,
+                                theme.colorScheme.surfaceContainerHighest,
                             valueColor: AlwaysStoppedAnimation<Color>(
                               avgAttendance >= 75 ? Colors.green : Colors.orange,
                             ),
@@ -270,7 +270,7 @@ class _ReportsScreenState extends State<ReportsScreen>
                             ),
                             BarChartRodData(
                               toY: absent,
-                              color: Colors.red.withOpacity(0.7),
+                              color: Colors.red.withValues(alpha:0.7),
                               width: 12,
                               borderRadius: BorderRadius.circular(4),
                             ),
@@ -316,7 +316,7 @@ class _ReportsScreenState extends State<ReportsScreen>
             dense: true,
             leading: CircleAvatar(
               radius: 20,
-              backgroundColor: (good ? Colors.green : Colors.red).withOpacity(0.15),
+              backgroundColor: (good ? Colors.green : Colors.red).withValues(alpha:0.15),
               child: Text(
                 '${pct.toStringAsFixed(0)}%',
                 style: TextStyle(
@@ -367,7 +367,7 @@ class _ReportsScreenState extends State<ReportsScreen>
                   Text(label,
                       style: TextStyle(
                           fontSize: 11,
-                          color: theme.colorScheme.onSurface.withOpacity(0.6))),
+                          color: theme.colorScheme.onSurface.withValues(alpha:0.6))),
                 ],
               ),
             ],

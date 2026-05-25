@@ -22,7 +22,7 @@ class FaceOverlayPainter extends CustomPainter {
 
     switch (state) {
       case FaceOverlayState.idle:
-        ovalColor = Colors.white.withOpacity(0.7);
+        ovalColor = Colors.white.withValues(alpha:0.7);
         dashed = true;
       case FaceOverlayState.detected:
         ovalColor = Colors.blue;
@@ -36,7 +36,7 @@ class FaceOverlayPainter extends CustomPainter {
     }
 
     // Draw dim overlay with oval cutout
-    final overlayPaint = Paint()..color = Colors.black.withOpacity(0.45);
+    final overlayPaint = Paint()..color = Colors.black.withValues(alpha:0.45);
     final overlayPath = Path()
       ..addRect(Rect.fromLTWH(0, 0, size.width, size.height))
       ..addOval(ovalRect)
@@ -59,7 +59,7 @@ class FaceOverlayPainter extends CustomPainter {
     if (showScanLine) {
       final scanY = cy - ry + (ry * 2 * scanLineProgress);
       final scanPaint = Paint()
-        ..color = Colors.blue.withOpacity(0.8)
+        ..color = Colors.blue.withValues(alpha:0.8)
         ..strokeWidth = 2.0;
       final startX = _ovalXAtY(cx, rx, ry, cy, scanY);
       if (startX > 0) {

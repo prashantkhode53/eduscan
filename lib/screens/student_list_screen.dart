@@ -125,12 +125,12 @@ class _StudentListScreenState extends State<StudentListScreen> {
                             Icon(Icons.people_outline,
                                 size: 64,
                                 color:
-                                    theme.colorScheme.onSurface.withOpacity(0.3)),
+                                    theme.colorScheme.onSurface.withValues(alpha:0.3)),
                             const SizedBox(height: 12),
                             Text('No students found',
                                 style: TextStyle(
                                     color: theme.colorScheme.onSurface
-                                        .withOpacity(0.5))),
+                                        .withValues(alpha:0.5))),
                           ],
                         ),
                       )

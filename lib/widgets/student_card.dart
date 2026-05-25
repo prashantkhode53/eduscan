@@ -23,7 +23,7 @@ class StudentCard extends StatelessWidget {
             children: [
               CircleAvatar(
                 radius: 24,
-                backgroundColor: theme.colorScheme.primary.withOpacity(0.15),
+                backgroundColor: theme.colorScheme.primary.withValues(alpha:0.15),
                 child: Text(
                   student.initials,
                   style: TextStyle(
@@ -47,14 +47,14 @@ class StudentCard extends StatelessWidget {
                     Text(
                       'ID: ${student.id}  •  Class ${student.classLabel}',
                       style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurface.withOpacity(0.6),
+                        color: theme.colorScheme.onSurface.withValues(alpha:0.6),
                       ),
                     ),
                     if (student.rollNo != null)
                       Text(
                         'Roll No: ${student.rollNo}',
                         style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurface.withOpacity(0.5),
+                          color: theme.colorScheme.onSurface.withValues(alpha:0.5),
                         ),
                       ),
                   ],
@@ -64,8 +64,8 @@ class StudentCard extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
                   color: isActive
-                      ? Colors.green.withOpacity(0.12)
-                      : Colors.red.withOpacity(0.12),
+                      ? Colors.green.withValues(alpha:0.12)
+                      : Colors.red.withValues(alpha:0.12),
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Text(

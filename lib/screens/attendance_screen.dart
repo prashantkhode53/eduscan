@@ -180,7 +180,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                         child: Column(mainAxisSize: MainAxisSize.min, children: [
                           Icon(Icons.event_note_outlined,
                               size: 64,
-                              color: theme.colorScheme.onSurface.withOpacity(0.3)),
+                              color: theme.colorScheme.onSurface.withValues(alpha:0.3)),
                           const SizedBox(height: 12),
                           const Text('No attendance records found'),
                         ]),
@@ -193,7 +193,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                             Container(
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 16, vertical: 8),
-                              color: theme.colorScheme.surfaceVariant,
+                              color: theme.colorScheme.surfaceContainerHighest,
                               child: Row(
                                 children: [
                                   Expanded(flex: 3, child: Text('Name', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: theme.colorScheme.onSurfaceVariant))),
@@ -276,7 +276,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.12),
+        color: color.withValues(alpha:0.12),
         borderRadius: BorderRadius.circular(10),
       ),
       child: Text(

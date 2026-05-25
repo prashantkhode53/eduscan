@@ -21,9 +21,17 @@ class ApiService {
 
   static Future<Map<String, String>> _kioskHeaders() async {
     final key = await StorageService.getKioskKey();
+    if (key != null && key.isNotEmpty) {
+      return {
+        'Content-Type': 'application/json',
+        'X-Kiosk-Key': key,
+      };
+    }
+    // Fall back to JWT when kiosk key not yet loaded or unavailable
+    final token = await StorageService.getToken();
     return {
       'Content-Type': 'application/json',
-      if (key != null) 'X-Kiosk-Key': key,
+      if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
     };
   }
 

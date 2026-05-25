@@ -190,7 +190,7 @@ class _StudentDetailScreenState extends State<StudentDetailScreen> {
               children: [
                 CircleAvatar(
                   radius: 32,
-                  backgroundColor: theme.colorScheme.primary.withOpacity(0.15),
+                  backgroundColor: theme.colorScheme.primary.withValues(alpha:0.15),
                   child: Text(
                     _student!.initials,
                     style: TextStyle(
@@ -221,7 +221,7 @@ class _StudentDetailScreenState extends State<StudentDetailScreen> {
                                   ?.copyWith(fontWeight: FontWeight.bold)),
                       Text('ID: ${_student!.id}',
                           style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.onSurface.withOpacity(0.6))),
+                              color: theme.colorScheme.onSurface.withValues(alpha:0.6))),
                     ],
                   ),
                 ),
@@ -268,7 +268,7 @@ class _StudentDetailScreenState extends State<StudentDetailScreen> {
             width: 110,
             child: Text(label,
                 style: TextStyle(
-                    color: Theme.of(context).colorScheme.onSurface.withOpacity(0.5),
+                    color: Theme.of(context).colorScheme.onSurface.withValues(alpha:0.5),
                     fontSize: 13)),
           ),
           Expanded(
@@ -306,8 +306,8 @@ class _StudentDetailScreenState extends State<StudentDetailScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               decoration: BoxDecoration(
                 color: _summary!.percentage >= 75
-                    ? Colors.green.withOpacity(0.1)
-                    : Colors.red.withOpacity(0.1),
+                    ? Colors.green.withValues(alpha:0.1)
+                    : Colors.red.withValues(alpha:0.1),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Row(

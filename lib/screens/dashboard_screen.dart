@@ -81,13 +81,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     Text(
                       'Good ${_greeting()}, ${auth.admin?.displayName ?? 'Admin'}',
                       style: theme.textTheme.titleMedium?.copyWith(
-                        color: theme.colorScheme.onSurface.withOpacity(0.7),
+                        color: theme.colorScheme.onSurface.withValues(alpha:0.7),
                       ),
                     ),
                     Text(
                       DateFormat('EEEE, d MMMM yyyy').format(DateTime.now()),
                       style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurface.withOpacity(0.5),
+                        color: theme.colorScheme.onSurface.withValues(alpha:0.5),
                       ),
                     ),
                     const SizedBox(height: 16),
@@ -155,7 +155,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           child: Center(
                             child: Text('No recent activity',
                                 style: TextStyle(
-                                    color: theme.colorScheme.onSurface.withOpacity(0.5))),
+                                    color: theme.colorScheme.onSurface.withValues(alpha:0.5))),
                           ),
                         ),
                       )
@@ -171,7 +171,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             return ListTile(
                               leading: CircleAvatar(
                                 backgroundColor:
-                                    theme.colorScheme.primary.withOpacity(0.12),
+                                    theme.colorScheme.primary.withValues(alpha:0.12),
                                 child: Text(
                                   '${(r['first_name'] as String? ?? 'A')[0]}${(r['last_name'] as String? ?? '')[0]}'
                                       .toUpperCase(),
@@ -189,8 +189,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                     horizontal: 8, vertical: 4),
                                 decoration: BoxDecoration(
                                   color: r['status'] == 'present'
-                                      ? Colors.green.withOpacity(0.12)
-                                      : Colors.red.withOpacity(0.12),
+                                      ? Colors.green.withValues(alpha:0.12)
+                                      : Colors.red.withValues(alpha:0.12),
                                   borderRadius: BorderRadius.circular(12),
                                 ),
                                 child: Text(

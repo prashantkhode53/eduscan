@@ -1,16 +1,23 @@
 import { Request, Response, NextFunction } from 'express';
 import { query, queryOne } from '../db/pool';
-import { Student, ScanRequest, ScanResponse } from '../types';
-import { AppError } from '../middleware/errorHandler';
-import { findBestMatch } from '../utils/faceMatch';
+import { cosineSimilarity } from '../utils/faceMatch';
 
-interface SettingsRow { key: string; value: string; }
 interface AttendanceRow {
   id: string;
   time_in: string | null;
   time_out: string | null;
   duration_mins: number | null;
   status: string;
+}
+
+interface StudentRow {
+  id: string;
+  first_name: string;
+  last_name: string;
+  class_grade: string;
+  division: string;
+  roll_no: number | null;
+  face_embedding: unknown;
 }
 
 function timeToMinutes(t: string): number {
@@ -20,206 +27,166 @@ function timeToMinutes(t: string): number {
 
 export async function scan(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const body = req.body as ScanRequest;
-    const { embedding, mode, class_id, timestamp } = body;
+    const { embedding, mode, class_id, timestamp } = req.body;
 
     if (!embedding || !Array.isArray(embedding) || embedding.length !== 128) {
-      return next(new AppError('Invalid face embedding: must be array of 128 numbers', 400));
+      res.status(400).json({ success: false, message: 'Invalid face embedding: must be array of 128 numbers' });
+      return;
     }
     if (mode !== 'checkin' && mode !== 'checkout') {
-      return next(new AppError("mode must be 'checkin' or 'checkout'", 400));
+      res.status(400).json({ success: false, message: "mode must be 'checkin' or 'checkout'" });
+      return;
     }
-    if (!class_id) return next(new AppError('class_id is required', 400));
 
-    // Load settings
-    const settingsRows = await query<SettingsRow>(`SELECT key, value FROM settings`);
+    // Load settings in one round-trip
+    const settingsRows = await query<{ key: string; value: string }>(`SELECT key, value FROM settings`);
     const settings: Record<string, string> = {};
     for (const row of settingsRows) settings[row.key] = row.value;
 
     const hoursStart = settings['school_hours_start'] ?? '07:00';
     const hoursEnd   = settings['school_hours_end']   ?? '18:00';
-    const threshold  = parseFloat(settings['face_threshold'] ?? '0.4');
+    const threshold  = parseFloat(settings['face_threshold'] ?? '0.35');
 
-    // Check school hours
-    const scanTime = timestamp ? new Date(timestamp) : new Date();
-    const scanMinutes = scanTime.getHours() * 60 + scanTime.getMinutes();
-    const startMinutes = timeToMinutes(hoursStart);
-    const endMinutes   = timeToMinutes(hoursEnd);
-
-    if (scanMinutes < startMinutes || scanMinutes > endMinutes) {
-      const response: ScanResponse = {
+    // School hours check
+    const scanTime   = timestamp ? new Date(timestamp) : new Date();
+    const scanMins   = scanTime.getHours() * 60 + scanTime.getMinutes();
+    if (scanMins < timeToMinutes(hoursStart) || scanMins > timeToMinutes(hoursEnd)) {
+      res.json({
         success: false,
         action: 'outside_hours',
         message: `Scanning is only allowed between ${hoursStart} and ${hoursEnd}`,
-      };
-      res.json(response);
+      });
       return;
     }
 
-    // Parse class_id: expected format "grade-division" e.g. "10-A"
-    const parts = class_id.split('-');
-    const classGrade = parts[0];
-    const division = parts[1];
-
-    const conditions: string[] = [`status = 'active'`];
-    const params: unknown[] = [];
-    let idx = 1;
-    if (classGrade) { conditions.push(`class_grade = $${idx++}`); params.push(classGrade); }
-    if (division)   { conditions.push(`division = $${idx++}`);    params.push(division);   }
-
-    const students = await query<Student>(
-      `SELECT id, first_name, last_name, class_grade, division, roll_no, face_embedding, status,
-              mobile, email, institution
-       FROM students WHERE ${conditions.join(' AND ')}`,
-      params
+    // Load ALL active students — no class_id filter so every registered student is searchable
+    const students = await query<StudentRow>(
+      `SELECT id, first_name, last_name, class_grade, division, roll_no, face_embedding
+       FROM students WHERE status = 'active'`
     );
 
-    // Parse face_embedding JSONB
-    const studentsWithEmbedding: Student[] = students.map((s) => ({
-      ...s,
-      face_embedding: Array.isArray(s.face_embedding)
-        ? s.face_embedding
-        : (JSON.parse(s.face_embedding as unknown as string) as number[]),
-    }));
+    // Find best cosine-similarity match
+    let best: { student: StudentRow; confidence: number } | null = null;
+    for (const s of students) {
+      const raw = s.face_embedding;
+      const storedEmb: number[] =
+        typeof raw === 'string' ? JSON.parse(raw) : Array.isArray(raw) ? (raw as number[]) : [];
+      if (storedEmb.length === 0) continue;
 
-    const match = findBestMatch(embedding, studentsWithEmbedding, threshold);
+      const score = cosineSimilarity(embedding as number[], storedEmb);
+      console.log(`[scan] student=${s.id} score=${score.toFixed(4)} threshold=${threshold}`);
 
-    console.log(`[scan] class=${class_id} students=${studentsWithEmbedding.length} threshold=${threshold} bestScore=${match?.confidence ?? 'no_match'}`);
+      if (score >= threshold && (!best || score > best.confidence)) {
+        best = { student: s, confidence: Math.round(score * 10000) / 10000 };
+      }
+    }
 
-    if (!match) {
-      const response: ScanResponse = {
-        success: false,
-        action: 'unknown',
-        message: 'Face not recognised. Please register or try again.',
-      };
-      res.json(response);
+    console.log(`[scan] class=${class_id} students=${students.length} threshold=${threshold} bestScore=${best?.confidence ?? 'no_match'}`);
+
+    if (!best) {
+      res.json({ success: false, action: 'unknown', message: 'Face not recognised. Please register or try again.' });
       return;
     }
 
-    const today = scanTime.toISOString().split('T')[0];
-    const timeStr = scanTime.toTimeString().split(' ')[0]; // HH:MM:SS
+    const student  = best.student;
+    const today    = scanTime.toISOString().split('T')[0];
+    const timeStr  = scanTime.toTimeString().split(' ')[0]; // HH:MM:SS
 
-    const existingRecord = await queryOne<AttendanceRow>(
+    const existing = await queryOne<AttendanceRow>(
       `SELECT id, time_in, time_out, duration_mins, status FROM attendance
        WHERE student_id = $1 AND date = $2`,
-      [match.student.id, today]
+      [student.id, today]
     );
 
+    const studentPayload = {
+      id:          student.id,
+      first_name:  student.first_name,
+      last_name:   student.last_name,
+      class_grade: student.class_grade,
+      division:    student.division,
+      roll_no:     student.roll_no,
+    };
+
     if (mode === 'checkin') {
-      if (existingRecord && existingRecord.time_in) {
-        const response: ScanResponse = {
+      if (existing?.time_in) {
+        res.json({
           success: true,
           action: 'duplicate',
-          student: {
-            id: match.student.id,
-            first_name: match.student.first_name,
-            last_name: match.student.last_name,
-            class_grade: match.student.class_grade,
-            division: match.student.division,
-            roll_no: match.student.roll_no,
-          },
-          time_in: existingRecord.time_in,
-          message: `Already checked in at ${existingRecord.time_in}. Use check out.`,
-        };
-        res.json(response);
+          student: studentPayload,
+          time_in: existing.time_in,
+          message: `Already checked in at ${existing.time_in}. Use check out.`,
+        });
         return;
       }
 
-      const rows = await query<AttendanceRow>(
+      const rows = await query<{ time_in: string | null }>(
         `INSERT INTO attendance (student_id, date, time_in, status, checkin_mode, confidence_in)
          VALUES ($1, $2, $3, 'present', 'face_auto', $4)
          ON CONFLICT (student_id, date) DO UPDATE
            SET time_in = $3, status = 'present', checkin_mode = 'face_auto', confidence_in = $4
-         RETURNING *`,
-        [match.student.id, today, timeStr, match.confidence]
+         RETURNING time_in`,
+        [student.id, today, timeStr, best.confidence]
       );
 
-      const response: ScanResponse = {
+      res.json({
         success: true,
         action: 'checkin',
-        student: {
-          id: match.student.id,
-          first_name: match.student.first_name,
-          last_name: match.student.last_name,
-          class_grade: match.student.class_grade,
-          division: match.student.division,
-          roll_no: match.student.roll_no,
-        },
+        student: studentPayload,
         time_in: rows[0].time_in ?? timeStr,
-        message: `Check-in recorded for ${match.student.first_name} ${match.student.last_name}`,
-      };
-      res.json(response);
+        confidence: best.confidence,
+        message: `Check-in recorded for ${student.first_name} ${student.last_name}`,
+      });
       return;
     }
 
     // Checkout
-    if (!existingRecord || !existingRecord.time_in) {
-      const response: ScanResponse = {
+    if (!existing?.time_in) {
+      res.json({
         success: false,
         action: 'error',
-        student: {
-          id: match.student.id,
-          first_name: match.student.first_name,
-          last_name: match.student.last_name,
-        },
+        student: { id: student.id, first_name: student.first_name, last_name: student.last_name },
         message: 'No check-in found for today. Please check in first.',
-      };
-      res.json(response);
+      });
       return;
     }
 
-    if (existingRecord.time_out) {
-      const response: ScanResponse = {
+    if (existing.time_out) {
+      res.json({
         success: true,
         action: 'duplicate',
-        student: {
-          id: match.student.id,
-          first_name: match.student.first_name,
-          last_name: match.student.last_name,
-          class_grade: match.student.class_grade,
-          division: match.student.division,
-          roll_no: match.student.roll_no,
-        },
-        time_in: existingRecord.time_in,
-        time_out: existingRecord.time_out,
-        duration_mins: existingRecord.duration_mins ?? undefined,
-        message: `Already checked out at ${existingRecord.time_out}.`,
-      };
-      res.json(response);
+        student: studentPayload,
+        time_in: existing.time_in,
+        time_out: existing.time_out,
+        duration_mins: existing.duration_mins ?? undefined,
+        message: `Already checked out at ${existing.time_out}.`,
+      });
       return;
     }
 
     // Compute duration
-    const [ih, im, is_] = existingRecord.time_in.split(':').map(Number);
+    const [ih, im, is_] = existing.time_in.split(':').map(Number);
     const [oh, om, os_] = timeStr.split(':').map(Number);
-    const inMins = ih * 60 + im + (is_ ?? 0) / 60;
-    const outMins = oh * 60 + om + (os_ ?? 0) / 60;
+    const inMins       = ih * 60 + im + (is_ ?? 0) / 60;
+    const outMins      = oh * 60 + om + (os_ ?? 0) / 60;
     const durationMins = Math.max(0, Math.round(outMins - inMins));
 
     await query(
       `UPDATE attendance
        SET time_out = $1, duration_mins = $2, checkout_mode = 'face_auto', confidence_out = $3
        WHERE student_id = $4 AND date = $5`,
-      [timeStr, durationMins, match.confidence, match.student.id, today]
+      [timeStr, durationMins, best.confidence, student.id, today]
     );
 
-    const response: ScanResponse = {
+    res.json({
       success: true,
       action: 'checkout',
-      student: {
-        id: match.student.id,
-        first_name: match.student.first_name,
-        last_name: match.student.last_name,
-        class_grade: match.student.class_grade,
-        division: match.student.division,
-        roll_no: match.student.roll_no,
-      },
-      time_in: existingRecord.time_in,
+      student: studentPayload,
+      time_in: existing.time_in,
       time_out: timeStr,
       duration_mins: durationMins,
+      confidence: best.confidence,
       message: `Check-out recorded. Duration: ${Math.floor(durationMins / 60)}h ${durationMins % 60}m`,
-    };
-    res.json(response);
+    });
   } catch (err) {
     next(err);
   }
