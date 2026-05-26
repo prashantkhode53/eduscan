@@ -94,7 +94,7 @@ export async function runMigrations(): Promise<void> {
         ('school_logo_url',    ''),
         ('school_hours_start', '07:00'),
         ('school_hours_end',   '18:00'),
-        ('face_threshold',     '0.35'),
+        ('face_threshold',     '0.75'),
         ('kiosk_api_key',      gen_random_uuid()::text),
         ('auto_mark_absent',   'true'),
         ('absent_alert_days',  '3'),
@@ -108,10 +108,12 @@ export async function runMigrations(): Promise<void> {
     await client.query(`CREATE INDEX IF NOT EXISTS idx_students_class        ON students(class_grade, division)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_students_status       ON students(status)`);
 
-    // Lower face threshold from old default 0.6 → 0.35 on existing deployments
+    // Raise face_threshold to 0.75 — old defaults (0.6, 0.35, 0.4) caused false positives
+    // because they were calibrated for position-dependent embeddings. The new
+    // position-invariant embedding algorithm requires a higher threshold.
     await client.query(`
-      UPDATE settings SET value = '0.35', updated_at = NOW()
-      WHERE key = 'face_threshold' AND value = '0.6'
+      UPDATE settings SET value = '0.75', updated_at = NOW()
+      WHERE key = 'face_threshold' AND value IN ('0.6', '0.35', '0.4')
     `);
 
     await client.query('COMMIT');

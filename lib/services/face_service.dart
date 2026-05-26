@@ -17,7 +17,8 @@ class FaceService {
     CameraImage image,
     CameraDescription camera,
   ) {
-    final rotation = InputImageRotationValue.fromRawValue(camera.sensorOrientation);
+    final rotation =
+        InputImageRotationValue.fromRawValue(camera.sensorOrientation);
     if (rotation == null) return null;
     final format = InputImageFormatValue.fromRawValue(image.format.raw);
     if (format == null) return null;
@@ -34,49 +35,151 @@ class FaceService {
     );
   }
 
-  // Detect faces in camera frame
   static Future<List<Face>> detectFaces(InputImage inputImage) async {
     return _detector.processImage(inputImage);
   }
 
-  // Generate a 128-D pseudo embedding from face landmarks (no TFLite needed)
+  /// Generates a 128-D position-invariant, scale-invariant embedding.
+  ///
+  /// All landmark coordinates are normalized relative to:
+  ///   - Origin:  midpoint of left/right eye (inter-ocular center)
+  ///   - Scale:   inter-ocular distance (IOD)
+  ///
+  /// This makes the embedding independent of:
+  ///   - Where the face appears in the camera frame (translation-invariant)
+  ///   - How close the person is to the camera (scale-invariant)
+  ///
+  /// Feature layout (128 total):
+  ///   [0–19]   10 landmark positions × (nx, ny)      = 20
+  ///   [20–43]  24 pairwise normalized distances       = 24
+  ///   [44–71]  face contour 14 pts × (nx, ny)         = 28
+  ///   [72–83]  left eye contour 6 pts × (nx, ny)      = 12
+  ///   [84–95]  right eye contour 6 pts × (nx, ny)     = 12
+  ///   [96–105] upper lip contour 5 pts × (nx, ny)     = 10
+  ///   [106–113] lower lip contour 4 pts × (nx, ny)    = 8
+  ///   [114–121] nose bridge 4 pts × (nx, ny)          = 8
+  ///   [122–127] nose bottom 3 pts × (nx, ny)          = 6
+  ///             Total = 128
+  ///
+  /// NOTE: Changing this function invalidates all previously stored embeddings.
+  /// All students must be re-registered when this algorithm changes.
   static List<double> generateEmbedding(Face face) {
-    final List<double> embedding = List.filled(128, 0.0);
-    int idx = 0;
+    final lE  = face.landmarks[FaceLandmarkType.leftEye]?.position;
+    final rE  = face.landmarks[FaceLandmarkType.rightEye]?.position;
+    final nos = face.landmarks[FaceLandmarkType.noseBase]?.position;
+    final lM  = face.landmarks[FaceLandmarkType.leftMouth]?.position;
+    final rM  = face.landmarks[FaceLandmarkType.rightMouth]?.position;
+    final bM  = face.landmarks[FaceLandmarkType.bottomMouth]?.position;
+    final lEr = face.landmarks[FaceLandmarkType.leftEar]?.position;
+    final rEr = face.landmarks[FaceLandmarkType.rightEar]?.position;
+    final lCh = face.landmarks[FaceLandmarkType.leftCheek]?.position;
+    final rCh = face.landmarks[FaceLandmarkType.rightCheek]?.position;
 
-    final box = face.boundingBox;
-    embedding[idx++] = box.width / (box.height + 0.001);
-    embedding[idx++] = box.left / 1000.0;
-    embedding[idx++] = box.top / 1000.0;
+    // Reference: eye midpoint as origin, inter-ocular distance as scale
+    double cx, cy, iod;
+    if (lE != null && rE != null) {
+      cx  = (lE.x + rE.x) / 2.0;
+      cy  = (lE.y + rE.y) / 2.0;
+      iod = sqrt(pow(rE.x - lE.x, 2) + pow(rE.y - lE.y, 2));
+    } else {
+      cx  = face.boundingBox.center.dx;
+      cy  = face.boundingBox.center.dy;
+      iod = face.boundingBox.width.toDouble();
+    }
+    iod = max(iod, 1.0);
 
-    embedding[idx++] = (face.headEulerAngleX ?? 0) / 90.0;
-    embedding[idx++] = (face.headEulerAngleY ?? 0) / 90.0;
-    embedding[idx++] = (face.headEulerAngleZ ?? 0) / 90.0;
+    // Normalize: translate to eye-center, scale by IOD
+    List<double> np(Point<int>? p) => p == null
+        ? [0.0, 0.0]
+        : [(p.x - cx) / iod, (p.y - cy) / iod];
 
-    embedding[idx++] = face.smilingProbability ?? 0.0;
-    embedding[idx++] = face.leftEyeOpenProbability ?? 0.0;
-    embedding[idx++] = face.rightEyeOpenProbability ?? 0.0;
-
-    for (final type in FaceLandmarkType.values) {
-      final landmark = face.landmarks[type];
-      if (landmark != null && idx < 126) {
-        embedding[idx++] = landmark.position.x / 1000.0;
-        embedding[idx++] = landmark.position.y / 1000.0;
-      } else {
-        if (idx < 128) embedding[idx++] = 0.0;
-        if (idx < 128) embedding[idx++] = 0.0;
-      }
+    // Normalized Euclidean distance between two landmarks (scale-invariant ratio)
+    double nd(Point<int>? a, Point<int>? b) {
+      if (a == null || b == null) return 0.0;
+      return sqrt(pow(a.x - b.x, 2) + pow(a.y - b.y, 2)) / iod;
     }
 
-    return _normalize(embedding);
+    final v = <double>[];
+
+    // === Block 1: Normalized landmark positions (10 × 2 = 20) ===
+    for (final p in [lE, rE, nos, lM, rM, bM, lEr, rEr, lCh, rCh]) {
+      v.addAll(np(p));
+    }
+
+    // === Block 2: Pairwise geometric ratios (24) ===
+    // These ratios encode FACIAL STRUCTURE independent of position/scale
+    v.addAll([
+      nd(lE,  rE),   // inter-ocular (= 1.0, baseline)
+      nd(lE,  nos),  // left eye → nose
+      nd(rE,  nos),  // right eye → nose
+      nd(lE,  lM),   // left eye → left mouth corner
+      nd(rE,  rM),   // right eye → right mouth corner
+      nd(nos, bM),   // nose → bottom mouth (philtrum length)
+      nd(lM,  rM),   // mouth width
+      nd(lEr, rEr),  // ear-to-ear distance
+      nd(lE,  lEr),  // left eye → left ear
+      nd(rE,  rEr),  // right eye → right ear
+      nd(lCh, rCh),  // cheek width
+      nd(lE,  lCh),  // left eye → left cheek
+      nd(rE,  rCh),  // right eye → right cheek
+      nd(nos, lCh),  // nose → left cheek
+      nd(nos, rCh),  // nose → right cheek
+      nd(bM,  lCh),  // bottom mouth → left cheek
+      nd(bM,  rCh),  // bottom mouth → right cheek
+      nd(lM,  lCh),  // left mouth → left cheek
+      nd(rM,  rCh),  // right mouth → right cheek
+      nd(lEr, lCh),  // left ear → left cheek
+      nd(rEr, rCh),  // right ear → right cheek
+      nd(lE,  bM),   // left eye → bottom mouth (total face height)
+      nd(rE,  bM),   // right eye → bottom mouth
+      nd(nos, lEr),  // nose → left ear
+    ]);
+
+    // === Blocks 3–9: Contour samples (84 features) ===
+    _addContour(v, face.contours[FaceContourType.face],           14, cx, cy, iod);
+    _addContour(v, face.contours[FaceContourType.leftEye],         6, cx, cy, iod);
+    _addContour(v, face.contours[FaceContourType.rightEye],        6, cx, cy, iod);
+    _addContour(v, face.contours[FaceContourType.upperLipTop],     5, cx, cy, iod);
+    _addContour(v, face.contours[FaceContourType.lowerLipBottom],  4, cx, cy, iod);
+    _addContour(v, face.contours[FaceContourType.noseBridge],      4, cx, cy, iod);
+    _addContour(v, face.contours[FaceContourType.noseBottom],      3, cx, cy, iod);
+    // 28+12+12+10+8+8+6 = 84
+
+    // Pad to exactly 128 (should not be needed, but safety net)
+    while (v.length < 128) v.add(0.0);
+
+    final result = _normalize(v.sublist(0, 128));
+    debugPrint('[FaceService] embedding norm=${_magnitude(result).toStringAsFixed(4)} iod=${iod.toStringAsFixed(1)}');
+    return result;
   }
 
-  // Average multiple embeddings for better accuracy during registration
+  /// Sample [n] evenly-spaced normalized points from a face contour.
+  static void _addContour(
+    List<double> v,
+    FaceContour? contour,
+    int n,
+    double cx,
+    double cy,
+    double iod,
+  ) {
+    if (contour == null || contour.points.isEmpty) {
+      for (int i = 0; i < n * 2; i++) v.add(0.0);
+      return;
+    }
+    final pts = contour.points;
+    for (int i = 0; i < n; i++) {
+      final idx = (i * pts.length ~/ n).clamp(0, pts.length - 1);
+      v.add((pts[idx].x - cx) / iod);
+      v.add((pts[idx].y - cy) / iod);
+    }
+  }
+
+  /// Average multiple embeddings (all must be unit-normalized before averaging).
   static List<double> averageEmbeddings(List<List<double>> embeddings) {
     if (embeddings.isEmpty) return List.filled(128, 0.0);
     final avg = List<double>.filled(128, 0.0);
     for (final e in embeddings) {
-      for (int i = 0; i < 128; i++) {
+      for (int i = 0; i < min(128, e.length); i++) {
         avg[i] += e[i];
       }
     }
@@ -86,25 +189,27 @@ class FaceService {
     return _normalize(avg);
   }
 
-  // Cosine similarity between two embeddings
+  /// Cosine similarity in [0, 1] — 1 = identical, 0 = orthogonal.
   static double cosineSimilarity(List<double> a, List<double> b) {
+    if (a.length != b.length || a.isEmpty) return 0.0;
     double dot = 0, magA = 0, magB = 0;
     for (int i = 0; i < a.length; i++) {
-      dot += a[i] * b[i];
+      dot  += a[i] * b[i];
       magA += a[i] * a[i];
       magB += b[i] * b[i];
     }
-    if (magA == 0 || magB == 0) return 0;
-    return dot / (sqrt(magA) * sqrt(magB));
+    if (magA == 0 || magB == 0) return 0.0;
+    return (dot / (sqrt(magA) * sqrt(magB))).clamp(0.0, 1.0);
   }
 
   static List<double> _normalize(List<double> v) {
-    final mag = sqrt(v.fold(0.0, (sum, x) => sum + x * x));
+    final mag = _magnitude(v);
     if (mag == 0) return v;
     return v.map((x) => x / mag).toList();
   }
 
-  static void dispose() {
-    _detector.close();
-  }
+  static double _magnitude(List<double> v) =>
+      sqrt(v.fold(0.0, (s, x) => s + x * x));
+
+  static void dispose() => _detector.close();
 }

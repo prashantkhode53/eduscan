@@ -19,6 +19,7 @@ class ScanResult {
   final String? timeIn;
   final String? timeOut;
   final int? durationMins;
+  final double? confidence;
   final String message;
 
   const ScanResult({
@@ -32,28 +33,20 @@ class ScanResult {
     this.timeIn,
     this.timeOut,
     this.durationMins,
+    this.confidence,
     required this.message,
   });
 
   factory ScanResult.fromJson(Map<String, dynamic> json) {
-    ScanAction parseAction(String? a) {
-      switch (a) {
-        case 'checkin':
-          return ScanAction.checkin;
-        case 'checkout':
-          return ScanAction.checkout;
-        case 'duplicate':
-          return ScanAction.duplicate;
-        case 'outside_hours':
-          return ScanAction.outsideHours;
-        case 'already_complete':
-          return ScanAction.alreadyComplete;
-        case 'error':
-          return ScanAction.error;
-        default:
-          return ScanAction.unknown;
-      }
-    }
+    ScanAction parseAction(String? a) => switch (a) {
+      'checkin'        => ScanAction.checkin,
+      'checkout'       => ScanAction.checkout,
+      'duplicate'      => ScanAction.duplicate,
+      'outside_hours'  => ScanAction.outsideHours,
+      'already_complete' => ScanAction.alreadyComplete,
+      'error'          => ScanAction.error,
+      _                => ScanAction.unknown,
+    };
 
     final student = json['student'] as Map<String, dynamic>?;
     return ScanResult(
@@ -65,10 +58,11 @@ class ScanResult {
           : null,
       classGrade: student?['class_grade'] as String?,
       division: student?['division'] as String?,
-      rollNo: student?['roll_no'] as int?,
+      rollNo: (student?['roll_no'] as num?)?.toInt(),
       timeIn: json['time_in'] as String?,
       timeOut: json['time_out'] as String?,
-      durationMins: json['duration_mins'] as int?,
+      durationMins: (json['duration_mins'] as num?)?.toInt(),
+      confidence: (json['confidence'] as num?)?.toDouble(),
       message: json['message'] as String? ?? '',
     );
   }
