@@ -53,8 +53,12 @@ export async function listStudents(req: Request, res: Response, next: NextFuncti
     const total = parseInt(countRows[0]?.count ?? '0', 10);
 
     const rows = await query<Student>(
-      `SELECT id, first_name, middle_name, last_name, class_grade, division, roll_no,
-              gender, mobile, email, status, institution, academic_year, created_at, updated_at
+      `SELECT id, first_name, middle_name, last_name, dob, gender, blood_group,
+              nationality, govt_id, institution, academic_year, class_grade, division,
+              roll_no, stream, admission_date, parent_name, parent_relation,
+              mobile, email, address, known_allergies, medical_conditions,
+              emergency_contact, transport_route, face_quality, status,
+              created_at, updated_at
        FROM students s ${where}
        ORDER BY s.class_grade, s.division, s.roll_no, s.last_name
        LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`,

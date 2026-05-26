@@ -64,20 +64,41 @@ class Student {
   });
 
   factory Student.fromJson(Map<String, dynamic> json) {
+    // All string helpers guard against null — the list endpoint returns a
+    // subset of columns; the detail endpoint returns all. Both shapes work.
+    String s(String key, [String fallback = '']) =>
+        (json[key] as String?) ?? fallback;
+
     List<double> parseEmbedding(dynamic raw) {
       if (raw == null) return [];
-      if (raw is List) return raw.map((e) => (e as num).toDouble()).toList();
+      if (raw is List) {
+        return raw.map((e) {
+          if (e is num) return e.toDouble();
+          return double.tryParse(e.toString()) ?? 0.0;
+        }).toList();
+      }
+      if (raw is String) {
+        try {
+          // JSONB returned as string from some DB drivers
+          return (raw
+                  .replaceAll('[', '')
+                  .replaceAll(']', '')
+                  .split(','))
+              .map((e) => double.tryParse(e.trim()) ?? 0.0)
+              .toList();
+        } catch (_) {
+          return [];
+        }
+      }
       return [];
     }
 
-    // node-postgres returns DECIMAL/NUMERIC as strings; parse defensively
     double? parseDouble(dynamic v) {
       if (v == null) return null;
       if (v is num) return v.toDouble();
       return double.tryParse(v.toString());
     }
 
-    // node-postgres returns INT as num, but guard against string just in case
     int? parseInt(dynamic v) {
       if (v == null) return null;
       if (v is int) return v;
@@ -85,33 +106,33 @@ class Student {
       return int.tryParse(v.toString());
     }
 
-    // node-postgres returns DATE as ISO string or DateTime; take date part only
+    // node-postgres returns DATE as an ISO string; strip time component
     String parseDate(dynamic v) {
       if (v == null) return '';
-      final s = v.toString();
-      return s.length >= 10 ? s.substring(0, 10) : s;
+      final str = v.toString();
+      return str.length >= 10 ? str.substring(0, 10) : str;
     }
 
     return Student(
-      id: json['id'] as String,
-      firstName: json['first_name'] as String,
+      id: s('id'),
+      firstName: s('first_name'),
       middleName: json['middle_name'] as String?,
-      lastName: json['last_name'] as String,
+      lastName: s('last_name'),
       dob: parseDate(json['dob']),
-      gender: json['gender'] as String,
+      gender: s('gender'),
       bloodGroup: json['blood_group'] as String?,
       nationality: json['nationality'] as String?,
       govtId: json['govt_id'] as String?,
-      institution: json['institution'] as String,
-      academicYear: json['academic_year'] as String,
-      classGrade: json['class_grade'] as String,
-      division: json['division'] as String,
+      institution: s('institution'),
+      academicYear: s('academic_year'),
+      classGrade: s('class_grade'),
+      division: s('division'),
       rollNo: parseInt(json['roll_no']),
       stream: json['stream'] as String?,
       admissionDate: parseDate(json['admission_date']),
-      parentName: json['parent_name'] as String,
+      parentName: s('parent_name'),
       parentRelation: json['parent_relation'] as String?,
-      mobile: json['mobile'] as String,
+      mobile: s('mobile'),
       email: json['email'] as String?,
       address: json['address'] as String?,
       knownAllergies: json['known_allergies'] as String?,
@@ -120,7 +141,7 @@ class Student {
       transportRoute: json['transport_route'] as String?,
       faceEmbedding: parseEmbedding(json['face_embedding']),
       faceQuality: parseDouble(json['face_quality']),
-      status: json['status'] as String? ?? 'active',
+      status: s('status', 'active'),
       createdAt: json['created_at'] as String?,
       updatedAt: json['updated_at'] as String?,
     );
@@ -164,7 +185,7 @@ class Student {
   String get classLabel => '$classGrade-$division';
 
   String get initials {
-    final f = firstName.isNotEmpty ? firstName[0] : '';
+    final f = firstName.isNotEmpty ? firstName[0] : '?';
     final l = lastName.isNotEmpty ? lastName[0] : '';
     return '$f$l'.toUpperCase();
   }

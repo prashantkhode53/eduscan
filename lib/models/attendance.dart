@@ -43,18 +43,41 @@ class Attendance {
   });
 
   factory Attendance.fromJson(Map<String, dynamic> json) {
+    String s(String key, [String fallback = '']) =>
+        (json[key] as String?) ?? fallback;
+
+    int? safeInt(dynamic v) {
+      if (v == null) return null;
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      return int.tryParse(v.toString());
+    }
+
+    double? safeDouble(dynamic v) {
+      if (v == null) return null;
+      if (v is num) return v.toDouble();
+      return double.tryParse(v.toString());
+    }
+
+    // DATE columns from pg come as ISO strings; take only the date part
+    String safeDate(dynamic v) {
+      if (v == null) return '';
+      final str = v.toString();
+      return str.length >= 10 ? str.substring(0, 10) : str;
+    }
+
     return Attendance(
-      id: json['id'] as String,
-      studentId: json['student_id'] as String,
-      date: json['date'] as String,
+      id: s('id'),
+      studentId: s('student_id'),
+      date: safeDate(json['date']),
       timeIn: json['time_in'] as String?,
       timeOut: json['time_out'] as String?,
-      durationMins: json['duration_mins'] as int?,
-      status: json['status'] as String? ?? 'absent',
-      checkinMode: json['checkin_mode'] as String? ?? 'face_auto',
-      checkoutMode: json['checkout_mode'] as String? ?? 'not_recorded',
-      confidenceIn: (json['confidence_in'] as num?)?.toDouble(),
-      confidenceOut: (json['confidence_out'] as num?)?.toDouble(),
+      durationMins: safeInt(json['duration_mins']),
+      status: s('status', 'absent'),
+      checkinMode: s('checkin_mode', 'face_auto'),
+      checkoutMode: s('checkout_mode', 'not_recorded'),
+      confidenceIn: safeDouble(json['confidence_in']),
+      confidenceOut: safeDouble(json['confidence_out']),
       remarks: json['remarks'] as String?,
       markedBy: json['marked_by'] as String?,
       createdAt: json['created_at'] as String?,
@@ -62,7 +85,7 @@ class Attendance {
       lastName: json['last_name'] as String?,
       classGrade: json['class_grade'] as String?,
       division: json['division'] as String?,
-      rollNo: json['roll_no'] as int?,
+      rollNo: safeInt(json['roll_no']),
     );
   }
 
