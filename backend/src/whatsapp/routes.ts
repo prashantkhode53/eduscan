@@ -4,6 +4,7 @@ import Joi from 'joi';
 import { authMiddleware } from '../middleware/auth';
 import { sendMessage, getMessageStats } from './messageService';
 import { whatsappService } from './service';
+import type { WaStatusPayload } from './service';
 import { isValidPhone } from './phoneFormatter';
 
 const router = Router();
@@ -103,21 +104,49 @@ router.get('/qr', (_req: Request, res: Response): void => {
   });
 });
 
+// ── GET /whatsapp/events (Server-Sent Events) ─────────────────────────────────
+// Push state changes in real time. Falls back to polling if SSE is unavailable.
+
+router.get('/events', (req: Request, res: Response): void => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no'); // disable Nginx/Render buffering
+  res.flushHeaders();
+
+  const sendEvent = (payload: WaStatusPayload): void => {
+    try {
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    } catch { /* client already disconnected */ }
+  };
+
+  // Push current state immediately on connect
+  sendEvent({
+    ...whatsappService.getStatusInfo(),
+    qrData:   whatsappService.qrData,
+    qrBase64: whatsappService.qrBase64,
+  });
+
+  // Push every state change as it happens
+  whatsappService.on('wa_status', sendEvent);
+
+  // Keepalive comment every 25s — prevents Render/CDN from closing idle connections
+  const heartbeat = setInterval(() => {
+    try { res.write(': ping\n\n'); } catch { /* ignore */ }
+  }, 25_000);
+
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    whatsappService.off('wa_status', sendEvent);
+  });
+});
+
 // ── POST /whatsapp/reconnect ──────────────────────────────────────────────────
 
-router.post('/reconnect', async (_req: Request, res: Response): Promise<void> => {
-  try {
-    if (whatsappService.isConnected) {
-      res.json({ success: true, message: 'Already connected' });
-      return;
-    }
-    // Non-blocking — client reconnects in the background
-    void whatsappService.reconnect();
-    res.json({ success: true, message: 'Reconnect initiated' });
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Internal error';
-    res.status(500).json({ success: false, message: msg });
-  }
+router.post('/reconnect', (_req: Request, res: Response): void => {
+  // Always fire-and-forget — reconnect() handles any current state internally
+  void whatsappService.reconnect();
+  res.json({ success: true, message: 'Reconnect initiated' });
 });
 
 // ── POST /whatsapp/send-checkin ───────────────────────────────────────────────

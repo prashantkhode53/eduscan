@@ -7,6 +7,7 @@ class WhatsAppEndpoints {
 
   static String get status       => '$_base/whatsapp/status';
   static String get qr           => '$_base/whatsapp/qr';
+  static String get events       => '$_base/whatsapp/events';
   static String get reconnect    => '$_base/whatsapp/reconnect';
   static String get sendCheckin  => '$_base/whatsapp/send-checkin';
   static String get sendCheckout => '$_base/whatsapp/send-checkout';

@@ -9,6 +9,7 @@ class WhatsAppStatus {
   final int sentToday;
   final int failedToday;
   final DateTime? lastSentAt;
+  final String? initError;   // set when service fails to start Chromium/WhatsApp
 
   const WhatsAppStatus({
     required this.status,
@@ -21,6 +22,7 @@ class WhatsAppStatus {
     this.sentToday   = 0,
     this.failedToday = 0,
     this.lastSentAt,
+    this.initError,
   });
 
   factory WhatsAppStatus.disconnected() => const WhatsAppStatus(
@@ -30,12 +32,13 @@ class WhatsAppStatus {
   factory WhatsAppStatus.fromStatusJson(Map<String, dynamic> json) {
     final stats = (json['stats'] as Map<String, dynamic>?) ?? {};
     return WhatsAppStatus(
-      status:          json['status']    as String? ?? 'disconnected',
-      connected:       json['connected'] as bool?   ?? false,
+      status:          json['status']     as String? ?? 'disconnected',
+      connected:       json['connected']  as bool?   ?? false,
       lastConnectedAt: _parseDate(json['lastConnectedAt']),
-      hasQr:           json['hasQr']     as bool?   ?? false,
-      qrData:          json['qrData']    as String?,
-      qrBase64:        json['qrBase64']  as String?,
+      hasQr:           json['hasQr']      as bool?   ?? false,
+      qrData:          json['qrData']     as String?,
+      qrBase64:        json['qrBase64']   as String?,
+      initError:       json['initError']  as String?,
       totalToday:      (stats['totalToday']  as num?)?.toInt() ?? 0,
       sentToday:       (stats['sentToday']   as num?)?.toInt() ?? 0,
       failedToday:     (stats['failedToday'] as num?)?.toInt() ?? 0,
@@ -45,12 +48,13 @@ class WhatsAppStatus {
 
   factory WhatsAppStatus.mergeQr(WhatsAppStatus base, Map<String, dynamic> qrJson) {
     return WhatsAppStatus(
-      status:          qrJson['status']   as String? ?? base.status,
-      connected:       qrJson['connected'] as bool?  ?? base.connected,
+      status:          qrJson['status']    as String? ?? base.status,
+      connected:       qrJson['connected'] as bool?   ?? base.connected,
       lastConnectedAt: base.lastConnectedAt,
-      hasQr:           qrJson['hasQr']    as bool?   ?? base.hasQr,
-      qrData:          qrJson['qrData']   as String? ?? base.qrData,
-      qrBase64:        qrJson['qrBase64'] as String? ?? base.qrBase64,
+      hasQr:           qrJson['hasQr']     as bool?   ?? base.hasQr,
+      qrData:          qrJson['qrData']    as String? ?? base.qrData,
+      qrBase64:        qrJson['qrBase64']  as String? ?? base.qrBase64,
+      initError:       base.initError,
       totalToday:      base.totalToday,
       sentToday:       base.sentToday,
       failedToday:     base.failedToday,

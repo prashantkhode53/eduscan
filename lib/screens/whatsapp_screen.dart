@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
@@ -15,27 +14,20 @@ class WhatsAppScreen extends StatefulWidget {
 }
 
 class _WhatsAppScreenState extends State<WhatsAppScreen> {
-  Timer? _pollTimer;
   final _testPhoneCtrl = TextEditingController();
 
   @override
   void initState() {
     super.initState();
+    // Provider manages SSE + polling internally.
+    // One manual refresh ensures latest data when navigating to this screen.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<WhatsAppProvider>().refresh();
-      _startPolling();
-    });
-  }
-
-  void _startPolling() {
-    _pollTimer = Timer.periodic(const Duration(seconds: 6), (_) {
-      if (mounted) context.read<WhatsAppProvider>().refresh();
     });
   }
 
   @override
   void dispose() {
-    _pollTimer?.cancel();
     _testPhoneCtrl.dispose();
     super.dispose();
   }
@@ -107,11 +99,11 @@ class _WhatsAppScreenState extends State<WhatsAppScreen> {
     final status = provider.status;
 
     final (stateColor, stateIcon, stateBg) = switch (status.status) {
-      'connected'    => (AppColors.success, Icons.check_circle,  AppColors.success.withValues(alpha: 0.1)),
-      'qr_pending'   => (AppColors.warning, Icons.qr_code,        AppColors.warning.withValues(alpha: 0.1)),
-      'reconnecting' => (AppColors.info,    Icons.sync,           AppColors.info.withValues(alpha: 0.1)),
-      'initializing' => (AppColors.info,    Icons.hourglass_top,  AppColors.info.withValues(alpha: 0.1)),
-      _              => (AppColors.error,   Icons.cancel_outlined, AppColors.error.withValues(alpha: 0.1)),
+      'connected'    => (AppColors.success, Icons.check_circle,   AppColors.success.withValues(alpha: 0.1)),
+      'qr_pending'   => (AppColors.warning, Icons.qr_code,         AppColors.warning.withValues(alpha: 0.1)),
+      'reconnecting' => (AppColors.info,    Icons.sync,            AppColors.info.withValues(alpha: 0.1)),
+      'initializing' => (AppColors.info,    Icons.hourglass_top,   AppColors.info.withValues(alpha: 0.1)),
+      _              => (AppColors.error,   Icons.cancel_outlined,  AppColors.error.withValues(alpha: 0.1)),
     };
 
     return Card(
@@ -183,7 +175,8 @@ class _WhatsAppScreenState extends State<WhatsAppScreen> {
                 ],
               ),
             ],
-            if (!provider.serviceReachable && provider.error != null) ...[
+            // Show initError or network-level error
+            if (_errorMessage(provider) != null) ...[
               const SizedBox(height: 12),
               Container(
                 padding: const EdgeInsets.all(10),
@@ -197,7 +190,7 @@ class _WhatsAppScreenState extends State<WhatsAppScreen> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        provider.error!,
+                        _errorMessage(provider)!,
                         style: theme.textTheme.bodySmall
                             ?.copyWith(color: AppColors.error),
                       ),
@@ -236,6 +229,13 @@ class _WhatsAppScreenState extends State<WhatsAppScreen> {
         ),
       ),
     );
+  }
+
+  // Returns the most relevant error string to show, or null if none.
+  String? _errorMessage(WhatsAppProvider provider) {
+    if (provider.status.initError != null) return provider.status.initError;
+    if (!provider.serviceReachable && provider.error != null) return provider.error;
+    return null;
   }
 
   // ── Section 2 – QR Pairing ────────────────────────────────────────────────
@@ -279,7 +279,7 @@ class _WhatsAppScreenState extends State<WhatsAppScreen> {
                     color: theme.colorScheme.onSurface.withValues(alpha: 0.5)),
                   const SizedBox(width: 4),
                   Text(
-                    'Auto-refreshes every 6 seconds',
+                    'Updates in real time',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
                     ),
@@ -317,6 +317,42 @@ class _WhatsAppScreenState extends State<WhatsAppScreen> {
   }
 
   Widget _buildQrPlaceholder(WhatsAppProvider provider, ThemeData theme) {
+    final waState = provider.status.status;
+
+    // Determine what the placeholder should say based on service state
+    final (icon, primaryMsg, secondaryMsg, isSpinning) = switch (waState) {
+      'initializing' => (
+          Icons.hourglass_top,
+          'Starting service...',
+          'Chromium is launching — this takes ~30 s on a cold start',
+          true,
+        ),
+      'qr_pending' => (
+          Icons.qr_code,
+          'Generating QR code...',
+          'The QR will appear automatically',
+          true,
+        ),
+      'reconnecting' => (
+          Icons.sync,
+          'Reconnecting...',
+          'Re-establishing WhatsApp session',
+          true,
+        ),
+      'disconnected' when provider.status.initError != null => (
+          Icons.error_outline,
+          'Service error',
+          provider.status.initError!,
+          false,
+        ),
+      _ => (
+          Icons.qr_code,
+          'Waiting for QR...',
+          'Tap Reconnect if this persists',
+          provider.loading,
+        ),
+    };
+
     return Container(
       width: 220, height: 220,
       decoration: BoxDecoration(
@@ -326,33 +362,37 @@ class _WhatsAppScreenState extends State<WhatsAppScreen> {
           color: theme.colorScheme.outlineVariant, width: 1.5,
         ),
       ),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          if (provider.loading)
-            CircularProgressIndicator(
-              color: theme.colorScheme.primary, strokeWidth: 2)
-          else
-            Icon(Icons.qr_code, size: 64,
-              color: theme.colorScheme.onSurface.withValues(alpha: 0.3)),
-          const SizedBox(height: 12),
-          Text(
-            provider.loading ? 'Loading QR...' : 'QR not available',
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
-            ),
-          ),
-          if (!provider.loading) ...[
-            const SizedBox(height: 6),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            if (isSpinning)
+              CircularProgressIndicator(
+                color: theme.colorScheme.primary, strokeWidth: 2)
+            else
+              Icon(icon, size: 48,
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.35)),
+            const SizedBox(height: 12),
             Text(
-              'Service may still be starting up',
+              primaryMsg,
               style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
+                fontWeight: FontWeight.w600,
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              secondaryMsg,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.45),
                 fontSize: 11,
               ),
+              textAlign: TextAlign.center,
             ),
           ],
-        ],
+        ),
       ),
     );
   }
