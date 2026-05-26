@@ -17,6 +17,7 @@ import attendanceRoutes from './routes/attendance';
 import scanRoutes from './routes/scan';
 import reportRoutes from './routes/reports';
 import settingsRoutes from './routes/settings';
+import { whatsappRouter, runWhatsAppMigrations, whatsappService } from './whatsapp';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -56,6 +57,8 @@ app.use('/api/attendance', attendanceRoutes);
 app.use('/api/attendance', scanRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/whatsapp', whatsappRouter);
+console.log('✅ WhatsApp routes mounted at /whatsapp');
 
 app.get('/api/routes', (_req, res) => {
   const routes: string[] = [];
@@ -80,6 +83,14 @@ async function start(): Promise<void> {
   try {
     await runMigrations();
     console.log('✅ Database migrations complete');
+
+    await runWhatsAppMigrations();
+
+    // WhatsApp client starts non-blocking — its failure never crashes the server
+    whatsappService.initialize().catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('❌ WhatsApp init error:', msg);
+    });
 
     const server = app.listen(Number(PORT), '0.0.0.0', () => {
       console.log(`🚀 EduScan backend running on port ${PORT}`);

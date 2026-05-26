@@ -30,7 +30,12 @@
     "@types/node": "^20.12.7",
     "@types/morgan": "^1.9.9",
     "typescript": "^5.4.5",
-    "ts-node-dev": "^2.0.0"
+    "ts-node-dev": "^2.0.0",
+    "whatsapp-web.js": "^1.23.0",
+    "puppeteer": "^21.5.0",
+    "qrcode": "^1.5.3",
+    "joi": "^17.11.0",
+    "@types/qrcode": "^1.5.5"
   },
   "devDependencies": {}
 }

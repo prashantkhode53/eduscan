@@ -7,6 +7,7 @@ import 'providers/auth_provider.dart';
 import 'providers/student_provider.dart';
 import 'providers/attendance_provider.dart';
 import 'providers/connectivity_provider.dart';
+import 'providers/whatsapp_provider.dart';
 
 void main() async {
   runZonedGuarded(() async {
@@ -24,6 +25,7 @@ void main() async {
           ChangeNotifierProvider(create: (_) => AuthProvider()),
           ChangeNotifierProvider(create: (_) => StudentProvider()),
           ChangeNotifierProvider(create: (_) => AttendanceProvider()),
+          ChangeNotifierProvider(create: (_) => WhatsAppProvider()),
         ],
         child: const EduScanApp(),
       ),

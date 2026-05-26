@@ -225,6 +225,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             case 2: Navigator.pushNamed(context, '/checkin'); break;
             case 3: Navigator.pushNamed(context, '/attendance'); break;
             case 4: Navigator.pushNamed(context, '/reports'); break;
+            case 5: Navigator.pushNamed(context, '/whatsapp'); break;
           }
         },
         destinations: const [
@@ -233,6 +234,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           NavigationDestination(icon: Icon(Icons.face_retouching_natural), label: 'Scan'),
           NavigationDestination(icon: Icon(Icons.event_note_outlined), selectedIcon: Icon(Icons.event_note), label: 'Attendance'),
           NavigationDestination(icon: Icon(Icons.bar_chart_outlined), selectedIcon: Icon(Icons.bar_chart), label: 'Reports'),
+          NavigationDestination(icon: Icon(Icons.chat_bubble_outline), selectedIcon: Icon(Icons.chat_bubble), label: 'WhatsApp'),
         ],
       ),
     );

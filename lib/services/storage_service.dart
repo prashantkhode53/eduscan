@@ -2,11 +2,11 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class StorageService {
-  static const _keyToken = 'jwt_token';
-  static const _keyAdmin = 'admin_data';
-  static const _keyKioskKey = 'kiosk_api_key';
-  static const _keyLastSync = 'last_sync_time';
-  static const _keyDarkMode = 'dark_mode';
+  static const _keyToken      = 'jwt_token';
+  static const _keyAdmin      = 'admin_data';
+  static const _keyKioskKey   = 'kiosk_api_key';
+  static const _keyLastSync   = 'last_sync_time';
+  static const _keyDarkMode   = 'dark_mode';
   static const _keyApiBaseUrl = 'api_base_url';
 
   static Future<void> saveToken(String token) async {

@@ -70,6 +70,18 @@ class AppStrings {
   static const String pendingRecords = 'Pending Records';
   static const String dbConnection = 'Database Connection';
 
+  // WhatsApp
+  static const String whatsApp             = 'WhatsApp';
+  static const String whatsAppNotifications = 'WhatsApp Notifications';
+  static const String waConnected          = 'Connected';
+  static const String waDisconnected       = 'Disconnected';
+  static const String waScanQr            = 'Scan QR Code';
+  static const String waServiceUrl         = 'Service URL';
+  static const String waApiKey             = 'API Key';
+  static const String waSentToday          = 'Sent Today';
+  static const String waServiceDashboard   = 'Service Dashboard';
+  static const String waTestMessage        = 'Send Test Message';
+
   // Errors
   static const String networkError = 'Network error. Please check your connection.';
   static const String serverError = 'Server error. Please try again later.';

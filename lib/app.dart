@@ -12,6 +12,7 @@ import 'screens/checkin_checkout_screen.dart';
 import 'screens/attendance_screen.dart';
 import 'screens/reports_screen.dart';
 import 'screens/settings_screen.dart';
+import 'screens/whatsapp_screen.dart';
 
 class EduScanApp extends StatelessWidget {
   const EduScanApp({super.key});
@@ -51,6 +52,8 @@ class EduScanApp extends StatelessWidget {
                 page = const ReportsScreen();
               case '/settings':
                 page = const SettingsScreen();
+              case '/whatsapp':
+                page = const WhatsAppScreen();
               default:
                 page = const SplashScreen();
             }
