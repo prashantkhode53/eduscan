@@ -2,11 +2,11 @@ import 'dart:async';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:provider/provider.dart';
 import '../models/scan_result.dart';
 import '../providers/connectivity_provider.dart';
 import '../services/api_service.dart';
+import '../services/face_service.dart';
 import '../services/local_db_service.dart';
 import '../services/storage_service.dart';
 import '../services/sync_service.dart';
@@ -21,6 +21,7 @@ class CheckinCheckoutScreen extends StatefulWidget {
 
 class _CheckinCheckoutScreenState extends State<CheckinCheckoutScreen> {
   CameraController? _cameraCtrl;
+  CameraDescription? _frontCamera;
   bool _cameraReady = false;
   String _mode = 'checkin';
   String _selectedClass = '10-A';
@@ -28,7 +29,6 @@ class _CheckinCheckoutScreenState extends State<CheckinCheckoutScreen> {
   ScanResult? _lastResult;
   FaceOverlayState _overlayState = FaceOverlayState.idle;
   bool _debouncing = false;
-  Timer? _scanTimer;
   Timer? _resetTimer;
   bool _processingFrame = false;
   int _checkedIn = 0;
@@ -66,12 +66,12 @@ class _CheckinCheckoutScreenState extends State<CheckinCheckoutScreen> {
 
   Future<void> _initCamera() async {
     final cameras = await availableCameras();
-    final front = cameras.firstWhere(
+    _frontCamera = cameras.firstWhere(
       (c) => c.lensDirection == CameraLensDirection.front,
       orElse: () => cameras.first,
     );
     _cameraCtrl = CameraController(
-      front,
+      _frontCamera!,
       ResolutionPreset.medium,
       enableAudio: false,
       imageFormatGroup: ImageFormatGroup.nv21,
@@ -82,22 +82,23 @@ class _CheckinCheckoutScreenState extends State<CheckinCheckoutScreen> {
   }
 
   void _startScanning() {
-    _scanTimer = Timer.periodic(const Duration(milliseconds: 500), (_) async {
-      if (_debouncing || _processingFrame || !(_cameraCtrl?.value.isInitialized ?? false)) return;
+    _cameraCtrl!.startImageStream((CameraImage image) async {
+      if (_debouncing ||
+          _processingFrame ||
+          !(_cameraCtrl?.value.isInitialized ?? false)) return;
       _processingFrame = true;
       try {
-        final image = await _cameraCtrl!.takePicture();
-        final inputImage = InputImage.fromFilePath(image.path);
-        final detector = FaceDetector(
-          options: FaceDetectorOptions(minFaceSize: 0.15),
-        );
-        final faces = await detector.processImage(inputImage);
-        await detector.close();
+        final inputImage =
+            FaceService.cameraImageToInputImage(image, _frontCamera!);
+        if (inputImage == null) {
+          _processingFrame = false;
+          return;
+        }
+        final faces = await FaceService.detectFaces(inputImage);
 
         if (faces.isNotEmpty && mounted && !_debouncing) {
           setState(() => _overlayState = FaceOverlayState.detected);
-          // Extract embedding
-          final embedding = List<double>.generate(128, (i) => i * 0.001);
+          final embedding = FaceService.generateEmbedding(faces.first);
           await _processScan(embedding);
         } else if (mounted && !_debouncing) {
           setState(() => _overlayState = FaceOverlayState.idle);
@@ -201,7 +202,6 @@ class _CheckinCheckoutScreenState extends State<CheckinCheckoutScreen> {
 
   @override
   void dispose() {
-    _scanTimer?.cancel();
     _resetTimer?.cancel();
     _clockTimer?.cancel();
     _cameraCtrl?.dispose();

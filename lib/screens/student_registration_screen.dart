@@ -23,7 +23,7 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
   final _formKey2 = GlobalKey<FormState>();
   final _formKey3 = GlobalKey<FormState>();
 
-  // Step 1 controllers
+  // Step 1
   final _firstNameCtrl = TextEditingController();
   final _middleNameCtrl = TextEditingController();
   final _lastNameCtrl = TextEditingController();
@@ -33,7 +33,7 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
   final _nationalityCtrl = TextEditingController();
   final _govtIdCtrl = TextEditingController();
 
-  // Step 2 controllers
+  // Step 2
   final _institutionCtrl = TextEditingController();
   String _academicYear = '2024-25';
   final _classGradeCtrl = TextEditingController();
@@ -42,7 +42,7 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
   final _streamCtrl = TextEditingController();
   DateTime? _admissionDate;
 
-  // Step 3 controllers
+  // Step 3
   final _parentNameCtrl = TextEditingController();
   String _parentRelation = 'Father';
   final _mobileCtrl = TextEditingController();
@@ -53,19 +53,21 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
   final _emergencyCtrl = TextEditingController();
   final _transportCtrl = TextEditingController();
 
-  // Step 4 face capture
+  // Step 4 — face capture
   CameraController? _cameraCtrl;
-  List<CameraDescription>? _cameras;
+  CameraDescription? _frontCamera;
   bool _cameraReady = false;
   Face? _detectedFace;
   FaceOverlayState _overlayState = FaceOverlayState.idle;
   final List<List<double>> _samples = [];
-  final List<bool> _samplesCaptured = [false, false, false, false];
-  int _currentSample = 0;
-  Timer? _scanTimer;
+  int _autoCaptures = 0;
+  static const int _requiredSamples = 3;
   bool _processingFrame = false;
   double _brightnessScore = 0;
-  double? _lastEulerY;
+  bool _autoCapturing = false;
+  double _holdProgress = 0.0;
+  Timer? _progressTicker;
+  Timer? _nextCaptureTimer;
   List<double>? _finalEmbedding;
   bool _submitting = false;
 
@@ -74,7 +76,7 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
     super.initState();
   }
 
-  // ── Validation ────────────────────────────────────────────────────────────
+  // ── Validation ─────────────────────────────────────────────────────────────
 
   bool _validateCurrentStep() {
     switch (_currentStep) {
@@ -124,7 +126,7 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
 
       case 3:
         if (_finalEmbedding == null) {
-          _snack('Please capture all 4 face samples before submitting');
+          _snack('Please complete face capture before submitting');
           return false;
         }
         return true;
@@ -140,133 +142,247 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
     );
   }
 
-  // ── Camera ────────────────────────────────────────────────────────────────
+  // ── Camera ─────────────────────────────────────────────────────────────────
 
   Future<void> _initCamera() async {
-    _cameras = await availableCameras();
-    final frontCamera = _cameras!.firstWhere(
+    if (_cameraReady) return;
+    final cameras = await availableCameras();
+    _frontCamera = cameras.firstWhere(
       (c) => c.lensDirection == CameraLensDirection.front,
-      orElse: () => _cameras!.first,
+      orElse: () => cameras.first,
     );
     _cameraCtrl = CameraController(
-      frontCamera,
+      _frontCamera!,
       ResolutionPreset.medium,
       enableAudio: false,
       imageFormatGroup: ImageFormatGroup.nv21,
     );
     await _cameraCtrl!.initialize();
     if (mounted) setState(() => _cameraReady = true);
-    _startScanning();
+    _startStream();
   }
 
-  void _startScanning() {
-    _scanTimer = Timer.periodic(const Duration(milliseconds: 500), (_) async {
-      if (_processingFrame || !(_cameraCtrl?.value.isInitialized ?? false)) return;
+  void _startStream() {
+    if (_cameraCtrl == null || !(_cameraCtrl!.value.isInitialized)) return;
+    _cameraCtrl!.startImageStream((CameraImage image) async {
+      if (_processingFrame || _finalEmbedding != null) return;
       _processingFrame = true;
       try {
-        final image = await _cameraCtrl!.takePicture();
-        final inputImage = InputImage.fromFilePath(image.path);
-        final faces = await FaceDetector(
-          options: FaceDetectorOptions(
-            enableClassification: true,
-            enableLandmarks: false,
-            minFaceSize: 0.2,
-          ),
-        ).processImage(inputImage);
+        final inputImage =
+            FaceService.cameraImageToInputImage(image, _frontCamera!);
+        if (inputImage == null) {
+          _processingFrame = false;
+          return;
+        }
+        final faces = await FaceService.detectFaces(inputImage);
+        if (!mounted) {
+          _processingFrame = false;
+          return;
+        }
 
-        if (faces.isNotEmpty && mounted) {
+        if (faces.isNotEmpty) {
           final face = faces.first;
-          final euler = face.headEulerAngleY ?? 0;
-          if (_lastEulerY != null && (euler - _lastEulerY!).abs() > 15) {
-            // liveness detected via head movement
-          }
-          _lastEulerY = euler;
+          final quality = _computeQuality(face);
           setState(() {
             _detectedFace = face;
-            _overlayState = FaceOverlayState.detected;
+            _brightnessScore = quality;
+            _overlayState = quality >= 0.4
+                ? FaceOverlayState.detected
+                : FaceOverlayState.idle;
           });
-        } else if (mounted) {
+          if (quality >= 0.4 && !_autoCapturing) {
+            _startHoldTimer();
+          } else if (quality < 0.4) {
+            _cancelHoldTimer();
+          }
+        } else {
           setState(() {
             _detectedFace = null;
+            _brightnessScore = 0;
             _overlayState = FaceOverlayState.idle;
           });
+          _cancelHoldTimer();
         }
       } catch (_) {}
       _processingFrame = false;
     });
   }
 
-  Future<void> _captureSample() async {
-    if (_detectedFace == null || _currentSample >= 4) return;
-    setState(() => _processingFrame = true);
-    try {
-      await _cameraCtrl!.takePicture();
-      final embedding = List<double>.generate(128, (i) => i.toDouble() * 0.001);
-      _samples.add(embedding);
-      setState(() {
-        _samplesCaptured[_currentSample] = true;
-        _currentSample++;
-        _brightnessScore = 0.75;
-      });
-      if (_currentSample >= 4) {
-        _finalEmbedding = FaceService.averageEmbeddings(_samples);
-        _scanTimer?.cancel();
-        setState(() => _overlayState = FaceOverlayState.successCheckin);
-      }
-    } catch (_) {}
-    setState(() => _processingFrame = false);
+  // Quality: weighted score of face size, head angle, eye openness
+  double _computeQuality(Face face) {
+    final sizeScore =
+        ((face.boundingBox.width - 60) / 140).clamp(0.0, 1.0);
+    final angleScore =
+        (1.0 - (face.headEulerAngleY ?? 0.0).abs() / 40.0).clamp(0.0, 1.0);
+    final eyeScore =
+        ((face.leftEyeOpenProbability ?? 1.0) +
+                (face.rightEyeOpenProbability ?? 1.0)) /
+            2.0;
+    return (sizeScore * 0.5 + angleScore * 0.3 + eyeScore * 0.2)
+        .clamp(0.0, 1.0);
   }
 
-  // ── Submit ────────────────────────────────────────────────────────────────
+  void _startHoldTimer() {
+    if (_autoCapturing) return;
+    _autoCapturing = true;
+    _holdProgress = 0.0;
+    const holdMs = 1500;
+    const tickMs = 50;
+    int elapsed = 0;
+
+    _progressTicker =
+        Timer.periodic(const Duration(milliseconds: tickMs), (t) {
+      if (!mounted) {
+        t.cancel();
+        return;
+      }
+      elapsed += tickMs;
+      setState(() => _holdProgress = (elapsed / holdMs).clamp(0.0, 1.0));
+      if (elapsed >= holdMs) {
+        t.cancel();
+        _progressTicker = null;
+        _doAutoCapture();
+      }
+    });
+  }
+
+  void _cancelHoldTimer() {
+    _progressTicker?.cancel();
+    _progressTicker = null;
+    _nextCaptureTimer?.cancel();
+    _nextCaptureTimer = null;
+    _autoCapturing = false;
+    if (mounted) setState(() => _holdProgress = 0.0);
+  }
+
+  void _doAutoCapture() {
+    if (!mounted || _detectedFace == null || _finalEmbedding != null) {
+      _autoCapturing = false;
+      return;
+    }
+    _captureFromFace(_detectedFace!);
+  }
+
+  void _captureNow() {
+    if (_detectedFace == null || _finalEmbedding != null || _autoCapturing) {
+      return;
+    }
+    _cancelHoldTimer();
+    _autoCapturing = true;
+    _captureFromFace(_detectedFace!);
+  }
+
+  void _captureFromFace(Face face) {
+    final embedding = FaceService.generateEmbedding(face);
+    _samples.add(embedding);
+    _autoCaptures++;
+    _holdProgress = 0.0;
+
+    if (_autoCaptures >= _requiredSamples) {
+      _finalEmbedding = FaceService.averageEmbeddings(_samples);
+      _autoCapturing = false;
+      if (mounted) {
+        setState(() {
+          _brightnessScore = _computeQuality(face);
+          _overlayState = FaceOverlayState.successCheckin;
+        });
+      }
+    } else {
+      if (mounted) setState(() {});
+      // Take next sample 400ms later while face is still in view
+      _nextCaptureTimer = Timer(const Duration(milliseconds: 400), () {
+        if (!mounted || _detectedFace == null || _finalEmbedding != null) {
+          _autoCapturing = false;
+          return;
+        }
+        _captureFromFace(_detectedFace!);
+      });
+    }
+  }
+
+  void _redoCapture() {
+    _cancelHoldTimer();
+    setState(() {
+      _finalEmbedding = null;
+      _samples.clear();
+      _autoCaptures = 0;
+      _overlayState = FaceOverlayState.idle;
+      _brightnessScore = 0;
+      _detectedFace = null;
+    });
+    // Restart stream if it was stopped or is not running
+    try {
+      _startStream();
+    } catch (_) {}
+  }
+
+  // ── Submit ─────────────────────────────────────────────────────────────────
 
   Future<void> _submitRegistration() async {
     if (_finalEmbedding == null) return;
     setState(() => _submitting = true);
     final reg = StudentRegistration(
       firstName: _firstNameCtrl.text.trim(),
-      middleName: _middleNameCtrl.text.trim().isEmpty ? null : _middleNameCtrl.text.trim(),
+      middleName: _middleNameCtrl.text.trim().isEmpty
+          ? null
+          : _middleNameCtrl.text.trim(),
       lastName: _lastNameCtrl.text.trim(),
       dob: DateFormat('yyyy-MM-dd').format(_dob!),
       gender: _gender,
       bloodGroup: _bloodGroup,
-      nationality: _nationalityCtrl.text.trim().isEmpty ? null : _nationalityCtrl.text.trim(),
-      govtId: _govtIdCtrl.text.trim().isEmpty ? null : _govtIdCtrl.text.trim(),
+      nationality: _nationalityCtrl.text.trim().isEmpty
+          ? null
+          : _nationalityCtrl.text.trim(),
+      govtId:
+          _govtIdCtrl.text.trim().isEmpty ? null : _govtIdCtrl.text.trim(),
       institution: _institutionCtrl.text.trim(),
       academicYear: _academicYear,
       classGrade: _classGradeCtrl.text.trim(),
       division: _division,
       rollNo: int.tryParse(_rollNoCtrl.text.trim()),
-      stream: _streamCtrl.text.trim().isEmpty ? null : _streamCtrl.text.trim(),
+      stream:
+          _streamCtrl.text.trim().isEmpty ? null : _streamCtrl.text.trim(),
       admissionDate: DateFormat('yyyy-MM-dd').format(_admissionDate!),
       parentName: _parentNameCtrl.text.trim(),
       parentRelation: _parentRelation,
       mobile: _mobileCtrl.text.trim(),
       email: _emailCtrl.text.trim().isEmpty ? null : _emailCtrl.text.trim(),
-      address: _addressCtrl.text.trim().isEmpty ? null : _addressCtrl.text.trim(),
-      knownAllergies: _allergiesCtrl.text.trim().isEmpty ? null : _allergiesCtrl.text.trim(),
-      medicalConditions: _medicalCtrl.text.trim().isEmpty ? null : _medicalCtrl.text.trim(),
-      emergencyContact: _emergencyCtrl.text.trim().isEmpty ? null : _emergencyCtrl.text.trim(),
-      transportRoute: _transportCtrl.text.trim().isEmpty ? null : _transportCtrl.text.trim(),
+      address:
+          _addressCtrl.text.trim().isEmpty ? null : _addressCtrl.text.trim(),
+      knownAllergies: _allergiesCtrl.text.trim().isEmpty
+          ? null
+          : _allergiesCtrl.text.trim(),
+      medicalConditions:
+          _medicalCtrl.text.trim().isEmpty ? null : _medicalCtrl.text.trim(),
+      emergencyContact: _emergencyCtrl.text.trim().isEmpty
+          ? null
+          : _emergencyCtrl.text.trim(),
+      transportRoute: _transportCtrl.text.trim().isEmpty
+          ? null
+          : _transportCtrl.text.trim(),
       faceEmbedding: _finalEmbedding!,
       faceQuality: _brightnessScore,
     );
 
-    final student = await context.read<StudentProvider>().createStudent(reg);
+    final student =
+        await context.read<StudentProvider>().createStudent(reg);
     setState(() => _submitting = false);
 
     if (!mounted) return;
     if (student != null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Student ${student.fullName} registered! ID: ${student.id}'),
+          content: Text(
+              'Student ${student.fullName} registered! ID: ${student.id}'),
           backgroundColor: Colors.green,
         ),
       );
-      Navigator.of(context).pop(true); // signal list to refresh
+      Navigator.of(context).pop(true);
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(context.read<StudentProvider>().error ?? 'Registration failed'),
+          content: Text(
+              context.read<StudentProvider>().error ?? 'Registration failed'),
           backgroundColor: Colors.red,
         ),
       );
@@ -275,7 +391,8 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
 
   @override
   void dispose() {
-    _scanTimer?.cancel();
+    _progressTicker?.cancel();
+    _nextCaptureTimer?.cancel();
     _cameraCtrl?.dispose();
     _firstNameCtrl.dispose();
     _middleNameCtrl.dispose();
@@ -297,7 +414,7 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
     super.dispose();
   }
 
-  // ── Build ─────────────────────────────────────────────────────────────────
+  // ── Build ──────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -360,19 +477,22 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
           Step(
             title: const Text('Personal Info'),
             isActive: _currentStep >= 0,
-            state: _currentStep > 0 ? StepState.complete : StepState.indexed,
+            state:
+                _currentStep > 0 ? StepState.complete : StepState.indexed,
             content: _buildStep1(),
           ),
           Step(
             title: const Text('Academic Info'),
             isActive: _currentStep >= 1,
-            state: _currentStep > 1 ? StepState.complete : StepState.indexed,
+            state:
+                _currentStep > 1 ? StepState.complete : StepState.indexed,
             content: _buildStep2(),
           ),
           Step(
             title: const Text('Contact & Medical'),
             isActive: _currentStep >= 2,
-            state: _currentStep > 2 ? StepState.complete : StepState.indexed,
+            state:
+                _currentStep > 2 ? StepState.complete : StepState.indexed,
             content: _buildStep3(),
           ),
           Step(
@@ -385,10 +505,12 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
     );
   }
 
-  // ── Step content ──────────────────────────────────────────────────────────
+  // ── Step content ───────────────────────────────────────────────────────────
 
   Widget _field(String label, TextEditingController ctrl,
-      {bool required = false, TextInputType? keyboardType, int maxLines = 1}) {
+      {bool required = false,
+      TextInputType? keyboardType,
+      int maxLines = 1}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: TextFormField(
@@ -397,7 +519,8 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
         maxLines: maxLines,
         decoration: InputDecoration(labelText: label),
         validator: required
-            ? (v) => (v == null || v.trim().isEmpty) ? '$label is required' : null
+            ? (v) =>
+                (v == null || v.trim().isEmpty) ? '$label is required' : null
             : null,
       ),
     );
@@ -419,8 +542,7 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
                   ? 'Date of Birth *'
                   : 'DOB: ${DateFormat('dd MMM yyyy').format(_dob!)}',
               style: TextStyle(
-                color: _dob == null ? Colors.grey.shade600 : null,
-              ),
+                  color: _dob == null ? Colors.grey.shade600 : null),
             ),
             trailing: const Icon(Icons.calendar_today),
             onTap: () async {
@@ -446,8 +568,8 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
             value: _bloodGroup,
             decoration: const InputDecoration(labelText: 'Blood Group'),
             items: [null, 'A+', 'A-', 'B+', 'B-', 'O+', 'O-', 'AB+', 'AB-']
-                .map((g) =>
-                    DropdownMenuItem(value: g, child: Text(g ?? 'Not specified')))
+                .map((g) => DropdownMenuItem(
+                    value: g, child: Text(g ?? 'Not specified')))
                 .toList(),
             onChanged: (v) => setState(() => _bloodGroup = v),
           ),
@@ -485,7 +607,8 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
             onChanged: (v) => setState(() => _division = v!),
           ),
           const SizedBox(height: 12),
-          _field('Roll Number', _rollNoCtrl, keyboardType: TextInputType.number),
+          _field('Roll Number', _rollNoCtrl,
+              keyboardType: TextInputType.number),
           _field('Stream / Medium', _streamCtrl),
           ListTile(
             contentPadding: EdgeInsets.zero,
@@ -494,8 +617,9 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
                   ? 'Admission Date *'
                   : 'Admitted: ${DateFormat('dd MMM yyyy').format(_admissionDate!)}',
               style: TextStyle(
-                color: _admissionDate == null ? Colors.grey.shade600 : null,
-              ),
+                  color: _admissionDate == null
+                      ? Colors.grey.shade600
+                      : null),
             ),
             trailing: const Icon(Icons.calendar_today),
             onTap: () async {
@@ -531,7 +655,8 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
           const SizedBox(height: 12),
           _field('Mobile (+91)', _mobileCtrl,
               required: true, keyboardType: TextInputType.phone),
-          _field('Email', _emailCtrl, keyboardType: TextInputType.emailAddress),
+          _field('Email', _emailCtrl,
+              keyboardType: TextInputType.emailAddress),
           _field('Residential Address', _addressCtrl, maxLines: 2),
           _field('Known Allergies', _allergiesCtrl),
           _field('Medical Conditions', _medicalCtrl),
@@ -543,70 +668,84 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
     );
   }
 
+  String get _captureStatusMessage {
+    if (_finalEmbedding != null) return 'Face captured! Tap Submit.';
+    if (_autoCapturing) {
+      return 'Capturing sample ${_autoCaptures + 1}/$_requiredSamples...';
+    }
+    if (_detectedFace != null) {
+      return _brightnessScore >= 0.4
+          ? 'Face detected — hold still'
+          : 'Move closer to camera';
+    }
+    return 'Position your face in the oval';
+  }
+
   Widget _buildStep4() {
+    final theme = Theme.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (_cameraReady && _cameraCtrl != null)
-          Stack(
-            alignment: Alignment.center,
-            children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: AspectRatio(
-                  aspectRatio: _cameraCtrl!.value.aspectRatio,
-                  child: CameraPreview(_cameraCtrl!),
-                ),
-              ),
-              AspectRatio(
-                aspectRatio: _cameraCtrl!.value.aspectRatio,
-                child: CustomPaint(
-                  painter: FaceOverlayPainter(state: _overlayState),
-                ),
-              ),
-            ],
-          )
-        else
-          Container(
-            height: 220,
-            decoration: BoxDecoration(
-              color: Colors.black,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: const Center(
-              child: CircularProgressIndicator(color: Colors.white),
+        // Camera preview with overlay
+        AspectRatio(
+          aspectRatio: _cameraCtrl?.value.aspectRatio ?? 0.75,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: _cameraReady && _cameraCtrl != null
+                ? Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      CameraPreview(_cameraCtrl!),
+                      CustomPaint(
+                        painter: FaceOverlayPainter(
+                          state: _overlayState,
+                          holdProgress: _holdProgress,
+                        ),
+                      ),
+                    ],
+                  )
+                : Container(
+                    color: Colors.black87,
+                    child: const Center(
+                      child: CircularProgressIndicator(color: Colors.white),
+                    ),
+                  ),
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        // Status message
+        Center(
+          child: Text(
+            _captureStatusMessage,
+            style: TextStyle(
+              fontWeight: FontWeight.w600,
+              fontSize: 14,
+              color: _finalEmbedding != null
+                  ? Colors.green
+                  : (_detectedFace != null && _brightnessScore >= 0.4)
+                      ? theme.colorScheme.primary
+                      : Colors.grey.shade600,
             ),
           ),
-        const SizedBox(height: 16),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceAround,
-          children: List.generate(4, (i) {
-            return Column(
-              children: [
-                Icon(
-                  _samplesCaptured[i]
-                      ? Icons.check_circle
-                      : Icons.radio_button_unchecked,
-                  color: _samplesCaptured[i] ? Colors.green : Colors.grey,
-                ),
-                Text(['Front', 'Left', 'Right', 'Up'][i],
-                    style: const TextStyle(fontSize: 11)),
-              ],
-            );
-          }),
         ),
         const SizedBox(height: 8),
+
+        // Quality bar
         if (_brightnessScore > 0)
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 4),
             child: Row(
               children: [
-                const Text('Quality: ', style: TextStyle(fontSize: 12)),
+                const Text('Quality: ',
+                    style: TextStyle(fontSize: 12)),
                 Expanded(
                   child: LinearProgressIndicator(
                     value: _brightnessScore,
-                    color: _brightnessScore > 0.4 ? Colors.green : Colors.red,
-                    backgroundColor: Colors.grey.shade300,
+                    color: _brightnessScore >= 0.5
+                        ? Colors.green
+                        : Colors.orange,
+                    backgroundColor: Colors.grey.shade200,
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -616,22 +755,76 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
             ),
           ),
         const SizedBox(height: 12),
-        if (_finalEmbedding == null)
+
+        // Sample progress dots
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: List.generate(_requiredSamples, (i) {
+            final done = i < _autoCaptures;
+            return AnimatedContainer(
+              duration: const Duration(milliseconds: 300),
+              margin: const EdgeInsets.symmetric(horizontal: 6),
+              width: done ? 20 : 13,
+              height: done ? 20 : 13,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: done ? Colors.green : Colors.grey.shade300,
+                boxShadow: done
+                    ? [
+                        BoxShadow(
+                            color: Colors.green.withValues(alpha: 0.4),
+                            blurRadius: 6)
+                      ]
+                    : null,
+              ),
+              child: done
+                  ? const Icon(Icons.check, size: 12, color: Colors.white)
+                  : null,
+            );
+          }),
+        ),
+        const SizedBox(height: 16),
+
+        // Action area
+        if (_finalEmbedding == null) ...[
           ElevatedButton.icon(
-            onPressed: _detectedFace != null ? _captureSample : null,
+            onPressed: (_detectedFace != null && !_autoCapturing)
+                ? _captureNow
+                : null,
             icon: const Icon(Icons.camera_alt),
-            label: Text('Capture Sample ${_currentSample + 1}/4'),
-          )
-        else
+            label: Text(
+                _autoCapturing ? 'Capturing...' : 'Capture Now'),
+          ),
+          if (_cameraReady && _detectedFace == null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                'Auto-captures when your face is detected',
+                textAlign: TextAlign.center,
+                style:
+                    TextStyle(fontSize: 11, color: Colors.grey.shade500),
+              ),
+            ),
+        ] else ...[
           const Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.check_circle, color: Colors.green),
+              Icon(Icons.check_circle, color: Colors.green, size: 20),
               SizedBox(width: 8),
-              Text('Face captured. Tap Submit.',
-                  style: TextStyle(color: Colors.green)),
+              Text(
+                'Face captured. Tap Submit.',
+                style: TextStyle(
+                    color: Colors.green, fontWeight: FontWeight.w600),
+              ),
             ],
           ),
+          const SizedBox(height: 8),
+          TextButton(
+            onPressed: _redoCapture,
+            child: Text('Redo capture',
+                style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
+          ),
+        ],
       ],
     );
   }
