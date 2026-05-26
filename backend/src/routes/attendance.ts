@@ -10,12 +10,11 @@ import { authMiddleware } from '../middleware/auth';
 
 const router = Router();
 
-router.use(authMiddleware);
-
-router.get('/', listAttendance);
-router.post('/', createAttendance);
-router.put('/:id', updateAttendance);
-router.post('/batch', batchAttendance);
-router.post('/bulk-absent', bulkMarkAbsent);
+// authMiddleware applied per-route so POST /scan falls through to scanRoutes
+router.get('/', authMiddleware, listAttendance);
+router.post('/', authMiddleware, createAttendance);
+router.put('/:id', authMiddleware, updateAttendance);
+router.post('/batch', authMiddleware, batchAttendance);
+router.post('/bulk-absent', authMiddleware, bulkMarkAbsent);
 
 export default router;
