@@ -127,6 +127,22 @@ export async function scan(req: Request, res: Response, next: NextFunction): Pro
       return;
     }
 
+    // ── Margin check — reject ambiguous matches ────────────────────────────
+    // Require a minimum gap between the top-2 scores to prevent cases like
+    // "Shrikant's face scored 0.76 against Komal K's stored embedding."
+    const margin = best.confidence - secondBestScore;
+    const minMargin = 0.08;
+    if (students.length > 1 && margin < minMargin) {
+      console.log(`[scan] AMBIGUOUS: best=${best.confidence.toFixed(4)} second=${secondBestScore.toFixed(4)} gap=${margin.toFixed(4)} < ${minMargin}`);
+      res.json({
+        success: false,
+        action: 'unknown',
+        confidence: best.confidence,
+        message: `Ambiguous face match (${(best.confidence * 100).toFixed(1)}%, gap ${(margin * 100).toFixed(1)}%). Please face the camera directly and re-scan.`,
+      });
+      return;
+    }
+
     console.log(`[scan] MATCHED: ${best.student.first_name} ${best.student.last_name} score=${best.confidence}`);
 
     const student = best.student;

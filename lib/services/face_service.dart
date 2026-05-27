@@ -39,30 +39,12 @@ class FaceService {
     return _detector.processImage(inputImage);
   }
 
-  /// Generates a 128-D position-invariant, scale-invariant embedding.
-  ///
-  /// All landmark coordinates are normalized relative to:
-  ///   - Origin:  midpoint of left/right eye (inter-ocular center)
-  ///   - Scale:   inter-ocular distance (IOD)
-  ///
-  /// This makes the embedding independent of:
-  ///   - Where the face appears in the camera frame (translation-invariant)
-  ///   - How close the person is to the camera (scale-invariant)
-  ///
-  /// Feature layout (128 total):
-  ///   [0–19]   10 landmark positions × (nx, ny)      = 20
-  ///   [20–43]  24 pairwise normalized distances       = 24
-  ///   [44–71]  face contour 14 pts × (nx, ny)         = 28
-  ///   [72–83]  left eye contour 6 pts × (nx, ny)      = 12
-  ///   [84–95]  right eye contour 6 pts × (nx, ny)     = 12
-  ///   [96–105] upper lip contour 5 pts × (nx, ny)     = 10
-  ///   [106–113] lower lip contour 4 pts × (nx, ny)    = 8
-  ///   [114–121] nose bridge 4 pts × (nx, ny)          = 8
-  ///   [122–127] nose bottom 3 pts × (nx, ny)          = 6
-  ///             Total = 128
+  /// Generates a 128-D embedding that is invariant to:
+  ///   - Translation  (eye midpoint used as origin)
+  ///   - Scale        (inter-ocular distance used as unit)
+  ///   - In-plane rotation  (Procrustes: eye-line rotated to horizontal)
   ///
   /// NOTE: Changing this function invalidates all previously stored embeddings.
-  /// All students must be re-registered when this algorithm changes.
   static List<double> generateEmbedding(Face face) {
     final lE  = face.landmarks[FaceLandmarkType.leftEye]?.position;
     final rE  = face.landmarks[FaceLandmarkType.rightEye]?.position;
@@ -88,12 +70,24 @@ class FaceService {
     }
     iod = max(iod, 1.0);
 
-    // Normalize: translate to eye-center, scale by IOD
-    List<double> np(Point<int>? p) => p == null
-        ? [0.0, 0.0]
-        : [(p.x - cx) / iod, (p.y - cy) / iod];
+    // Procrustes rotation: rotate so the eye-line is always horizontal.
+    // angle = 0 means rE is directly to the right of lE (no tilt).
+    double cosA = 1.0, sinA = 0.0;
+    if (lE != null && rE != null) {
+      final angle = atan2((rE.y - lE.y).toDouble(), (rE.x - lE.x).toDouble());
+      cosA =  cos(-angle);
+      sinA =  sin(-angle);
+    }
 
-    // Normalized Euclidean distance between two landmarks (scale-invariant ratio)
+    // Normalize + rotate: translate to eye-center, scale by IOD, then rotate.
+    List<double> np(Point<int>? p) {
+      if (p == null) return [0.0, 0.0];
+      final dx = (p.x - cx) / iod;
+      final dy = (p.y - cy) / iod;
+      return [dx * cosA - dy * sinA, dx * sinA + dy * cosA];
+    }
+
+    // Normalized Euclidean distance — rotation-invariant (distances don't change under rotation).
     double nd(Point<int>? a, Point<int>? b) {
       if (a == null || b == null) return 0.0;
       return sqrt(pow(a.x - b.x, 2) + pow(a.y - b.y, 2)) / iod;
@@ -101,13 +95,12 @@ class FaceService {
 
     final v = <double>[];
 
-    // === Block 1: Normalized landmark positions (10 × 2 = 20) ===
+    // === Block 1: Normalized + rotated landmark positions (10 × 2 = 20) ===
     for (final p in [lE, rE, nos, lM, rM, bM, lEr, rEr, lCh, rCh]) {
       v.addAll(np(p));
     }
 
     // === Block 2: Pairwise geometric ratios (24) ===
-    // These ratios encode FACIAL STRUCTURE independent of position/scale
     v.addAll([
       nd(lE,  rE),   // inter-ocular (= 1.0, baseline)
       nd(lE,  nos),  // left eye → nose
@@ -136,16 +129,15 @@ class FaceService {
     ]);
 
     // === Blocks 3–9: Contour samples (84 features) ===
-    _addContour(v, face.contours[FaceContourType.face],           14, cx, cy, iod);
-    _addContour(v, face.contours[FaceContourType.leftEye],         6, cx, cy, iod);
-    _addContour(v, face.contours[FaceContourType.rightEye],        6, cx, cy, iod);
-    _addContour(v, face.contours[FaceContourType.upperLipTop],     5, cx, cy, iod);
-    _addContour(v, face.contours[FaceContourType.lowerLipBottom],  4, cx, cy, iod);
-    _addContour(v, face.contours[FaceContourType.noseBridge],      4, cx, cy, iod);
-    _addContour(v, face.contours[FaceContourType.noseBottom],      3, cx, cy, iod);
+    _addContour(v, face.contours[FaceContourType.face],           14, cx, cy, iod, cosA, sinA);
+    _addContour(v, face.contours[FaceContourType.leftEye],         6, cx, cy, iod, cosA, sinA);
+    _addContour(v, face.contours[FaceContourType.rightEye],        6, cx, cy, iod, cosA, sinA);
+    _addContour(v, face.contours[FaceContourType.upperLipTop],     5, cx, cy, iod, cosA, sinA);
+    _addContour(v, face.contours[FaceContourType.lowerLipBottom],  4, cx, cy, iod, cosA, sinA);
+    _addContour(v, face.contours[FaceContourType.noseBridge],      4, cx, cy, iod, cosA, sinA);
+    _addContour(v, face.contours[FaceContourType.noseBottom],      3, cx, cy, iod, cosA, sinA);
     // 28+12+12+10+8+8+6 = 84
 
-    // Pad to exactly 128 (should not be needed, but safety net)
     while (v.length < 128) v.add(0.0);
 
     final result = _normalize(v.sublist(0, 128));
@@ -153,7 +145,7 @@ class FaceService {
     return result;
   }
 
-  /// Sample [n] evenly-spaced normalized points from a face contour.
+  /// Sample [n] evenly-spaced normalized+rotated points from a face contour.
   static void _addContour(
     List<double> v,
     FaceContour? contour,
@@ -161,6 +153,8 @@ class FaceService {
     double cx,
     double cy,
     double iod,
+    double cosA,
+    double sinA,
   ) {
     if (contour == null || contour.points.isEmpty) {
       for (int i = 0; i < n * 2; i++) v.add(0.0);
@@ -169,8 +163,10 @@ class FaceService {
     final pts = contour.points;
     for (int i = 0; i < n; i++) {
       final idx = (i * pts.length ~/ n).clamp(0, pts.length - 1);
-      v.add((pts[idx].x - cx) / iod);
-      v.add((pts[idx].y - cy) / iod);
+      final dx = (pts[idx].x - cx) / iod;
+      final dy = (pts[idx].y - cy) / iod;
+      v.add(dx * cosA - dy * sinA);
+      v.add(dx * sinA + dy * cosA);
     }
   }
 
