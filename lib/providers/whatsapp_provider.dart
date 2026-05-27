@@ -1,21 +1,24 @@
 import 'dart:async';
+import 'dart:math';
 import 'package:flutter/widgets.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import '../models/whatsapp_status.dart';
 import '../services/whatsapp_api_service.dart';
 
 class WhatsAppProvider extends ChangeNotifier with WidgetsBindingObserver {
-  WhatsAppStatus _status          = WhatsAppStatus.disconnected();
-  bool           _loading         = false;
+  WhatsAppStatus _status           = WhatsAppStatus.disconnected();
+  bool           _loading          = false;
   String?        _error;
   bool           _serviceReachable = false;
   bool           _disposed         = false;
 
-  // Internal timers / subscriptions
   StreamSubscription<Map<String, dynamic>>? _sseSub;
   StreamSubscription<ConnectivityResult>?   _connSub;
   Timer? _pollTimer;
   Timer? _sseReconnectTimer;
+
+  // SSE retry backoff: 5s → 10s → 20s → 40s → max 60s
+  int _sseRetryCount = 0;
 
   // ── Getters ───────────────────────────────────────────────────────────────
 
@@ -51,19 +54,14 @@ class WhatsAppProvider extends ChangeNotifier with WidgetsBindingObserver {
     if (_disposed) return;
     switch (state) {
       case AppLifecycleState.resumed:
-        // Foreground: restart SSE for real-time updates and refresh once
         _connectSSE();
         refresh();
         break;
       case AppLifecycleState.paused:
       case AppLifecycleState.detached:
-        // Background / killed: release SSE to conserve battery
-        _sseSub?.cancel();
-        _sseSub = null;
-        _pollTimer?.cancel();
-        _pollTimer = null;
-        _sseReconnectTimer?.cancel();
-        _sseReconnectTimer = null;
+        _sseSub?.cancel();          _sseSub = null;
+        _pollTimer?.cancel();       _pollTimer = null;
+        _sseReconnectTimer?.cancel(); _sseReconnectTimer = null;
         break;
       default:
         break;
@@ -80,7 +78,6 @@ class WhatsAppProvider extends ChangeNotifier with WidgetsBindingObserver {
                      result == ConnectivityResult.wifi   ||
                      result == ConnectivityResult.ethernet;
       if (online && !_serviceReachable) {
-        // Network just restored — reconnect SSE and refresh status
         _connectSSE();
         refresh();
       }
@@ -100,22 +97,31 @@ class WhatsAppProvider extends ChangeNotifier with WidgetsBindingObserver {
     if (_disposed) return;
     _sseSub?.cancel();
     _sseReconnectTimer?.cancel();
+    // Stop polling the moment SSE is (re)established — SSE handles real-time now
+    _pollTimer?.cancel();
+    _pollTimer = null;
 
     _sseSub = WhatsAppApiService.streamStatus().listen(
       (data) {
         if (_disposed) return;
+        _sseRetryCount = 0;       // successful data — reset backoff
+        _pollTimer?.cancel();     // belt-and-suspenders: kill any lingering poll
+        _pollTimer = null;
         _applyStatusData(data);
         _serviceReachable = true;
         _error            = null;
         _notifySafe();
       },
       onError: (_) {
-        if (!_disposed) _startAdaptivePolling();
+        // SSE failed — fall back to silent polling until SSE recovers
+        if (!_disposed) _startSilentPolling();
       },
       onDone: () {
         if (_disposed) return;
-        // SSE stream ended — reconnect after a short delay
-        _sseReconnectTimer = Timer(const Duration(seconds: 5), () {
+        // Server closed stream — reconnect with exponential backoff
+        final delaySec = min(5 * (1 << _sseRetryCount), 60);
+        _sseRetryCount++;
+        _sseReconnectTimer = Timer(Duration(seconds: delaySec), () {
           if (!_disposed) _connectSSE();
         });
       },
@@ -123,21 +129,45 @@ class WhatsAppProvider extends ChangeNotifier with WidgetsBindingObserver {
     );
   }
 
-  // ── Adaptive polling (SSE fallback) ───────────────────────────────────────
+  // ── Silent polling (SSE fallback) ─────────────────────────────────────────
+  // Background polls NEVER set _loading = true so the UI doesn't flash.
+  // Intervals are long because SSE is the primary mechanism.
 
-  void _startAdaptivePolling() {
+  void _startSilentPolling() {
     _pollTimer?.cancel();
+    // 15 s when disconnected (waiting for QR / reconnect)
+    // 30 s when connected (heartbeat check only)
     final interval = _status.connected
-        ? const Duration(seconds: 10)
-        : const Duration(seconds: 3);
+        ? const Duration(seconds: 30)
+        : const Duration(seconds: 15);
     _pollTimer = Timer.periodic(interval, (_) {
-      if (!_disposed) refresh();
+      if (!_disposed) _silentPoll();
     });
+  }
+
+  /// Fetches latest status silently — no loading indicator, no UI flash.
+  Future<void> _silentPoll() async {
+    if (_disposed) return;
+    try {
+      final data = await WhatsAppApiService.getStatus();
+      _applyStatusData(data, withStats: true);
+      if (!_status.connected && _status.qrData == null && _status.hasQr) {
+        try {
+          final qrData = await WhatsAppApiService.getQr();
+          if (!_disposed) _status = WhatsAppStatus.mergeQr(_status, qrData);
+        } catch (_) {}
+      }
+      _serviceReachable = true;
+      _error            = null;
+    } catch (_) {
+      _serviceReachable = false;
+    }
+    _notifySafe(); // one notify, no _loading flip
   }
 
   // ── Public API ────────────────────────────────────────────────────────────
 
-  /// Polls /status (and /qr when needed). Safe to call from any lifecycle state.
+  /// User-initiated refresh — shows the loading spinner once.
   Future<void> refresh() async {
     if (_disposed) return;
     _loading = true;
@@ -148,12 +178,11 @@ class WhatsAppProvider extends ChangeNotifier with WidgetsBindingObserver {
       final statusData = await WhatsAppApiService.getStatus();
       _applyStatusData(statusData, withStats: true);
 
-      // Fetch QR separately only when service has one but SSE hasn't delivered it
       if (!_status.connected && _status.qrData == null && _status.hasQr) {
         try {
           final qrData = await WhatsAppApiService.getQr();
           if (!_disposed) _status = WhatsAppStatus.mergeQr(_status, qrData);
-        } catch (_) { /* QR fetch failure is non-fatal */ }
+        } catch (_) {}
       }
 
       _serviceReachable = true;
@@ -167,7 +196,7 @@ class WhatsAppProvider extends ChangeNotifier with WidgetsBindingObserver {
     _notifySafe();
   }
 
-  /// Sends POST /whatsapp/reconnect, then restarts SSE for instant QR delivery.
+  /// Sends POST /whatsapp/reconnect then restarts SSE for instant QR delivery.
   Future<void> reconnect() async {
     if (_disposed) return;
     _loading = true;
@@ -176,9 +205,8 @@ class WhatsAppProvider extends ChangeNotifier with WidgetsBindingObserver {
 
     try {
       await WhatsAppApiService.reconnect();
-    } catch (_) { /* best-effort */ }
+    } catch (_) {}
 
-    // (Re)start SSE so QR appears the moment the server generates it
     _connectSSE();
 
     _loading = false;
@@ -233,7 +261,6 @@ class WhatsAppProvider extends ChangeNotifier with WidgetsBindingObserver {
     if (withStats) {
       _status = WhatsAppStatus.fromStatusJson(data);
     } else {
-      // SSE payload — contains qrData inline, no stats
       _status = WhatsAppStatus(
         status:          data['status']    as String? ?? _status.status,
         connected:       data['connected'] as bool?   ?? _status.connected,
