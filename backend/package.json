@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "scripts": {
     "postinstall": "node scripts/install-browsers.js",
+    "install:chrome": "node scripts/install-browsers.js",
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",

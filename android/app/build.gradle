@@ -12,8 +12,6 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-        // Required by some AndroidX libs (java.time API on API 21–25)
-        coreLibraryDesugaringEnabled = true
     }
 
     kotlinOptions {
@@ -95,7 +93,6 @@ flutter {
 }
 
 dependencies {
-    coreLibraryDesugaring "com.android.tools.desugar_jdk_libs:2.1.4"
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.9.0"
     implementation "androidx.multidex:multidex:2.0.1"
     implementation "androidx.core:core-ktx:1.13.1"
