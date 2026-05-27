@@ -198,6 +198,19 @@ class FaceService {
     return (dot / (sqrt(magA) * sqrt(magB))).clamp(0.0, 1.0);
   }
 
+  /// Returns null when [face] is good enough for a reliable scan embedding.
+  /// Returns a user-facing hint string when the frame should be skipped.
+  /// Thresholds are intentionally lenient (vs. registration) so the kiosk
+  /// doesn't frustrate users standing at normal distance.
+  static String? scanQualityHint(Face face) {
+    final yaw  = (face.headEulerAngleY ?? 0.0).abs();
+    final roll = (face.headEulerAngleZ ?? 0.0).abs();
+    if (yaw > 30)  return 'Look straight at the camera';
+    if (roll > 25) return 'Hold your head level';
+    if (face.boundingBox.width < 60) return 'Move closer to the camera';
+    return null;
+  }
+
   static List<double> _normalize(List<double> v) {
     final mag = _magnitude(v);
     if (mag == 0) return v;

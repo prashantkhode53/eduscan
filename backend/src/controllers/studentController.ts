@@ -4,6 +4,7 @@ import { Student, ApiResponse, AttendanceSummary } from '../types';
 import { AppError } from '../middleware/errorHandler';
 import { generateStudentId } from '../utils/studentIdGenerator';
 import { validateEmbedding } from '../utils/validators';
+import { cosineSimilarity } from '../utils/faceMatch';
 
 export async function listStudents(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -90,6 +91,33 @@ export async function createStudent(req: Request, res: Response, next: NextFunct
     ];
     for (const field of required) {
       if (!body[field]) throw new AppError(`Field '${field}' is required`, 400);
+    }
+
+    // ── Duplicate face detection ──────────────────────────────────────────
+    // Compare the incoming embedding against every active student.
+    // Similarity ≥ 0.88 means the faces are nearly identical — almost certainly
+    // the same physical person trying to register a second account.
+    const DUPE_THRESHOLD = 0.88;
+    const existingForDupe = await query<{
+      id: string; first_name: string; last_name: string; face_embedding: unknown;
+    }>(`SELECT id, first_name, last_name, face_embedding FROM students WHERE status = 'active'`);
+
+    for (const s of existingForDupe) {
+      const raw = s.face_embedding;
+      let stored: number[];
+      try {
+        stored = typeof raw === 'string' ? JSON.parse(raw) : Array.isArray(raw) ? (raw as number[]) : [];
+      } catch {
+        stored = [];
+      }
+      if (stored.length === 0) continue;
+      const sim = cosineSimilarity(embedding, stored);
+      if (sim >= DUPE_THRESHOLD) {
+        throw new AppError(
+          `Face already registered — ${(sim * 100).toFixed(1)}% match with ${s.first_name} ${s.last_name} (ID: ${s.id}). Re-capture with a clearer image or contact admin if this is a different student.`,
+          409
+        );
+      }
     }
 
     const id = await generateStudentId();

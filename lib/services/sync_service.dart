@@ -93,14 +93,31 @@ class SyncService {
   ) {
     Map<String, dynamic>? best;
     double bestScore = 0;
+    double secondBestScore = 0;
+
     for (final s in students) {
-      final embedding = (s['face_embedding'] as List).cast<double>();
+      final raw = s['face_embedding'];
+      List<double> embedding;
+      try {
+        embedding = raw is List ? List<double>.from(raw.cast<num>().map((n) => n.toDouble())) : [];
+      } catch (_) {
+        embedding = [];
+      }
+      if (embedding.isEmpty) continue;
+
       final score = cosineSimilarity(incoming, embedding);
-      if (score >= threshold && score > bestScore) {
+      if (score > bestScore) {
+        secondBestScore = bestScore;
         bestScore = score;
         best = {...s, 'confidence': score};
+      } else if (score > secondBestScore) {
+        secondBestScore = score;
       }
     }
+
+    if (best == null || bestScore < threshold) return null;
+    // Mirror the online margin check: reject ambiguous matches
+    if (students.length > 1 && (bestScore - secondBestScore) < 0.08) return null;
     return best;
   }
 }

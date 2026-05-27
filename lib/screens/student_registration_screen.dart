@@ -61,9 +61,11 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
   FaceOverlayState _overlayState = FaceOverlayState.idle;
   final List<List<double>> _samples = [];
   int _autoCaptures = 0;
-  static const int _requiredSamples = 3;
+  // 5 samples → better averaged embedding, reduces per-sample noise
+  static const int _requiredSamples = 5;
   bool _processingFrame = false;
   double _brightnessScore = 0;
+  String _qualityHint = '';
   bool _autoCapturing = false;
   double _holdProgress = 0.0;
   Timer? _progressTicker;
@@ -186,13 +188,13 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
           setState(() {
             _detectedFace = face;
             _brightnessScore = quality;
-            _overlayState = quality >= 0.4
+            _overlayState = quality >= 0.55
                 ? FaceOverlayState.detected
                 : FaceOverlayState.idle;
           });
-          if (quality >= 0.4 && !_autoCapturing) {
+          if (quality >= 0.55 && !_autoCapturing) {
             _startHoldTimer();
-          } else if (quality < 0.4) {
+          } else if (quality < 0.55) {
             _cancelHoldTimer();
           }
         } else {
@@ -208,18 +210,45 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
     });
   }
 
-  // Quality: weighted score of face size, head angle, eye openness
+  // Quality: weighted score of face size, head angle, roll, eye openness.
+  // Returns 0.0 for hard rejects (too tilted / too small) and sets _qualityHint.
   double _computeQuality(Face face) {
-    final sizeScore =
-        ((face.boundingBox.width - 60) / 140).clamp(0.0, 1.0);
-    final angleScore =
-        (1.0 - (face.headEulerAngleY ?? 0.0).abs() / 40.0).clamp(0.0, 1.0);
-    final eyeScore =
-        ((face.leftEyeOpenProbability ?? 1.0) +
-                (face.rightEyeOpenProbability ?? 1.0)) /
-            2.0;
-    return (sizeScore * 0.5 + angleScore * 0.3 + eyeScore * 0.2)
+    final yaw  = (face.headEulerAngleY ?? 0.0).abs(); // left–right rotation
+    final roll = (face.headEulerAngleZ ?? 0.0).abs(); // clockwise tilt
+
+    // Hard-reject faces that are too tilted — embedding would be unreliable
+    if (yaw > 25) {
+      _qualityHint = 'Look straight ahead (turn less)';
+      return 0.0;
+    }
+    if (roll > 20) {
+      _qualityHint = 'Hold your head level (tilt less)';
+      return 0.0;
+    }
+
+    // Face must be large enough in frame (at least 80px wide)
+    final sizeScore = ((face.boundingBox.width - 80) / 120).clamp(0.0, 1.0);
+    if (sizeScore < 0.05) {
+      _qualityHint = 'Move closer to the camera';
+      return 0.0;
+    }
+
+    final angleScore = (1.0 - yaw / 25.0).clamp(0.0, 1.0);
+    final rollScore  = (1.0 - roll / 20.0).clamp(0.0, 1.0);
+    final eyeScore   = ((face.leftEyeOpenProbability  ?? 1.0) +
+                        (face.rightEyeOpenProbability ?? 1.0)) / 2.0;
+
+    final score = (sizeScore * 0.40 + angleScore * 0.30 + rollScore * 0.15 + eyeScore * 0.15)
         .clamp(0.0, 1.0);
+
+    if (score < 0.55) {
+      _qualityHint = sizeScore < 0.3
+          ? 'Move closer to the camera'
+          : 'Face the camera directly';
+    } else {
+      _qualityHint = '';
+    }
+    return score;
   }
 
   void _startHoldTimer() {
@@ -669,16 +698,13 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
   }
 
   String get _captureStatusMessage {
-    if (_finalEmbedding != null) return 'Face captured! Tap Submit.';
-    if (_autoCapturing) {
-      return 'Capturing sample ${_autoCaptures + 1}/$_requiredSamples...';
-    }
+    if (_finalEmbedding != null) return 'Face captured! Ready to submit.';
+    if (_autoCapturing) return 'Capturing sample ${_autoCaptures + 1} of $_requiredSamples — hold still...';
     if (_detectedFace != null) {
-      return _brightnessScore >= 0.4
-          ? 'Face detected — hold still'
-          : 'Move closer to camera';
+      if (_brightnessScore >= 0.55) return 'Face detected — hold still for auto-capture';
+      return _qualityHint.isNotEmpty ? _qualityHint : 'Face the camera directly';
     }
-    return 'Position your face in the oval';
+    return 'Position your face in the oval above';
   }
 
   Widget _buildStep4() {
@@ -723,7 +749,7 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
               fontSize: 14,
               color: _finalEmbedding != null
                   ? Colors.green
-                  : (_detectedFace != null && _brightnessScore >= 0.4)
+                  : (_detectedFace != null && _brightnessScore >= 0.55)
                       ? theme.colorScheme.primary
                       : Colors.grey.shade600,
             ),

@@ -119,13 +119,25 @@ class _CheckinCheckoutScreenState extends State<CheckinCheckoutScreen> {
           return;
         }
 
-        // Single face detected — generate embedding and scan
+        final face = faces.first;
+
+        // Quality gate — skip low-quality frames instead of producing bad embeddings
+        final hint = FaceService.scanQualityHint(face);
+        if (hint != null) {
+          setState(() {
+            _overlayState = FaceOverlayState.idle;
+            _scanStatus   = hint;
+          });
+          return;
+        }
+
+        // Single good-quality face — generate embedding and scan
         setState(() {
           _overlayState = FaceOverlayState.detected;
           _scanStatus   = 'Face detected — scanning...';
         });
 
-        final embedding = FaceService.generateEmbedding(faces.first);
+        final embedding = FaceService.generateEmbedding(face);
         debugPrint('[scan] embedding generated, processing scan...');
         await _processScan(embedding);
       } catch (e) {
