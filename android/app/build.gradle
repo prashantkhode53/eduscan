@@ -12,6 +12,8 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        // Required by some AndroidX libs (java.time API on API 21–25)
+        coreLibraryDesugaringEnabled = true
     }
 
     kotlinOptions {
@@ -24,19 +26,67 @@ android {
 
     defaultConfig {
         applicationId "com.eduscan.app"
-        minSdk = 21
+        minSdk    = 21
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
         multiDexEnabled true
     }
 
-    buildTypes {
+    signingConfigs {
         release {
-            signingConfig signingConfigs.debug
+            // Production signing: set env vars in CI / Render dashboard.
+            // Fall back to debug key for local builds.
+            if (System.getenv("KEYSTORE_PATH")) {
+                storeFile     file(System.getenv("KEYSTORE_PATH"))
+                storePassword System.getenv("KEYSTORE_PASSWORD")
+                keyAlias      System.getenv("KEY_ALIAS")
+                keyPassword   System.getenv("KEY_PASSWORD")
+            } else {
+                // Local dev: reuse debug key — replace with real keystore before publishing
+                storeFile     file("${System.getProperty('user.home')}/.android/debug.keystore")
+                storePassword "android"
+                keyAlias      "androiddebugkey"
+                keyPassword   "android"
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            applicationIdSuffix ".debug"
+            versionNameSuffix   "-debug"
+            debuggable true
             minifyEnabled false
             shrinkResources false
         }
+
+        release {
+            signingConfig   signingConfigs.release
+            debuggable      false
+            minifyEnabled   true
+            shrinkResources true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+    }
+
+    // Reduce APK size: generate separate APKs per ABI (arm, x86)
+    splits {
+        abi {
+            enable      true
+            reset()
+            include     "armeabi-v7a", "arm64-v8a", "x86_64"
+            universalApk true   // also keep a universal APK
+        }
+    }
+
+    // Lint — treat missing translations as warnings, not errors
+    lint {
+        disable "MissingTranslation"
+        abortOnError false
     }
 }
 
@@ -45,6 +95,8 @@ flutter {
 }
 
 dependencies {
+    coreLibraryDesugaring "com.android.tools.desugar_jdk_libs:2.1.4"
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.9.0"
     implementation "androidx.multidex:multidex:2.0.1"
+    implementation "androidx.core:core-ktx:1.13.1"
 }

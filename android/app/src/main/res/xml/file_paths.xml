@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FileProvider paths used by open_filex for PDF and file sharing.
+  Required on Android 7+ (API 24+) for sharing files via Intent.
+-->
+<paths>
+    <!-- App-private cache (downloaded PDFs, temp files) -->
+    <cache-path name="cache" path="."/>
+    <!-- App-private files dir -->
+    <files-path name="files" path="."/>
+    <!-- External cache (exported reports) -->
+    <external-cache-path name="external_cache" path="."/>
+    <!-- External files (user-accessible downloads) -->
+    <external-files-path name="external_files" path="."/>
+</paths>
