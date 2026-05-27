@@ -142,9 +142,20 @@ router.get('/events', (req: Request, res: Response): void => {
 });
 
 // ── POST /whatsapp/reconnect ──────────────────────────────────────────────────
+// SAFETY RULE: never destroy a live WhatsApp session via a frontend request.
+//   • If already connected  → return success immediately (no-op)
+//   • If force=true in query → bypass the guard (admin use only)
+//   • Otherwise             → trigger reconnect (service is genuinely down)
 
-router.post('/reconnect', (_req: Request, res: Response): void => {
-  // Always fire-and-forget — reconnect() handles any current state internally
+router.post('/reconnect', (req: Request, res: Response): void => {
+  const force = req.query['force'] === 'true';
+
+  if (whatsappService.isConnected && !force) {
+    console.log('[wa-route] /reconnect called while already connected — ignored');
+    res.json({ success: true, message: 'Already connected — no action needed', alreadyConnected: true });
+    return;
+  }
+
   void whatsappService.reconnect();
   res.json({ success: true, message: 'Reconnect initiated' });
 });

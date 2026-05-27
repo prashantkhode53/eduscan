@@ -197,8 +197,16 @@ class WhatsAppProvider extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   /// Sends POST /whatsapp/reconnect then restarts SSE for instant QR delivery.
+  /// No-op if the session is already connected — never destroys a live session.
   Future<void> reconnect() async {
     if (_disposed) return;
+
+    // If already connected, just do a silent refresh — don't touch the backend session
+    if (_status.connected) {
+      await refresh();
+      return;
+    }
+
     _loading = true;
     _error   = null;
     _notifySafe();

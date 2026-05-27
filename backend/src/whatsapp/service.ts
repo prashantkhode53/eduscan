@@ -1,11 +1,12 @@
 import { EventEmitter } from 'events';
-import { Client, LocalAuth } from 'whatsapp-web.js';
+import { Client, RemoteAuth } from 'whatsapp-web.js';
 import type { WAState } from 'whatsapp-web.js';
 import QRCode from 'qrcode';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { query } from '../db/pool';
+import { PostgresSessionStore } from './authStore';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -23,41 +24,30 @@ export interface WaStatusPayload {
 // ── Chrome detection ──────────────────────────────────────────────────────────
 // Resolution order:
 //   1. PUPPETEER_EXECUTABLE_PATH / CHROME_PATH env var
-//   2. Common Linux system paths (Debian/Ubuntu on Render)
+//   2. Common Linux system paths  (Debian/Ubuntu on Render)
 //   3. PUPPETEER_CACHE_DIR env var
-//   4. Project-local .puppeteer-browsers/ (written by install-browsers.js)
-//   5. Project-local .chrome-path sentinel file (also written by installer)
+//   4. Project-local .puppeteer-browsers/  (written by postinstall)
+//   5. .chrome-path sentinel file           (written by install-browsers.js)
 //   6. Default ~/.cache/puppeteer
-//   Returns undefined → Puppeteer will auto-detect (errors if still missing)
+//
+// Returns undefined → Puppeteer auto-detects (errors if still missing).
 
 function findChrome(): string | undefined {
-  // 1. Explicit env overrides
   for (const key of ['PUPPETEER_EXECUTABLE_PATH', 'CHROME_PATH']) {
     const p = process.env[key];
-    if (p && fs.existsSync(p)) {
-      console.log(`[wa] Chrome: ${key} → ${p}`);
-      return p;
-    }
+    if (p && fs.existsSync(p)) { console.log(`[wa] Chrome: ${key} → ${p}`); return p; }
   }
 
-  // 2. Common Linux system Chrome/Chromium paths
   const systemPaths = [
-    '/usr/bin/google-chrome-stable',
-    '/usr/bin/google-chrome',
-    '/usr/bin/chromium-browser',
-    '/usr/bin/chromium',
-    '/usr/local/bin/chromium',
-    '/usr/local/bin/google-chrome',
+    '/usr/bin/google-chrome-stable', '/usr/bin/google-chrome',
+    '/usr/bin/chromium-browser',     '/usr/bin/chromium',
+    '/usr/local/bin/chromium',       '/usr/local/bin/google-chrome',
     '/snap/bin/chromium',
   ];
   for (const p of systemPaths) {
-    if (fs.existsSync(p)) {
-      console.log(`[wa] Chrome: system → ${p}`);
-      return p;
-    }
+    if (fs.existsSync(p)) { console.log(`[wa] Chrome: system → ${p}`); return p; }
   }
 
-  // 3–6. Search Puppeteer cache directories
   const cacheDirs = [
     process.env.PUPPETEER_CACHE_DIR,
     path.join(process.cwd(), '.puppeteer-browsers'),
@@ -67,20 +57,12 @@ function findChrome(): string | undefined {
   for (const dir of cacheDirs) {
     if (!fs.existsSync(dir)) continue;
     const found = _walkForChrome(dir, 0);
-    if (found) {
-      console.log(`[wa] Chrome: cache ${dir} → ${found}`);
-      return found;
-    }
+    if (found) { console.log(`[wa] Chrome: cache → ${found}`); return found; }
   }
 
-  // Sentinel file written by install-browsers.js
-  const sentinelFile = path.join(process.cwd(), '.chrome-path');
   try {
-    const p = fs.readFileSync(sentinelFile, 'utf8').trim();
-    if (p && fs.existsSync(p)) {
-      console.log(`[wa] Chrome: sentinel file → ${p}`);
-      return p;
-    }
+    const p = fs.readFileSync(path.join(process.cwd(), '.chrome-path'), 'utf8').trim();
+    if (p && fs.existsSync(p)) { console.log(`[wa] Chrome: sentinel → ${p}`); return p; }
   } catch { /* not present */ }
 
   console.warn('[wa] Chrome not found in known paths — Puppeteer will auto-detect');
@@ -96,7 +78,7 @@ function _walkForChrome(dir: string, depth: number): string | undefined {
   for (const e of entries) {
     const full = path.join(dir, e.name);
     if (!e.isDirectory() && ['chrome', 'google-chrome', 'chromium', 'chrome.exe'].includes(e.name)) {
-      try { fs.accessSync(full, fs.constants.X_OK); return full; } catch { /* not executable */ }
+      try { fs.accessSync(full, fs.constants.X_OK); return full; } catch { /* not exec */ }
     }
     if (e.isDirectory()) {
       const found = _walkForChrome(full, depth + 1);
@@ -107,13 +89,13 @@ function _walkForChrome(dir: string, depth: number): string | undefined {
 }
 
 // ── Puppeteer args ────────────────────────────────────────────────────────────
-// No --single-process: it disables the process sandbox and causes crashes in containers.
-// --no-zygote is safe alone and prevents zygote process overhead.
+// --no-single-process: omitted intentionally — causes sandbox issues in containers
+// --no-zygote: safe alone and prevents extra process overhead
 
 const PUPPETEER_ARGS = [
   '--no-sandbox',
   '--disable-setuid-sandbox',
-  '--disable-dev-shm-usage',           // use /tmp instead of /dev/shm (avoids SIGBUS in containers)
+  '--disable-dev-shm-usage',           // use /tmp, avoids SIGBUS in Docker/Render
   '--disable-accelerated-2d-canvas',
   '--no-first-run',
   '--no-zygote',
@@ -135,20 +117,26 @@ const PUPPETEER_ARGS = [
   '--window-size=1280,720',
 ];
 
-// ── WhatsAppService ───────────────────────────────────────────────────────────
+// ── WhatsApp Service ──────────────────────────────────────────────────────────
 
 class WhatsAppService extends EventEmitter {
-  private _client: Client | null                                    = null;
-  private _state: WaState                                           = 'initializing';
-  private _qrData: string | null                                    = null;
-  private _qrBase64: string | null                                  = null;
-  private _lastConnectedAt: Date | null                             = null;
-  private _initPromise: Promise<void> | null                        = null;
-  private _reconnectTimer: ReturnType<typeof setTimeout> | null     = null;
-  private _initError: string | null                                 = null;
-  private _reconnectAttempts                                        = 0;
+  private _client: Client | null                                = null;
+  private _state: WaState                                       = 'initializing';
+  private _qrData: string | null                                = null;
+  private _qrBase64: string | null                              = null;
+  private _lastConnectedAt: Date | null                         = null;
+  private _initError: string | null                             = null;
 
-  // ── Getters ──────────────────────────────────────────────────────────────────
+  // ── Concurrency guards ────────────────────────────────────────────────────
+  // _initPromise  → prevents duplicate initialize() calls
+  // _isReconnecting → prevents concurrent reconnect() calls (race condition)
+  private _initPromise: Promise<void> | null                    = null;
+  private _isReconnecting                                       = false;
+
+  private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private _reconnectAttempts                                    = 0;
+
+  // ── Getters ───────────────────────────────────────────────────────────────
 
   get state(): WaState               { return this._state; }
   get qrData(): string | null        { return this._qrData; }
@@ -157,8 +145,9 @@ class WhatsAppService extends EventEmitter {
   get lastConnectedAt(): Date | null { return this._lastConnectedAt; }
   get initError(): string | null     { return this._initError; }
 
-  // ── Lifecycle ─────────────────────────────────────────────────────────────────
+  // ── Lifecycle ─────────────────────────────────────────────────────────────
 
+  /** Safe to call multiple times — only one boot runs at a time. */
   initialize(): Promise<void> {
     if (this._initPromise) return this._initPromise;
     this._initPromise = this._boot();
@@ -167,10 +156,6 @@ class WhatsAppService extends EventEmitter {
 
   private _setState(state: WaState): void {
     this._state = state;
-    this._pushEvent();
-  }
-
-  private _pushEvent(): void {
     this.emit('wa_status', this._buildPayload());
   }
 
@@ -186,38 +171,37 @@ class WhatsAppService extends EventEmitter {
   }
 
   private async _boot(): Promise<void> {
-    console.log('[wa] ── Booting WhatsApp client ──────────────────────');
+    console.log('[wa] ── Booting ─────────────────────────────────────────');
     this._setState('initializing');
     this._initError = null;
 
-    const sessionPath = process.env.WA_SESSION_PATH
-      ?? path.join(process.cwd(), '.wwebjs_auth');
-    const clientId = process.env.WA_CLIENT_ID ?? 'eduscan-wa';
-
+    const clientId   = process.env.WA_CLIENT_ID ?? 'eduscan-wa';
     const executablePath = findChrome();
-    if (executablePath) {
-      console.log('[wa] Using Chrome:', executablePath);
-    } else {
-      console.log('[wa] Chrome path not resolved — Puppeteer will use its default');
-    }
+    if (executablePath) console.log('[wa] Using Chrome:', executablePath);
 
     this._client = new Client({
-      authStrategy: new LocalAuth({ clientId, dataPath: sessionPath }),
+      authStrategy: new RemoteAuth({
+        clientId,
+        store: new PostgresSessionStore(),
+        backupSyncIntervalMs: 5 * 60 * 1000,   // back up to DB every 5 minutes
+        dataPath: path.join(process.cwd(), '.wwebjs_auth'), // local temp path
+      }),
       puppeteer: {
         headless: true,
-        timeout:  0,  // no timeout — Render cold-starts can be >60s
+        timeout:  0,   // Render cold-starts can be >60 s
         args: PUPPETEER_ARGS,
         ...(executablePath ? { executablePath } : {}),
       },
     });
 
     this._client.on('loading_screen', (percent: number, message: string) => {
-      console.log(`[wa] Loading WhatsApp Web: ${percent}% — ${message}`);
+      console.log(`[wa] Loading: ${percent}% — ${message}`);
     });
 
+    // wwebjs re-fires `qr` every ~60 s when the QR expires — no manual timer needed.
+    // With RemoteAuth: this event fires ONLY when no saved session exists in the DB.
     this._client.on('qr', async (qr: string) => {
-      // whatsapp-web.js re-fires this event every ~60s when QR expires — no manual timer needed
-      console.log('[wa] QR ready — expires in ~60s');
+      console.log('[wa] QR ready — expires in ~60 s (scan with WhatsApp)');
       this._qrData   = qr;
       this._qrBase64 = null;
       try { this._qrBase64 = await QRCode.toDataURL(qr, { scale: 8, margin: 2 }); }
@@ -233,7 +217,7 @@ class WhatsAppService extends EventEmitter {
     });
 
     this._client.on('ready', async () => {
-      console.log('[wa] Ready ✔ — WhatsApp connected');
+      console.log('[wa] Ready ✔ — session active, messages can be sent');
       this._qrData            = null;
       this._qrBase64          = null;
       this._lastConnectedAt   = new Date();
@@ -241,6 +225,11 @@ class WhatsAppService extends EventEmitter {
       this._reconnectAttempts = 0;
       this._setState('connected');
       void this._logEvent('connected');
+    });
+
+    // RemoteAuth fires `remote_session_saved` after each backup
+    this._client.on('remote_session_saved', () => {
+      console.log('[wa] Session backed up to PostgreSQL ✔');
     });
 
     this._client.on('auth_failure', async (msg: string) => {
@@ -259,7 +248,7 @@ class WhatsAppService extends EventEmitter {
       this._qrBase64 = null;
       this._setState('disconnected');
       void this._logEvent('disconnected', { reason });
-      // LOGOUT = user explicitly delinked — don't auto-reconnect
+      // LOGOUT = user delinked the device — do not auto-reconnect into a QR loop
       if (reason !== 'LOGOUT') this._scheduleReconnect();
     });
 
@@ -275,12 +264,12 @@ class WhatsAppService extends EventEmitter {
     }
   }
 
-  // Exponential backoff: 10s → 15s → 22s → 34s → max 120s
+  // Exponential backoff: 10 s → 15 s → 22 s → 34 s → max 120 s
   private _scheduleReconnect(): void {
     if (this._reconnectTimer) clearTimeout(this._reconnectTimer);
     const delay = Math.min(10_000 * Math.pow(1.5, this._reconnectAttempts), 120_000);
     this._reconnectAttempts++;
-    console.log(`[wa] Auto-reconnect in ${Math.round(delay / 1000)}s (attempt #${this._reconnectAttempts})`);
+    console.log(`[wa] Auto-reconnect in ${Math.round(delay / 1000)} s (attempt #${this._reconnectAttempts})`);
     this._reconnectTimer = setTimeout(() => void this._doReconnect(), delay);
   }
 
@@ -292,7 +281,7 @@ class WhatsAppService extends EventEmitter {
     await this.initialize();
   }
 
-  // Removes all listeners before destroying to prevent memory leaks
+  /** Removes all listeners before destroying — prevents EventEmitter memory leaks. */
   private async _destroyClient(): Promise<void> {
     if (!this._client) return;
     try {
@@ -302,21 +291,42 @@ class WhatsAppService extends EventEmitter {
     this._client = null;
   }
 
-  // ── Public API ────────────────────────────────────────────────────────────────
+  // ── Public API ────────────────────────────────────────────────────────────
 
-  /** Force a full restart from any state. Resets backoff counter. */
+  /**
+   * Force a full restart.
+   * Protected by _isReconnecting to prevent concurrent calls
+   * (e.g. user spamming the Reconnect button) from launching two Chrome instances.
+   */
   async reconnect(): Promise<void> {
+    // Already reconnecting — ignore duplicate call
+    if (this._isReconnecting) {
+      console.log('[wa] reconnect() ignored — already in progress');
+      return;
+    }
+    // Already connected — nothing to do (session is alive in DB)
+    if (this._state === 'connected') {
+      console.log('[wa] reconnect() ignored — already connected');
+      return;
+    }
+
+    this._isReconnecting = true;
     console.log('[wa] Manual reconnect triggered');
-    if (this._reconnectTimer) clearTimeout(this._reconnectTimer);
-    this._reconnectTimer    = null;
-    this._reconnectAttempts = 0;        // reset backoff on manual reconnect
-    this._initPromise       = null;
-    this._qrData            = null;
-    this._qrBase64          = null;
-    this._initError         = null;
-    this._setState('reconnecting');
-    await this._destroyClient();
-    await this.initialize();
+
+    try {
+      if (this._reconnectTimer) clearTimeout(this._reconnectTimer);
+      this._reconnectTimer    = null;
+      this._reconnectAttempts = 0;   // manual reconnect resets backoff
+      this._initPromise       = null;
+      this._qrData            = null;
+      this._qrBase64          = null;
+      this._initError         = null;
+      this._setState('reconnecting');
+      await this._destroyClient();
+      await this.initialize();
+    } finally {
+      this._isReconnecting = false;
+    }
   }
 
   async sendMessage(waId: string, text: string): Promise<void> {
@@ -347,18 +357,17 @@ class WhatsAppService extends EventEmitter {
   }
 }
 
-// Translate raw Puppeteer/Chrome error strings into user-friendly messages
 function _friendlyInitError(raw: string): string {
-  if (raw.includes('Could not find Chrome') || raw.includes('No usable sandbox') || raw.includes('ERR_LAUNCH_ARG')) {
-    return 'Chromium not found — set PUPPETEER_CACHE_DIR or PUPPETEER_EXECUTABLE_PATH';
+  if (raw.includes('Could not find Chrome') || raw.includes('No usable sandbox')) {
+    return 'Chromium not found — check PUPPETEER_CACHE_DIR or PUPPETEER_EXECUTABLE_PATH';
   }
   if (raw.includes('ECONNREFUSED') || raw.includes('ERR_CONNECTION_REFUSED')) {
     return 'Cannot connect to WhatsApp — check server internet connectivity';
   }
-  if (raw.includes('TimeoutError') || raw.includes('Navigation timeout') || raw.includes('ERR_TIMED_OUT')) {
+  if (raw.includes('TimeoutError') || raw.includes('Navigation timeout')) {
     return 'WhatsApp Web failed to load — Chromium startup is slow or blocked';
   }
-  if (raw.includes('ENOMEM') || raw.includes('out of memory') || raw.includes('OOM')) {
+  if (raw.includes('ENOMEM') || raw.includes('out of memory')) {
     return 'Out of memory — server needs more RAM to run Chromium';
   }
   if (raw.includes('SIGKILL') || raw.includes('Target closed')) {
