@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
@@ -59,9 +60,10 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
   bool _cameraReady = false;
   Face? _detectedFace;
   FaceOverlayState _overlayState = FaceOverlayState.idle;
-  final List<List<double>> _samples = [];
+  // JPEG images (base64) collected for ArcFace registration — sent to backend
+  final List<String> _sampleImages = [];
   int _autoCaptures = 0;
-  // 5 samples → better averaged embedding, reduces per-sample noise
+  // 5 samples → more robust averaged embedding
   static const int _requiredSamples = 5;
   bool _processingFrame = false;
   double _brightnessScore = 0;
@@ -70,7 +72,7 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
   double _holdProgress = 0.0;
   Timer? _progressTicker;
   Timer? _nextCaptureTimer;
-  List<double>? _finalEmbedding;
+  List<String>? _finalImages; // set when all samples are collected
   bool _submitting = false;
 
   @override
@@ -127,7 +129,7 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
         return true;
 
       case 3:
-        if (_finalEmbedding == null) {
+        if (_finalImages == null || _finalImages!.isEmpty) {
           _snack('Please complete face capture before submitting');
           return false;
         }
@@ -167,7 +169,7 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
   void _startStream() {
     if (_cameraCtrl == null || !(_cameraCtrl!.value.isInitialized)) return;
     _cameraCtrl!.startImageStream((CameraImage image) async {
-      if (_processingFrame || _finalEmbedding != null) return;
+      if (_processingFrame || _finalImages != null) return;
       _processingFrame = true;
       try {
         final inputImage =
@@ -291,61 +293,63 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
   }
 
   void _doAutoCapture() {
-    if (!mounted || _detectedFace == null || _finalEmbedding != null) {
+    if (!mounted || _detectedFace == null || _finalImages != null) {
       _autoCapturing = false;
       return;
     }
-    _captureFromFace(_detectedFace!);
+    _doCapture();
   }
 
   void _captureNow() {
-    if (_detectedFace == null || _finalEmbedding != null || _autoCapturing) {
+    if (_detectedFace == null || _finalImages != null || _autoCapturing) {
       return;
     }
     _cancelHoldTimer();
     _autoCapturing = true;
-    _captureFromFace(_detectedFace!);
+    _doCapture();
   }
 
-  void _captureFromFace(Face face) {
-    final embedding = FaceService.generateEmbedding(face);
-    _samples.add(embedding);
-    _autoCaptures++;
-    _holdProgress = 0.0;
-
-    if (_autoCaptures >= _requiredSamples) {
-      _finalEmbedding = FaceService.averageEmbeddings(_samples);
+  // Stop the stream, take a JPEG, base64-encode it, accumulate as samples.
+  // Restarts the stream automatically when more samples are needed.
+  Future<void> _doCapture() async {
+    if (!mounted || _cameraCtrl == null) {
       _autoCapturing = false;
-      if (mounted) {
-        setState(() {
-          _brightnessScore = _computeQuality(face);
-          _overlayState = FaceOverlayState.successCheckin;
-        });
+      return;
+    }
+    try {
+      await _cameraCtrl!.stopImageStream();
+      final xFile = await _cameraCtrl!.takePicture();
+      final bytes = await xFile.readAsBytes();
+      _sampleImages.add(base64Encode(bytes));
+      _autoCaptures++;
+      _holdProgress = 0.0;
+
+      if (_autoCaptures >= _requiredSamples) {
+        _finalImages = List.unmodifiable(_sampleImages);
+        _autoCapturing = false;
+        if (mounted) setState(() => _overlayState = FaceOverlayState.successCheckin);
+      } else {
+        _autoCapturing = false; // allow next hold-timer cycle
+        if (mounted) setState(() {});
+        _startStream(); // restart so face can be detected again for next sample
       }
-    } else {
-      if (mounted) setState(() {});
-      // Take next sample 400ms later while face is still in view
-      _nextCaptureTimer = Timer(const Duration(milliseconds: 400), () {
-        if (!mounted || _detectedFace == null || _finalEmbedding != null) {
-          _autoCapturing = false;
-          return;
-        }
-        _captureFromFace(_detectedFace!);
-      });
+    } catch (e) {
+      debugPrint('[register] capture error: $e');
+      _autoCapturing = false;
+      if (mounted) _startStream();
     }
   }
 
   void _redoCapture() {
     _cancelHoldTimer();
     setState(() {
-      _finalEmbedding = null;
-      _samples.clear();
+      _finalImages = null;
+      _sampleImages.clear();
       _autoCaptures = 0;
       _overlayState = FaceOverlayState.idle;
       _brightnessScore = 0;
       _detectedFace = null;
     });
-    // Restart stream if it was stopped or is not running
     try {
       _startStream();
     } catch (_) {}
@@ -354,7 +358,7 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
   // ── Submit ─────────────────────────────────────────────────────────────────
 
   Future<void> _submitRegistration() async {
-    if (_finalEmbedding == null) return;
+    if (_finalImages == null || _finalImages!.isEmpty) return;
     setState(() => _submitting = true);
     final reg = StudentRegistration(
       firstName: _firstNameCtrl.text.trim(),
@@ -395,8 +399,7 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
       transportRoute: _transportCtrl.text.trim().isEmpty
           ? null
           : _transportCtrl.text.trim(),
-      faceEmbedding: _finalEmbedding!,
-      faceQuality: _brightnessScore,
+      faceImages: _finalImages!,
     );
 
     final student =
@@ -704,7 +707,7 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
   }
 
   String get _captureStatusMessage {
-    if (_finalEmbedding != null) return 'Face captured! Ready to submit.';
+    if (_finalImages != null) return 'Face captured! Ready to submit.';
     if (_autoCapturing) return 'Capturing sample ${_autoCaptures + 1} of $_requiredSamples — hold still...';
     if (_detectedFace != null) {
       if (_brightnessScore >= 0.55) return 'Face detected — hold still for auto-capture';
@@ -753,7 +756,7 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
             style: TextStyle(
               fontWeight: FontWeight.w600,
               fontSize: 14,
-              color: _finalEmbedding != null
+              color: _finalImages != null
                   ? Colors.green
                   : (_detectedFace != null && _brightnessScore >= 0.55)
                       ? theme.colorScheme.primary
@@ -818,7 +821,7 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
         const SizedBox(height: 16),
 
         // Action area
-        if (_finalEmbedding == null) ...[
+        if (_finalImages == null) ...[
           ElevatedButton.icon(
             onPressed: (_detectedFace != null && !_autoCapturing)
                 ? _captureNow

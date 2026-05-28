@@ -216,8 +216,9 @@ class StudentRegistration {
   final String? medicalConditions;
   final String? emergencyContact;
   final String? transportRoute;
-  final List<double> faceEmbedding;
-  final double? faceQuality;
+  // List of base64-encoded JPEG images captured during registration.
+  // The backend sends these to InsightFace to generate a 512-D ArcFace embedding.
+  final List<String> faceImages;
 
   const StudentRegistration({
     required this.firstName,
@@ -244,8 +245,7 @@ class StudentRegistration {
     this.medicalConditions,
     this.emergencyContact,
     this.transportRoute,
-    required this.faceEmbedding,
-    this.faceQuality,
+    required this.faceImages,
   });
 
   Map<String, dynamic> toJson() => {
@@ -273,7 +273,6 @@ class StudentRegistration {
         'medical_conditions': medicalConditions,
         'emergency_contact': emergencyContact,
         'transport_route': transportRoute,
-        'face_embedding': faceEmbedding,
-        'face_quality': faceQuality,
+        'face_images': faceImages,
       };
 }

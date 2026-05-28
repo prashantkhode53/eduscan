@@ -3,8 +3,7 @@ import { query, queryOne } from '../db/pool';
 import { Student, ApiResponse, AttendanceSummary } from '../types';
 import { AppError } from '../middleware/errorHandler';
 import { generateStudentId } from '../utils/studentIdGenerator';
-import { validateEmbedding } from '../utils/validators';
-import { cosineSimilarity } from '../utils/faceMatch';
+import { batchEmbed, cacheUpsert, cacheDelete, matchFace } from '../utils/insightface';
 
 export async function listStudents(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -81,8 +80,15 @@ export async function listStudents(req: Request, res: Response, next: NextFuncti
 
 export async function createStudent(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const body = req.body as Partial<Student> & { face_embedding: unknown };
-    const embedding = validateEmbedding(body.face_embedding);
+    const body = req.body as Partial<Student> & {
+      face_images?: unknown;
+    };
+
+    // ── Validate face images ───────────────────────────────────────────────
+    if (!Array.isArray(body.face_images) || body.face_images.length < 1) {
+      throw new AppError('face_images must be a non-empty array of base64 JPEG strings', 400);
+    }
+    const faceImages = body.face_images as string[];
 
     const required: (keyof Student)[] = [
       'first_name', 'last_name', 'dob', 'gender', 'institution',
@@ -93,37 +99,45 @@ export async function createStudent(req: Request, res: Response, next: NextFunct
       if (!body[field]) throw new AppError(`Field '${field}' is required`, 400);
     }
 
-    // ── Duplicate face detection ──────────────────────────────────────────
-    // Compare the incoming embedding against every active student.
-    // Similarity ≥ 0.88 means the faces are nearly identical — almost certainly
-    // the same physical person trying to register a second account.
-    const DUPE_THRESHOLD = 0.88;
-    const existingForDupe = await query<{
-      id: string; first_name: string; last_name: string; face_embedding: unknown;
-    }>(`SELECT id, first_name, last_name, face_embedding FROM students WHERE status = 'active'`);
+    // ── Generate 512-D ArcFace embedding via Python ────────────────────────
+    let embedResult;
+    try {
+      embedResult = await batchEmbed(faceImages);
+    } catch (err) {
+      console.error('[createStudent] InsightFace service error:', err);
+      throw new AppError('Face recognition service unavailable. Please try again.', 503);
+    }
 
-    for (const s of existingForDupe) {
-      const raw = s.face_embedding;
-      let stored: number[];
-      try {
-        stored = typeof raw === 'string' ? JSON.parse(raw) : Array.isArray(raw) ? (raw as number[]) : [];
-      } catch {
-        stored = [];
-      }
-      if (stored.length === 0) continue;
-      const sim = cosineSimilarity(embedding, stored);
-      if (sim >= DUPE_THRESHOLD) {
+    if (!embedResult.success || !embedResult.embedding) {
+      throw new AppError(
+        `Face embedding failed: ${embedResult.reason ?? 'unknown error'}. Please re-capture with a clear, front-facing photo.`,
+        422
+      );
+    }
+
+    const embedding = embedResult.embedding;
+
+    // ── Duplicate face check via Redis cache ───────────────────────────────
+    // Use /match with one of the registration images against existing cache.
+    try {
+      const dupeCheck = await matchFace(faceImages[0]);
+      const DUPE_THRESHOLD = 0.88;
+      if (dupeCheck.matched && dupeCheck.confidence != null && dupeCheck.confidence >= DUPE_THRESHOLD) {
+        const existing = dupeCheck.student;
         throw new AppError(
-          `Face already registered — ${(sim * 100).toFixed(1)}% match with ${s.first_name} ${s.last_name} (ID: ${s.id}). Re-capture with a clearer image or contact admin if this is a different student.`,
+          `Face already registered — ${(dupeCheck.confidence * 100).toFixed(1)}% match with ${existing?.first_name ?? ''} ${existing?.last_name ?? ''} (ID: ${dupeCheck.student_id ?? ''}). Re-capture with a clearer image or contact admin if this is a different student.`,
           409
         );
       }
+    } catch (err) {
+      if (err instanceof AppError) throw err;
+      // InsightFace unavailable for dupe check — log and proceed
+      console.warn('[createStudent] Duplicate check skipped — InsightFace unavailable:', err);
     }
 
     const id = await generateStudentId();
-
     const rollNo = body.roll_no != null ? parseInt(String(body.roll_no), 10) : null;
-    const faceQuality = body.face_quality != null ? parseFloat(String(body.face_quality)) : null;
+    const faceQuality = embedResult.quality != null ? Number(embedResult.quality) : null;
 
     await query(
       `INSERT INTO students (
@@ -145,6 +159,21 @@ export async function createStudent(req: Request, res: Response, next: NextFunct
         JSON.stringify(embedding), faceQuality, 'active',
       ]
     );
+
+    // ── Update Redis cache ─────────────────────────────────────────────────
+    try {
+      await cacheUpsert({
+        student_id: id,
+        embedding,
+        first_name: body.first_name as string,
+        last_name:  body.last_name as string,
+        class_grade: body.class_grade as string,
+        division:   body.division as string,
+        roll_no:    rollNo,
+      });
+    } catch (err) {
+      console.warn('[createStudent] Redis cache upsert failed (non-fatal):', err);
+    }
 
     const student = await queryOne<Student>(`SELECT * FROM students WHERE id = $1`, [id]);
     res.status(201).json({ success: true, data: student, message: 'Student registered successfully' });
@@ -191,9 +220,12 @@ export async function getStudent(req: Request, res: Response, next: NextFunction
 export async function updateStudent(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { id } = req.params;
-    const body = req.body as Partial<Student> & { face_embedding?: unknown };
+    const body = req.body as Partial<Student> & { face_images?: string[] };
 
-    const existing = await queryOne<{ id: string }>(`SELECT id FROM students WHERE id = $1`, [id]);
+    const existing = await queryOne<{ id: string; class_grade: string; division: string; roll_no: number | null }>(
+      `SELECT id, class_grade, division, roll_no FROM students WHERE id = $1`,
+      [id]
+    );
     if (!existing) return next(new AppError('Student not found', 404));
 
     const fields: string[] = [];
@@ -215,10 +247,38 @@ export async function updateStudent(req: Request, res: Response, next: NextFunct
       }
     }
 
-    if (body.face_embedding !== undefined) {
-      const embedding = validateEmbedding(body.face_embedding);
+    // Re-register face via new images
+    if (Array.isArray(body.face_images) && body.face_images.length > 0) {
+      let embedResult;
+      try {
+        embedResult = await batchEmbed(body.face_images);
+      } catch {
+        throw new AppError('Face recognition service unavailable', 503);
+      }
+      if (!embedResult.success || !embedResult.embedding) {
+        throw new AppError(`Face embedding failed: ${embedResult.reason ?? 'unknown error'}`, 422);
+      }
       fields.push(`face_embedding = $${idx++}`);
-      values.push(JSON.stringify(embedding));
+      values.push(JSON.stringify(embedResult.embedding));
+      if (embedResult.quality != null) {
+        fields.push(`face_quality = $${idx++}`);
+        values.push(Number(embedResult.quality));
+      }
+      // Update Redis cache with new embedding
+      try {
+        const updated = { ...existing, ...body };
+        await cacheUpsert({
+          student_id: id,
+          embedding: embedResult.embedding,
+          first_name: String(updated.first_name ?? ''),
+          last_name:  String(updated.last_name ?? ''),
+          class_grade: String(updated.class_grade ?? existing.class_grade),
+          division:   String(updated.division ?? existing.division),
+          roll_no:    updated.roll_no != null ? parseInt(String(updated.roll_no), 10) : existing.roll_no,
+        });
+      } catch (err) {
+        console.warn('[updateStudent] Redis cache upsert failed (non-fatal):', err);
+      }
     }
 
     if (fields.length === 0) return next(new AppError('No fields to update', 400));
@@ -240,10 +300,7 @@ export async function updateStudent(req: Request, res: Response, next: NextFunct
 
 /**
  * GET /api/students/face-duplicates
- * Admin diagnostic: returns all pairs of active students whose stored face
- * embeddings are suspiciously similar (cosine ≥ 0.85).  A high score means
- * the same physical face was likely registered under two different IDs —
- * the admin should delete one record.
+ * Admin diagnostic: find students with suspiciously similar 512-D ArcFace embeddings.
  */
 export async function listFaceDuplicates(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -255,16 +312,15 @@ export async function listFaceDuplicates(req: Request, res: Response, next: Next
        FROM students WHERE status = 'active' ORDER BY created_at`
     );
 
-    // Parse all embeddings once
     const students = rows.map(s => {
       const raw = s.face_embedding;
       let emb: number[];
       try { emb = typeof raw === 'string' ? JSON.parse(raw) : Array.isArray(raw) ? (raw as number[]) : []; }
       catch { emb = []; }
       return { ...s, emb };
-    }).filter(s => s.emb.length > 0);
+    }).filter(s => s.emb.length >= 128);
 
-    const SUSPICIOUS_THRESHOLD = 0.85;
+    const SUSPICIOUS = 0.85;
     const pairs: Array<{
       studentA: { id: string; name: string; class_grade: string; division: string };
       studentB: { id: string; name: string; class_grade: string; division: string };
@@ -274,8 +330,14 @@ export async function listFaceDuplicates(req: Request, res: Response, next: Next
 
     for (let i = 0; i < students.length; i++) {
       for (let j = i + 1; j < students.length; j++) {
-        const sim = cosineSimilarity(students[i].emb, students[j].emb);
-        if (sim >= SUSPICIOUS_THRESHOLD) {
+        // Cosine similarity — works for any dimension (128 or 512)
+        const a = students[i].emb;
+        const b = students[j].emb;
+        if (a.length !== b.length) continue;
+        let dot = 0, ma = 0, mb = 0;
+        for (let k = 0; k < a.length; k++) { dot += a[k] * b[k]; ma += a[k] * a[k]; mb += b[k] * b[k]; }
+        const sim = (ma === 0 || mb === 0) ? 0 : dot / (Math.sqrt(ma) * Math.sqrt(mb));
+        if (sim >= SUSPICIOUS) {
           pairs.push({
             studentA: { id: students[i].id, name: `${students[i].first_name} ${students[i].last_name}`, class_grade: students[i].class_grade, division: students[i].division },
             studentB: { id: students[j].id, name: `${students[j].first_name} ${students[j].last_name}`, class_grade: students[j].class_grade, division: students[j].division },
@@ -295,11 +357,11 @@ export async function listFaceDuplicates(req: Request, res: Response, next: Next
         duplicate_pairs: pairs.length,
         pairs,
         advice: pairs.length > 0
-          ? 'Delete one student from each DUPLICATE pair. Students with SUSPICIOUS similarity may need re-registration.'
+          ? 'Delete one student from each DUPLICATE pair.'
           : 'No duplicate face embeddings found.',
       },
       message: pairs.length > 0
-        ? `Found ${pairs.length} suspicious embedding pair(s). Duplicate registrations must be removed.`
+        ? `Found ${pairs.length} suspicious embedding pair(s).`
         : 'No duplicate embeddings found.',
     });
   } catch (err) {
@@ -314,6 +376,14 @@ export async function deleteStudent(req: Request, res: Response, next: NextFunct
     if (!existing) return next(new AppError('Student not found', 404));
 
     await query(`UPDATE students SET status = 'inactive', updated_at = NOW() WHERE id = $1`, [id]);
+
+    // Remove from Redis cache
+    try {
+      await cacheDelete(id);
+    } catch (err) {
+      console.warn('[deleteStudent] Redis cache delete failed (non-fatal):', err);
+    }
+
     res.json({ success: true, message: 'Student deactivated successfully' });
   } catch (err) {
     next(err);

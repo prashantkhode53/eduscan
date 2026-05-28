@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -33,6 +34,7 @@ class _CheckinCheckoutScreenState extends State<CheckinCheckoutScreen> {
   // Prevents concurrent frame processing and rapid re-scans
   bool _processingFrame = false;
   bool _debouncing = false;
+  bool _streamRunning = false; // tracks whether startImageStream is active
   Timer? _debounceTimer;
   Timer? _overlayTimer;
 
@@ -90,6 +92,7 @@ class _CheckinCheckoutScreenState extends State<CheckinCheckoutScreen> {
   }
 
   void _startScanning() {
+    _streamRunning = true;
     _cameraCtrl!.startImageStream((CameraImage image) async {
       if (_debouncing || _processingFrame) return;
       _processingFrame = true;
@@ -121,7 +124,7 @@ class _CheckinCheckoutScreenState extends State<CheckinCheckoutScreen> {
 
         final face = faces.first;
 
-        // Quality gate — skip low-quality frames instead of producing bad embeddings
+        // Quality gate — skip low-quality frames
         final hint = FaceService.scanQualityHint(face);
         if (hint != null) {
           setState(() {
@@ -131,15 +134,27 @@ class _CheckinCheckoutScreenState extends State<CheckinCheckoutScreen> {
           return;
         }
 
-        // Single good-quality face — generate embedding and scan
         setState(() {
           _overlayState = FaceOverlayState.detected;
           _scanStatus   = 'Face detected — scanning...';
         });
 
-        final embedding = FaceService.generateEmbedding(face);
-        debugPrint('[scan] embedding generated, processing scan...');
-        await _processScan(embedding);
+        final isOnline = context.read<ConnectivityProvider>().isOnline;
+        if (isOnline) {
+          // Stop stream so takePicture() can fire, then capture JPEG for ArcFace
+          await _cameraCtrl!.stopImageStream();
+          _streamRunning = false;
+          final xFile = await _cameraCtrl!.takePicture();
+          final bytes = await xFile.readAsBytes();
+          final imageBase64 = base64Encode(bytes);
+          debugPrint('[scan] JPEG captured (${bytes.length} bytes), sending to server...');
+          await _processScan(imageBase64: imageBase64);
+        } else {
+          // Offline fallback: geometric 128-D embedding + local cache matching
+          final embedding = FaceService.generateEmbedding(face);
+          debugPrint('[scan] offline embedding generated');
+          await _processScan(embedding: embedding);
+        }
       } catch (e) {
         debugPrint('[scan] frame error: $e');
       } finally {
@@ -148,15 +163,15 @@ class _CheckinCheckoutScreenState extends State<CheckinCheckoutScreen> {
     });
   }
 
-  Future<void> _processScan(List<double> embedding) async {
+  Future<void> _processScan({String? imageBase64, List<double>? embedding}) async {
     _debouncing = true;
 
-    final isOnline = context.read<ConnectivityProvider>().isOnline;
     ScanResult result;
 
-    if (isOnline) {
+    if (imageBase64 != null) {
+      // Online path — ArcFace via Python through Node.js
       try {
-        final raw = await ApiService.scan(embedding, _mode, '');
+        final raw = await ApiService.scan(imageBase64, _mode);
         result = ScanResult.fromJson(raw);
         debugPrint('[scan] API result: action=${result.action} confidence=${result.confidence}');
       } catch (e) {
@@ -168,11 +183,9 @@ class _CheckinCheckoutScreenState extends State<CheckinCheckoutScreen> {
         debugPrint('[scan] API error: $e');
       }
     } else {
-      // Offline matching against cached students
+      // Offline path — geometric embedding + cached students
       final cached = await LocalDbService.instance.getCachedStudents();
-      // Offline threshold matches the backend face_threshold setting (0.75)
-      final match =
-          SyncService.instance.findBestMatchOffline(embedding, cached, 0.75);
+      final match = SyncService.instance.findBestMatchOffline(embedding!, cached, 0.75);
       if (match != null) {
         final today   = DateTime.now().toIso8601String().split('T')[0];
         final timeNow = _paddedTime(DateTime.now());
@@ -221,7 +234,6 @@ class _CheckinCheckoutScreenState extends State<CheckinCheckoutScreen> {
         break;
     }
 
-    // Status text
     final statusText = switch (result.action) {
       ScanAction.checkin   => 'Face matched! Check-in recorded.',
       ScanAction.checkout  => 'Face matched! Check-out recorded.',
@@ -253,7 +265,6 @@ class _CheckinCheckoutScreenState extends State<CheckinCheckoutScreen> {
       }
     });
 
-    // Debounce duration: 3s for success, 2s for failure/unknown
     final debounceSecs = (result.success &&
             (result.action == ScanAction.checkin ||
                 result.action == ScanAction.checkout ||
@@ -264,6 +275,10 @@ class _CheckinCheckoutScreenState extends State<CheckinCheckoutScreen> {
     _debounceTimer?.cancel();
     _debounceTimer = Timer(Duration(seconds: debounceSecs), () {
       _debouncing = false;
+      // Restart stream if it was stopped to take a picture (online path)
+      if (!_streamRunning && mounted && _cameraCtrl != null) {
+        _startScanning();
+      }
       debugPrint('[scan] debounce cleared, ready for next scan');
     });
   }

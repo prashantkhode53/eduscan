@@ -1,0 +1,67 @@
+version: "3.9"
+
+services:
+  # ── Redis — embedding cache ─────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── InsightFace Python service ──────────────────────────────────────────────
+  insightface:
+    build:
+      context: ./insightface-service
+      args:
+        MODEL_NAME: buffalo_sc
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=${DATABASE_URL}
+      - MODEL_NAME=${MODEL_NAME:-buffalo_sc}
+      - MATCH_THRESHOLD=${MATCH_THRESHOLD:-0.60}
+      - MARGIN_THRESHOLD=${MARGIN_THRESHOLD:-0.05}
+      - MIN_DET_SCORE=${MIN_DET_SCORE:-0.60}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+  # ── Node.js backend ─────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=${DATABASE_URL}
+      - JWT_SECRET=${JWT_SECRET:-eduscan-super-secret-jwt-2024}
+      - INSIGHTFACE_URL=http://insightface:8000
+    depends_on:
+      insightface:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3000/api/health', r => process.exit(r.statusCode === 200 ? 0 : 1))\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  redis_data:

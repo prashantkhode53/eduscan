@@ -278,11 +278,11 @@ class ApiService {
   }
 
   // ── Scan — kiosk endpoint (returns raw body for ScanResult.fromJson) ──────
+  // imageBase64: JPEG image encoded as base64 string (captured by camera)
 
   static Future<Map<String, dynamic>> scan(
-    List<double> embedding,
+    String imageBase64,
     String mode,
-    String classId,
   ) async {
     final headers = await _kioskHeaders();
     final res = await http
@@ -290,9 +290,8 @@ class ApiService {
           Uri.parse(ApiEndpoints.attendanceScan),
           headers: headers,
           body: jsonEncode({
-            'embedding': embedding,
+            'image_base64': imageBase64,
             'mode': mode,
-            'class_id': classId,
             'timestamp': DateTime.now().toIso8601String(),
           }),
         )

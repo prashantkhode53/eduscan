@@ -51,8 +51,8 @@ export function validateEmbedding(embedding: unknown): number[] {
   if (!Array.isArray(embedding)) {
     throw new AppError('face_embedding must be an array', 400);
   }
-  if (embedding.length !== 128) {
-    throw new AppError('face_embedding must have exactly 128 values', 400);
+  if (embedding.length !== 128 && embedding.length !== 512) {
+    throw new AppError('face_embedding must have 128 or 512 values', 400);
   }
   const nums = embedding.map((v, i) => {
     const n = Number(v);

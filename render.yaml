@@ -1,17 +1,14 @@
 services:
+  # ── Node.js backend ─────────────────────────────────────────────────────────
   - type: web
     name: eduscan-backend
     runtime: node
     rootDir: backend
 
-    # Chrome is installed explicitly here (not just postinstall) so it runs even
-    # when Render uses a cached node_modules and skips the npm postinstall hook.
     buildCommand: npm install && npx puppeteer browsers install chrome && npm run build
-
     startCommand: npm start
 
     envVars:
-      # ── Core ──────────────────────────────────────────────────────────────────
       - key: NODE_ENV
         value: production
 
@@ -21,28 +18,53 @@ services:
       - key: JWT_SECRET
         value: eduscan-super-secret-jwt-2024
 
-      # ── Puppeteer / Chrome ────────────────────────────────────────────────────
-      # Chrome is installed here during the build step above.
-      # The project-local path becomes part of the deployment artifact and
-      # survives service restarts without a full redeploy.
+      # Internal URL of the Python InsightFace service (Render private networking)
+      - key: INSIGHTFACE_URL
+        fromService:
+          name: eduscan-insightface
+          type: web
+          property: host
+          envVarKey: INSIGHTFACE_URL
+
       - key: PUPPETEER_CACHE_DIR
         value: /opt/render/project/src/backend/.puppeteer-browsers
 
-      # Override with an absolute path if you have Chrome installed elsewhere:
-      # - key: PUPPETEER_EXECUTABLE_PATH
-      #   value: /usr/bin/google-chrome-stable
-
-      # ── WhatsApp session ──────────────────────────────────────────────────────
-      # Session files persist between restarts (they're in the deployed artifact).
-      # Sessions are lost on full redeploy — users re-scan QR once per deploy.
       - key: WA_SESSION_PATH
         value: /opt/render/project/src/backend/.wwebjs_auth
 
       - key: WA_CLIENT_ID
         value: eduscan-wa
 
-      # ── WhatsApp rate limiting (optional overrides) ───────────────────────────
-      # - key: WA_RATE_LIMIT_WINDOW_MS
-      #   value: "60000"
-      # - key: WA_RATE_LIMIT_MAX
-      #   value: "30"
+  # ── Python InsightFace service ───────────────────────────────────────────────
+  - type: web
+    name: eduscan-insightface
+    runtime: python
+    rootDir: insightface-service
+
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+
+    envVars:
+      - key: MODEL_NAME
+        value: buffalo_sc
+
+      - key: DATABASE_URL
+        value: postgresql://neondb_owner:npg_WtykALs7i9NF@ep-crimson-brook-aqxs1ja7-pooler.c-8.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require
+
+      - key: REDIS_URL
+        fromService:
+          name: eduscan-redis
+          type: redis
+          property: connectionString
+
+      - key: MATCH_THRESHOLD
+        value: "0.60"
+
+      - key: MARGIN_THRESHOLD
+        value: "0.05"
+
+  # ── Redis ───────────────────────────────────────────────────────────────────
+  - type: redis
+    name: eduscan-redis
+    plan: free
+    ipAllowList: []
