@@ -213,8 +213,9 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
   // Quality: weighted score of face size, head angle, roll, eye openness.
   // Returns 0.0 for hard rejects (too tilted / too small) and sets _qualityHint.
   double _computeQuality(Face face) {
-    final yaw  = (face.headEulerAngleY ?? 0.0).abs(); // left–right rotation
-    final roll = (face.headEulerAngleZ ?? 0.0).abs(); // clockwise tilt
+    final yaw   = (face.headEulerAngleY ?? 0.0).abs(); // left–right rotation
+    final roll  = (face.headEulerAngleZ ?? 0.0).abs(); // clockwise tilt
+    final pitch = (face.headEulerAngleX ?? 0.0).abs(); // up–down nod
 
     // Hard-reject faces that are too tilted — embedding would be unreliable
     if (yaw > 25) {
@@ -223,6 +224,10 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
     }
     if (roll > 20) {
       _qualityHint = 'Hold your head level (tilt less)';
+      return 0.0;
+    }
+    if (pitch > 20) {
+      _qualityHint = 'Raise your chin and look at the camera';
       return 0.0;
     }
 
@@ -235,10 +240,11 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
 
     final angleScore = (1.0 - yaw / 25.0).clamp(0.0, 1.0);
     final rollScore  = (1.0 - roll / 20.0).clamp(0.0, 1.0);
+    final pitchScore = (1.0 - pitch / 20.0).clamp(0.0, 1.0);
     final eyeScore   = ((face.leftEyeOpenProbability  ?? 1.0) +
                         (face.rightEyeOpenProbability ?? 1.0)) / 2.0;
 
-    final score = (sizeScore * 0.40 + angleScore * 0.30 + rollScore * 0.15 + eyeScore * 0.15)
+    final score = (sizeScore * 0.35 + angleScore * 0.25 + rollScore * 0.15 + pitchScore * 0.15 + eyeScore * 0.10)
         .clamp(0.0, 1.0);
 
     if (score < 0.55) {

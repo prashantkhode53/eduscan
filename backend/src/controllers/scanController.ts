@@ -134,11 +134,16 @@ export async function scan(req: Request, res: Response, next: NextFunction): Pro
     const minMargin = 0.08;
     if (students.length > 1 && margin < minMargin) {
       console.log(`[scan] AMBIGUOUS: best=${best.confidence.toFixed(4)} second=${secondBestScore.toFixed(4)} gap=${margin.toFixed(4)} < ${minMargin}`);
+      // A tiny gap almost always means duplicate registrations — the same face is stored
+      // for two different student IDs.  Tell admin to run GET /api/students/face-duplicates.
+      const isDuplicateLikely = margin < 0.02;
       res.json({
         success: false,
-        action: 'unknown',
+        action: 'ambiguous',
         confidence: best.confidence,
-        message: `Ambiguous face match (${(best.confidence * 100).toFixed(1)}%, gap ${(margin * 100).toFixed(1)}%). Please face the camera directly and re-scan.`,
+        message: isDuplicateLikely
+          ? `Face matched but two students have identical registrations (${(best.confidence * 100).toFixed(1)}%, gap ${(margin * 100).toFixed(1)}%). Admin must delete the duplicate student record — check /api/students/face-duplicates.`
+          : `Face match is ambiguous (${(best.confidence * 100).toFixed(1)}%, gap ${(margin * 100).toFixed(1)}%). Face the camera directly and try again. If this persists, re-register.`,
       });
       return;
     }

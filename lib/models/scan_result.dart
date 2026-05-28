@@ -3,6 +3,7 @@ enum ScanAction {
   checkout,
   duplicate,
   unknown,
+  ambiguous,  // two students have nearly identical embeddings — admin must clean up
   error,
   outsideHours,
   alreadyComplete,
@@ -39,13 +40,14 @@ class ScanResult {
 
   factory ScanResult.fromJson(Map<String, dynamic> json) {
     ScanAction parseAction(String? a) => switch (a) {
-      'checkin'        => ScanAction.checkin,
-      'checkout'       => ScanAction.checkout,
-      'duplicate'      => ScanAction.duplicate,
-      'outside_hours'  => ScanAction.outsideHours,
+      'checkin'          => ScanAction.checkin,
+      'checkout'         => ScanAction.checkout,
+      'duplicate'        => ScanAction.duplicate,
+      'ambiguous'        => ScanAction.ambiguous,
+      'outside_hours'    => ScanAction.outsideHours,
       'already_complete' => ScanAction.alreadyComplete,
-      'error'          => ScanAction.error,
-      _                => ScanAction.unknown,
+      'error'            => ScanAction.error,
+      _                  => ScanAction.unknown,
     };
 
     final student = json['student'] as Map<String, dynamic>?;

@@ -6,6 +6,7 @@ import {
   updateStudent,
   deleteStudent,
   getStudentAttendance,
+  listFaceDuplicates,
 } from '../controllers/studentController';
 import { authMiddleware } from '../middleware/auth';
 
@@ -15,6 +16,8 @@ router.use(authMiddleware);
 
 router.get('/', listStudents);
 router.post('/', createStudent);
+// Diagnostic: find students whose face embeddings are suspiciously similar
+router.get('/face-duplicates', listFaceDuplicates);
 router.get('/:id', getStudent);
 router.put('/:id', updateStudent);
 router.delete('/:id', deleteStudent);

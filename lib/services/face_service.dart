@@ -203,10 +203,12 @@ class FaceService {
   /// Thresholds are intentionally lenient (vs. registration) so the kiosk
   /// doesn't frustrate users standing at normal distance.
   static String? scanQualityHint(Face face) {
-    final yaw  = (face.headEulerAngleY ?? 0.0).abs();
-    final roll = (face.headEulerAngleZ ?? 0.0).abs();
-    if (yaw > 30)  return 'Look straight at the camera';
-    if (roll > 25) return 'Hold your head level';
+    final yaw   = (face.headEulerAngleY ?? 0.0).abs(); // left–right turn
+    final roll  = (face.headEulerAngleZ ?? 0.0).abs(); // clockwise tilt
+    final pitch = (face.headEulerAngleX ?? 0.0).abs(); // up–down nod
+    if (yaw > 30)   return 'Look straight at the camera';
+    if (roll > 25)  return 'Hold your head level';
+    if (pitch > 30) return 'Raise your chin — face the camera straight';
     if (face.boundingBox.width < 60) return 'Move closer to the camera';
     return null;
   }

@@ -223,10 +223,11 @@ class _CheckinCheckoutScreenState extends State<CheckinCheckoutScreen> {
 
     // Status text
     final statusText = switch (result.action) {
-      ScanAction.checkin   => 'Face matched successfully! Check-in recorded.',
-      ScanAction.checkout  => 'Face matched successfully! Check-out recorded.',
-      ScanAction.duplicate => 'Duplicate attendance within 10 minutes.',
-      ScanAction.unknown   => 'Unknown face detected. No registered face found.',
+      ScanAction.checkin   => 'Face matched! Check-in recorded.',
+      ScanAction.checkout  => 'Face matched! Check-out recorded.',
+      ScanAction.duplicate => 'Duplicate scan — already recorded (10 min window).',
+      ScanAction.ambiguous => 'Duplicate registration detected. Contact admin.',
+      ScanAction.unknown   => 'Face not recognised. Try again.',
       ScanAction.error     => 'Error. Try again.',
       _                    => result.message,
     };
@@ -497,11 +498,49 @@ class _CheckinCheckoutScreenState extends State<CheckinCheckoutScreen> {
         cardColor = Colors.orange.shade800;
       case ScanAction.duplicate:
         cardColor = Colors.amber.shade900;
+      case ScanAction.ambiguous:
+        cardColor = Colors.deepOrange.shade900;
       case ScanAction.unknown:
       case ScanAction.error:
         cardColor = Colors.red.shade900;
       default:
         cardColor = Colors.red.shade900;
+    }
+
+    // Ambiguous — duplicate registration in DB, admin action needed
+    if (result.action == ScanAction.ambiguous) {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: cardColor,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.person_search, color: Colors.white, size: 36),
+            const SizedBox(height: 8),
+            const Text(
+              'Duplicate Registration Found',
+              style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'This face matches two student records equally.\nAdmin must delete the duplicate student.',
+              style: TextStyle(color: Colors.white70, fontSize: 12),
+              textAlign: TextAlign.center,
+            ),
+            if (result.confidence != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  'Match: ${(result.confidence! * 100).toStringAsFixed(1)}%  —  gap too small to distinguish',
+                  style: const TextStyle(color: Colors.white54, fontSize: 11),
+                ),
+              ),
+          ],
+        ),
+      );
     }
 
     // Failure / unknown states
@@ -527,7 +566,7 @@ class _CheckinCheckoutScreenState extends State<CheckinCheckoutScreen> {
             const SizedBox(height: 8),
             Text(
               result.action == ScanAction.unknown
-                  ? 'Unknown Face Detected'
+                  ? 'Face Not Recognised'
                   : 'Scan Error',
               style: const TextStyle(
                   color: Colors.white,

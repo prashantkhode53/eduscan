@@ -238,6 +238,75 @@ export async function updateStudent(req: Request, res: Response, next: NextFunct
   }
 }
 
+/**
+ * GET /api/students/face-duplicates
+ * Admin diagnostic: returns all pairs of active students whose stored face
+ * embeddings are suspiciously similar (cosine ≥ 0.85).  A high score means
+ * the same physical face was likely registered under two different IDs —
+ * the admin should delete one record.
+ */
+export async function listFaceDuplicates(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const rows = await query<{
+      id: string; first_name: string; last_name: string;
+      class_grade: string; division: string; face_embedding: unknown;
+    }>(
+      `SELECT id, first_name, last_name, class_grade, division, face_embedding
+       FROM students WHERE status = 'active' ORDER BY created_at`
+    );
+
+    // Parse all embeddings once
+    const students = rows.map(s => {
+      const raw = s.face_embedding;
+      let emb: number[];
+      try { emb = typeof raw === 'string' ? JSON.parse(raw) : Array.isArray(raw) ? (raw as number[]) : []; }
+      catch { emb = []; }
+      return { ...s, emb };
+    }).filter(s => s.emb.length > 0);
+
+    const SUSPICIOUS_THRESHOLD = 0.85;
+    const pairs: Array<{
+      studentA: { id: string; name: string; class_grade: string; division: string };
+      studentB: { id: string; name: string; class_grade: string; division: string };
+      similarity: number;
+      severity: string;
+    }> = [];
+
+    for (let i = 0; i < students.length; i++) {
+      for (let j = i + 1; j < students.length; j++) {
+        const sim = cosineSimilarity(students[i].emb, students[j].emb);
+        if (sim >= SUSPICIOUS_THRESHOLD) {
+          pairs.push({
+            studentA: { id: students[i].id, name: `${students[i].first_name} ${students[i].last_name}`, class_grade: students[i].class_grade, division: students[i].division },
+            studentB: { id: students[j].id, name: `${students[j].first_name} ${students[j].last_name}`, class_grade: students[j].class_grade, division: students[j].division },
+            similarity: Math.round(sim * 10000) / 10000,
+            severity: sim >= 0.95 ? 'DUPLICATE' : 'SUSPICIOUS',
+          });
+        }
+      }
+    }
+
+    pairs.sort((a, b) => b.similarity - a.similarity);
+
+    res.json({
+      success: true,
+      data: {
+        total_students_checked: students.length,
+        duplicate_pairs: pairs.length,
+        pairs,
+        advice: pairs.length > 0
+          ? 'Delete one student from each DUPLICATE pair. Students with SUSPICIOUS similarity may need re-registration.'
+          : 'No duplicate face embeddings found.',
+      },
+      message: pairs.length > 0
+        ? `Found ${pairs.length} suspicious embedding pair(s). Duplicate registrations must be removed.`
+        : 'No duplicate embeddings found.',
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function deleteStudent(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { id } = req.params;
