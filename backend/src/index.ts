@@ -32,8 +32,8 @@ app.use(helmet({ contentSecurityPolicy: false }));
 app.use(morgan('combined'));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
-app.use(defaultLimiter);
 
+// Health check is exempt from rate limiting — used by keep-alive and Flutter warm-up
 app.get('/api/health', async (_req, res) => {
   try {
     await pool.query('SELECT 1');
@@ -50,6 +50,8 @@ app.get('/api/health', async (_req, res) => {
     res.status(500).json({ success: false, status: 'error', db: 'disconnected' });
   }
 });
+
+app.use(defaultLimiter);
 
 app.use('/api/auth', authRoutes);
 app.use('/api/students', studentRoutes);
