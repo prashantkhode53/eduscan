@@ -22,6 +22,7 @@ from .face_analyzer import FaceAnalyzer
 from .redis_cache import (
     delete_embedding,
     get_all_embeddings,
+    get_client,
     reload_from_db,
     set_embedding,
 )
@@ -170,6 +171,34 @@ async def reload_cache():
     """
     loaded = await reload_from_db()
     return {"success": True, "loaded": loaded}
+
+
+class ReconcileRequest(BaseModel):
+    valid_ids: list[str]  # student IDs that should remain in cache
+
+
+@router.post("/cache/reconcile")
+async def reconcile_cache(body: ReconcileRequest):
+    """
+    Performance-friendly cache sync.
+    Removes Redis entries whose student_id is NOT in valid_ids.
+    Called hourly by Node.js — much cheaper than full /cache/reload.
+    """
+    client = await get_client()
+    keys = await client.keys("face_emb:*")
+    valid_set = set(body.valid_ids)
+    removed = 0
+    kept = 0
+    for key in keys:
+        sid = key[len("face_emb:"):]
+        if sid not in valid_set:
+            await client.delete(key)
+            removed += 1
+            logger.info(f"[Reconcile] Removed stale cache entry for student {sid}")
+        else:
+            kept += 1
+    logger.info(f"[Reconcile] Done — kept={kept}, removed={removed}")
+    return {"success": True, "kept": kept, "removed": removed}
 
 
 # ── /health ───────────────────────────────────────────────────────────────────

@@ -120,3 +120,21 @@ export async function cacheReload(): Promise<number> {
   const body = await response.json() as { loaded?: number };
   return body.loaded ?? 0;
 }
+
+/**
+ * Reconcile Redis cache against a known list of valid student IDs.
+ * Removes only stale entries — far cheaper than a full reload.
+ */
+export async function cacheReconcile(validIds: string[]): Promise<{ kept: number; removed: number }> {
+  const response = await fetch(`${BASE_URL}/cache/reconcile`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ valid_ids: validIds }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) {
+    throw new Error(`InsightFace /cache/reconcile returned ${response.status}`);
+  }
+  const body = await response.json() as { kept?: number; removed?: number };
+  return { kept: body.kept ?? 0, removed: body.removed ?? 0 };
+}
