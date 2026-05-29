@@ -488,11 +488,18 @@ class _StudentRegistrationScreenState extends State<StudentRegistrationScreen> {
                         : details.onStepContinue,
                     child: _currentStep == 3
                         ? (_submitting
-                            ? const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(
-                                    strokeWidth: 2, color: Colors.white),
+                            ? const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2, color: Colors.white),
+                                  ),
+                                  SizedBox(width: 8),
+                                  Text('Processing face…'),
+                                ],
                               )
                             : const Text('Submit'))
                         : const Text('Next'),

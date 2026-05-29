@@ -4,10 +4,12 @@ import '../constants/api_endpoints.dart';
 import 'storage_service.dart';
 
 class ApiService {
-  // 30s timeout handles Render free-tier cold start (up to ~30s after sleep)
+  // 30s for most API calls
   static const Duration _timeout = Duration(seconds: 30);
-  // Shorter timeout for real-time face scan — must feel responsive
-  static const Duration _scanTimeout = Duration(seconds: 15);
+  // 90s for registration — Python InsightFace service may take 60s+ to wake from Render free-tier sleep
+  static const Duration _registrationTimeout = Duration(seconds: 90);
+  // 20s for real-time face scan — must feel responsive
+  static const Duration _scanTimeout = Duration(seconds: 20);
 
   // ── Headers ───────────────────────────────────────────────────────────────
 
@@ -170,7 +172,7 @@ class ApiService {
           headers: headers,
           body: jsonEncode(body),
         )
-        .timeout(_timeout);
+        .timeout(_registrationTimeout);
     return _parse(res);
   }
 
