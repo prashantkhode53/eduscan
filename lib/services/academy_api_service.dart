@@ -108,4 +108,76 @@ class AcademyApiService {
         .timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
   }
+
+  // ── Fees ──────────────────────────────────────────────────────────────────
+
+  static Future<Map<String, dynamic>> getFees({
+    String? status,
+    String? studentId,
+    String? courseId,
+    String? month,
+    int page = 1,
+    int limit = 50,
+  }) async {
+    final params = <String, String>{
+      'page': page.toString(),
+      'limit': limit.toString(),
+      if (status != null)    'status':     status,
+      if (studentId != null) 'student_id': studentId,
+      if (courseId != null)  'course_id':  courseId,
+      if (month != null)     'month':      month,
+    };
+    final uri = Uri.parse(ApiEndpoints.academyFees)
+        .replace(queryParameters: params);
+    final res = await http.get(uri, headers: await _headers()).timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
+  static Future<Map<String, dynamic>> collectFee({
+    required String feeRecordId,
+    required double amountPaid,
+    String paymentMode = 'cash',
+    String? remarks,
+  }) async {
+    final res = await http
+        .post(
+          Uri.parse('${ApiEndpoints.academyFees}/collect'),
+          headers: await _headers(),
+          body: jsonEncode({
+            'fee_record_id': feeRecordId,
+            'amount_paid':   amountPaid,
+            'payment_mode':  paymentMode,
+            if (remarks != null) 'remarks': remarks,
+          }),
+        )
+        .timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
+  static Future<Map<String, dynamic>> generateMonthlyFees({String? month}) async {
+    final res = await http
+        .post(
+          Uri.parse('${ApiEndpoints.academyFees}/generate'),
+          headers: await _headers(),
+          body: jsonEncode({if (month != null) 'month': month}),
+        )
+        .timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
+  static Future<void> markOverdueFees() async {
+    final res = await http
+        .post(Uri.parse('${ApiEndpoints.academyFees}/mark-overdue'),
+            headers: await _headers())
+        .timeout(_timeout);
+    _parse(res);
+  }
+
+  static Future<Map<String, dynamic>> getStudentFees(String studentId) async {
+    final res = await http
+        .get(Uri.parse('${ApiEndpoints.academyFees}/student/$studentId'),
+            headers: await _headers())
+        .timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
 }

@@ -6,6 +6,7 @@ import '../services/academy_api_service.dart';
 import 'academy/course_master_screen.dart';
 import 'academy/academy_student_list_screen.dart';
 import 'academy/academy_student_registration_screen.dart';
+import 'academy/fees_screen.dart';
 
 class AcademyAdminDashboard extends StatefulWidget {
   const AcademyAdminDashboard({super.key});
@@ -37,7 +38,7 @@ class _AcademyAdminDashboardState extends State<AcademyAdminDashboard> {
           _HomeTab(user: user),
           const AcademyStudentListScreen(),
           const CourseMasterScreen(),
-          _PlaceholderTab(icon: Icons.account_balance_wallet, label: 'Fees', hint: 'Phase 4 — coming next'),
+          const FeesScreen(),
           _SettingsTab(user: user),
         ],
       ),
@@ -218,11 +219,14 @@ class _HomeTabState extends State<_HomeTab> {
                   icon: Icons.payments_outlined,
                   label: 'Collect Fee',
                   color: Colors.purple,
-                  onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                        content:
-                            Text('Fee management coming in Phase 4')),
-                  ),
+                  onTap: () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const FeesScreen()),
+                    );
+                    _loadStats();
+                  },
                 ),
               ],
             ),
@@ -367,47 +371,6 @@ class _SettingsTab extends StatelessWidget {
   }
 }
 
-// ── Placeholder tab ───────────────────────────────────────────────────────────
-
-class _PlaceholderTab extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String hint;
-  const _PlaceholderTab(
-      {required this.icon, required this.label, required this.hint});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text(label)),
-      body: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 64,
-                color: Theme.of(context)
-                    .colorScheme
-                    .onSurface
-                    .withValues(alpha: 0.3)),
-            const SizedBox(height: 16),
-            Text(label,
-                style: Theme.of(context)
-                    .textTheme
-                    .titleMedium
-                    ?.copyWith(fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            Text(hint,
-                style: TextStyle(
-                    color: Theme.of(context)
-                        .colorScheme
-                        .onSurface
-                        .withValues(alpha: 0.5))),
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 // ── Small helpers ─────────────────────────────────────────────────────────────
 
