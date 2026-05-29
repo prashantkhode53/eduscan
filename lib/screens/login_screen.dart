@@ -204,17 +204,23 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
               const SizedBox(height: 4),
               OutlinedButton.icon(
+                onPressed: () => Navigator.pushNamed(context, '/academy/login'),
+                icon: const Icon(Icons.login_outlined),
+                label: const Text('Academy Login'),
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size.fromHeight(48),
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextButton.icon(
                 onPressed: () => Navigator.push(
                   context,
                   MaterialPageRoute(
                     builder: (_) => const RegisterAcademyScreen(),
                   ),
                 ),
-                icon: const Icon(Icons.add_business_outlined),
-                label: const Text('Register Your Academy'),
-                style: OutlinedButton.styleFrom(
-                  minimumSize: const Size.fromHeight(48),
-                ),
+                icon: const Icon(Icons.add_business_outlined, size: 18),
+                label: const Text('Register New Academy'),
               ),
             ],
           ),

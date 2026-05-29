@@ -77,7 +77,20 @@ class _SplashScreenState extends State<SplashScreen>
       if (!mounted) return;
 
       if (token != null && !JwtDecoder.isExpired(token)) {
-        Navigator.of(context).pushReplacementNamed('/dashboard');
+        // Decode type + role to route to the correct dashboard
+        final payload = JwtDecoder.decode(token);
+        final type    = payload['type'] as String?;
+        if (type == 'academy') {
+          final role = payload['role'] as String? ?? 'admin';
+          switch (role) {
+            case 'teacher': Navigator.of(context).pushReplacementNamed('/academy/teacher'); break;
+            case 'student': Navigator.of(context).pushReplacementNamed('/academy/student'); break;
+            case 'parent':  Navigator.of(context).pushReplacementNamed('/academy/parent');  break;
+            default:        Navigator.of(context).pushReplacementNamed('/academy/dashboard');
+          }
+        } else {
+          Navigator.of(context).pushReplacementNamed('/dashboard');
+        }
       } else {
         Navigator.of(context).pushReplacementNamed('/login');
       }
