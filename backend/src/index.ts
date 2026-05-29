@@ -7,7 +7,6 @@ dotenv.config();
 
 import { pool } from './db/pool';
 import { runMigrations } from './db/migrations';
-import { defaultLimiter } from './middleware/rateLimiter';
 import { errorHandler, notFound } from './middleware/errorHandler';
 import { startKeepAlive } from './utils/keepAlive';
 
@@ -51,7 +50,6 @@ app.get('/api/health', async (_req, res) => {
   }
 });
 
-app.use(defaultLimiter);
 
 app.use('/api/auth', authRoutes);
 app.use('/api/students', studentRoutes);
