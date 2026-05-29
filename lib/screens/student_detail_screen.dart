@@ -6,6 +6,7 @@ import '../providers/student_provider.dart';
 import '../services/api_service.dart';
 import '../services/pdf_service.dart';
 import '../widgets/attendance_row.dart';
+import 'face_recapture_screen.dart';
 
 class StudentDetailScreen extends StatefulWidget {
   final String studentId;
@@ -22,6 +23,7 @@ class _StudentDetailScreenState extends State<StudentDetailScreen> {
   bool _loading = true;
   bool _editing = false;
   bool _saving = false;
+  bool _reRegisteringFace = false;
 
   final Map<String, TextEditingController> _editors = {};
 
@@ -79,6 +81,34 @@ class _StudentDetailScreenState extends State<StudentDetailScreen> {
       }
     } else {
       setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _reRegisterFace() async {
+    final images = await Navigator.push<List<String>>(
+      context,
+      MaterialPageRoute(builder: (_) => const FaceRecaptureScreen()),
+    );
+    if (images == null || images.isEmpty || !mounted) return;
+    setState(() => _reRegisteringFace = true);
+    try {
+      await ApiService.updateStudentFace(widget.studentId, images);
+      await _load();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Face re-registered successfully'),
+              backgroundColor: Colors.green),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _reRegisteringFace = false);
     }
   }
 
@@ -165,6 +195,8 @@ class _StudentDetailScreenState extends State<StudentDetailScreen> {
                     padding: const EdgeInsets.all(16),
                     children: [
                       _buildInfoCard(theme),
+                      const SizedBox(height: 16),
+                      _buildFaceCard(theme),
                       const SizedBox(height: 16),
                       _buildAttendanceSummaryCard(theme),
                       const SizedBox(height: 16),
@@ -253,6 +285,86 @@ class _StudentDetailScreenState extends State<StudentDetailScreen> {
                 : _infoRow('Parent', _student!.parentName),
             _infoRow('Institution', _student!.institution),
             _infoRow('Academic Year', _student!.academicYear),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFaceCard(ThemeData theme) {
+    final hasEmbedding = _student!.faceEmbedding.isNotEmpty;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  hasEmbedding ? Icons.face : Icons.face_retouching_off,
+                  color: hasEmbedding ? Colors.green : Colors.orange,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Face Recognition',
+                  style: theme.textTheme.titleSmall
+                      ?.copyWith(fontWeight: FontWeight.bold),
+                ),
+                const Spacer(),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: hasEmbedding
+                        ? Colors.green.withValues(alpha: 0.1)
+                        : Colors.orange.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    hasEmbedding ? 'Registered' : 'Not Registered',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: hasEmbedding ? Colors.green : Colors.orange,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (hasEmbedding)
+              Text(
+                'Face embedding stored (${_student!.faceEmbedding.length}-D). '
+                'Student can be identified by face scan.',
+                style: TextStyle(
+                    fontSize: 12,
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
+              ),
+            if (!hasEmbedding)
+              Text(
+                'No face registered. Face must be registered during student creation.',
+                style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.orange.shade700),
+              ),
+            if (hasEmbedding) ...[
+              const SizedBox(height: 4),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: _reRegisteringFace ? null : _reRegisterFace,
+                  icon: _reRegisteringFace
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.camera_alt_outlined),
+                  label: Text(
+                      _reRegisteringFace ? 'Processing face…' : 'Re-register Face'),
+                ),
+              ),
+            ],
           ],
         ),
       ),

@@ -189,6 +189,19 @@ class ApiService {
     return _parse(res);
   }
 
+  static Future<dynamic> updateStudentFace(
+      String id, List<String> faceImages) async {
+    final headers = await _authHeaders();
+    final res = await http
+        .put(
+          Uri.parse(ApiEndpoints.studentById(id)),
+          headers: headers,
+          body: jsonEncode({'face_images': faceImages}),
+        )
+        .timeout(_registrationTimeout);
+    return _parse(res);
+  }
+
   static Future<void> deleteStudent(String id) async {
     final headers = await _authHeaders();
     final res = await http
