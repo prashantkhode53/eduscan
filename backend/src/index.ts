@@ -12,6 +12,8 @@ import { startKeepAlive } from './utils/keepAlive';
 
 import authRoutes from './routes/auth';
 import academyRoutes from './routes/academy';
+import academyCoursesRoutes from './routes/academyCourses';
+import academyStudentsRoutes from './routes/academyStudents';
 import studentRoutes from './routes/students';
 import attendanceRoutes from './routes/attendance';
 import scanRoutes from './routes/scan';
@@ -53,7 +55,9 @@ app.get('/api/health', async (_req, res) => {
 
 
 app.use('/api/auth', authRoutes);
-app.use('/api/academy', academyRoutes);
+app.use('/api/academy',          academyRoutes);
+app.use('/api/academy/courses',  academyCoursesRoutes);
+app.use('/api/academy/students', academyStudentsRoutes);
 app.use('/api/students', studentRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/attendance', scanRoutes);

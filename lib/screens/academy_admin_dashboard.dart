@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../models/academy_user.dart';
+import '../services/academy_api_service.dart';
+import 'academy/course_master_screen.dart';
+import 'academy/academy_student_list_screen.dart';
+import 'academy/academy_student_registration_screen.dart';
 
 class AcademyAdminDashboard extends StatefulWidget {
   const AcademyAdminDashboard({super.key});
@@ -31,8 +35,8 @@ class _AcademyAdminDashboardState extends State<AcademyAdminDashboard> {
         index: _currentIndex,
         children: [
           _HomeTab(user: user),
-          _PlaceholderTab(icon: Icons.people, label: 'Students', hint: 'Phase 3 — coming next'),
-          _PlaceholderTab(icon: Icons.menu_book, label: 'Courses', hint: 'Phase 3 — coming next'),
+          const AcademyStudentListScreen(),
+          const CourseMasterScreen(),
           _PlaceholderTab(icon: Icons.account_balance_wallet, label: 'Fees', hint: 'Phase 4 — coming next'),
           _SettingsTab(user: user),
         ],
@@ -54,18 +58,48 @@ class _AcademyAdminDashboardState extends State<AcademyAdminDashboard> {
 
 // ── Home tab ──────────────────────────────────────────────────────────────────
 
-class _HomeTab extends StatelessWidget {
+class _HomeTab extends StatefulWidget {
   final AcademyUser user;
   const _HomeTab({required this.user});
 
   @override
+  State<_HomeTab> createState() => _HomeTabState();
+}
+
+class _HomeTabState extends State<_HomeTab> {
+  Map<String, dynamic> _stats = {};
+  bool _loadingStats = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadStats();
+  }
+
+  Future<void> _loadStats() async {
+    setState(() => _loadingStats = true);
+    try {
+      _stats = await AcademyApiService.getStats();
+    } catch (_) {}
+    setState(() => _loadingStats = false);
+  }
+
+  String _stat(String key) =>
+      _loadingStats ? '…' : (_stats[key]?.toString() ?? '0');
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final user  = widget.user;
+
     return Scaffold(
       appBar: AppBar(
         title: Text(user.academyName,
             style: const TextStyle(fontWeight: FontWeight.bold)),
         actions: [
+          IconButton(
+              icon: const Icon(Icons.refresh),
+              onPressed: _loadStats),
           CircleAvatar(
             radius: 16,
             backgroundColor: theme.colorScheme.primary,
@@ -78,126 +112,165 @@ class _HomeTab extends StatelessWidget {
           const SizedBox(width: 12),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          // Welcome card
-          Card(
-            color: theme.colorScheme.primary,
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Welcome back,',
-                            style: TextStyle(
-                                color: Colors.white.withValues(alpha: 0.8),
-                                fontSize: 13)),
-                        const SizedBox(height: 4),
-                        Text(user.name,
-                            style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 4),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.2),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Text(user.role.toUpperCase(),
+      body: RefreshIndicator(
+        onRefresh: _loadStats,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            // Welcome card
+            Card(
+              color: theme.colorScheme.primary,
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Welcome back,',
+                              style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.8),
+                                  fontSize: 13)),
+                          const SizedBox(height: 4),
+                          Text(user.name,
                               style: const TextStyle(
                                   color: Colors.white,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600)),
-                        ),
-                      ],
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold)),
+                          const SizedBox(height: 4),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(user.role.toUpperCase(),
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600)),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                  Icon(Icons.school,
-                      size: 48, color: Colors.white.withValues(alpha: 0.4)),
-                ],
+                    Icon(Icons.school,
+                        size: 48,
+                        color: Colors.white.withValues(alpha: 0.4)),
+                  ],
+                ),
               ),
             ),
-          ),
-          const SizedBox(height: 16),
+            const SizedBox(height: 16),
 
-          // Quick actions
-          Text('Quick Actions',
-              style: theme.textTheme.titleSmall
-                  ?.copyWith(fontWeight: FontWeight.bold)),
-          const SizedBox(height: 12),
-          GridView.count(
-            crossAxisCount: 2,
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            crossAxisSpacing: 12,
-            mainAxisSpacing: 12,
-            childAspectRatio: 1.6,
-            children: [
-              _QuickAction(
-                icon: Icons.how_to_reg_outlined,
-                label: 'Register Student',
-                color: Colors.blue,
-                // TODO Phase 3: navigate to student registration
-                onTap: () => _comingSoon(context, 'Student registration coming in Phase 3'),
-              ),
-              _QuickAction(
-                icon: Icons.face_outlined,
-                label: 'Face Scan',
-                color: Colors.green,
-                // TODO Phase 2: navigate to face scan (reuse existing kiosk screen)
-                onTap: () => _comingSoon(context, 'Face scan will be wired in next update'),
-              ),
-              _QuickAction(
-                icon: Icons.menu_book_outlined,
-                label: 'Add Course',
-                color: Colors.orange,
-                onTap: () => _comingSoon(context, 'Course master coming in Phase 3'),
-              ),
-              _QuickAction(
-                icon: Icons.payments_outlined,
-                label: 'Collect Fee',
-                color: Colors.purple,
-                onTap: () => _comingSoon(context, 'Fee management coming in Phase 4'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 24),
+            // Quick actions
+            Text('Quick Actions',
+                style: theme.textTheme.titleSmall
+                    ?.copyWith(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 12),
+            GridView.count(
+              crossAxisCount: 2,
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              crossAxisSpacing: 12,
+              mainAxisSpacing: 12,
+              childAspectRatio: 1.6,
+              children: [
+                _QuickAction(
+                  icon: Icons.how_to_reg_outlined,
+                  label: 'Register Student',
+                  color: Colors.blue,
+                  onTap: () async {
+                    final ok = await Navigator.push<bool>(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) =>
+                              const AcademyStudentRegistrationScreen()),
+                    );
+                    if (ok == true) _loadStats();
+                  },
+                ),
+                _QuickAction(
+                  icon: Icons.face_outlined,
+                  label: 'Face Scan',
+                  color: Colors.green,
+                  onTap: () => ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                        content: Text(
+                            'Face scan kiosk — coming in next update')),
+                  ),
+                ),
+                _QuickAction(
+                  icon: Icons.menu_book_outlined,
+                  label: 'Manage Courses',
+                  color: Colors.orange,
+                  onTap: () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const CourseMasterScreen()),
+                    );
+                    _loadStats();
+                  },
+                ),
+                _QuickAction(
+                  icon: Icons.payments_outlined,
+                  label: 'Collect Fee',
+                  color: Colors.purple,
+                  onTap: () => ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                        content:
+                            Text('Fee management coming in Phase 4')),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
 
-          // Stats (placeholders — will be populated in later phases)
-          Text('Overview',
-              style: theme.textTheme.titleSmall
-                  ?.copyWith(fontWeight: FontWeight.bold)),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(child: _StatCard(label: 'Students', value: '—', icon: Icons.people_outline, color: Colors.blue)),
-              const SizedBox(width: 12),
-              Expanded(child: _StatCard(label: 'Courses', value: '—', icon: Icons.menu_book_outlined, color: Colors.orange)),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(child: _StatCard(label: 'Present Today', value: '—', icon: Icons.check_circle_outline, color: Colors.green)),
-              const SizedBox(width: 12),
-              Expanded(child: _StatCard(label: 'Fees Due', value: '—', icon: Icons.warning_amber_outlined, color: Colors.red)),
-            ],
-          ),
-        ],
+            // Real stats
+            Text('Overview',
+                style: theme.textTheme.titleSmall
+                    ?.copyWith(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                    child: _StatCard(
+                        label: 'Students',
+                        value: _stat('total_students'),
+                        icon: Icons.people_outline,
+                        color: Colors.blue)),
+                const SizedBox(width: 12),
+                Expanded(
+                    child: _StatCard(
+                        label: 'Courses',
+                        value: _stat('total_courses'),
+                        icon: Icons.menu_book_outlined,
+                        color: Colors.orange)),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                    child: _StatCard(
+                        label: 'Present Today',
+                        value: _stat('present_today'),
+                        icon: Icons.check_circle_outline,
+                        color: Colors.green)),
+                const SizedBox(width: 12),
+                Expanded(
+                    child: _StatCard(
+                        label: 'Fees Due',
+                        value: _stat('fees_due'),
+                        icon: Icons.warning_amber_outlined,
+                        color: Colors.red)),
+              ],
+            ),
+          ],
+        ),
       ),
-    );
-  }
-
-  void _comingSoon(BuildContext context, String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg), duration: const Duration(seconds: 2)),
     );
   }
 }
