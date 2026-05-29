@@ -64,6 +64,52 @@ class ApiService {
     }
   }
 
+  // ── Academy ───────────────────────────────────────────────────────────────
+
+  static Future<Map<String, dynamic>> registerAcademy({
+    required String academyName,
+    required String adminName,
+    required String email,
+    required String phone,
+    required String password,
+    String? address,
+  }) async {
+    final res = await http
+        .post(
+          Uri.parse(ApiEndpoints.academyRegister),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'academy_name': academyName,
+            'admin_name': adminName,
+            'email': email,
+            'phone': phone,
+            'password': password,
+            if (address != null && address.isNotEmpty) 'address': address,
+          }),
+        )
+        .timeout(const Duration(seconds: 60));
+    return _parse(res) as Map<String, dynamic>;
+  }
+
+  static Future<Map<String, dynamic>> loginAcademy({
+    required String email,
+    required String password,
+    required String academySlug,
+  }) async {
+    final res = await http
+        .post(
+          Uri.parse(ApiEndpoints.academyLogin),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'email': email,
+            'password': password,
+            'academy_slug': academySlug,
+          }),
+        )
+        .timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
   // ── Auth ─────────────────────────────────────────────────────────────────
 
   static Future<Map<String, dynamic>> login(

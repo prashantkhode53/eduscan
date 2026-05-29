@@ -102,11 +102,45 @@ export async function runMigrations(): Promise<void> {
       ON CONFLICT (key) DO NOTHING
     `);
 
+    // Academy registry — one row per tuition academy, lives on main branch only
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS academies (
+        id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        name              VARCHAR(100) NOT NULL,
+        slug              VARCHAR(100) UNIQUE NOT NULL,
+        neon_branch_id    VARCHAR(100),
+        connection_string TEXT NOT NULL,
+        admin_name        VARCHAR(100) NOT NULL,
+        admin_email       VARCHAR(100) NOT NULL,
+        phone             VARCHAR(15),
+        address           TEXT,
+        logo_url          TEXT,
+        status            VARCHAR(10) DEFAULT 'active',
+        created_at        TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_academies_slug   ON academies(slug)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_academies_email  ON academies(admin_email)`);
+
     await client.query(`CREATE INDEX IF NOT EXISTS idx_attendance_date       ON attendance(date)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_attendance_student    ON attendance(student_id)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_attendance_date_class ON attendance(date, student_id)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_students_class        ON students(class_grade, division)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_students_status       ON students(status)`);
+
+    // One-time cleanup: remove test students so multi-tenant fresh start
+    await client.query(`
+      INSERT INTO settings (key, value) VALUES ('students_purged_v1','false')
+      ON CONFLICT (key) DO NOTHING
+    `);
+    const purged = await client.query(
+      `SELECT value FROM settings WHERE key = 'students_purged_v1'`
+    );
+    if (purged.rows[0]?.value === 'false') {
+      await client.query(`DELETE FROM attendance`);
+      await client.query(`DELETE FROM students`);
+      await client.query(`UPDATE settings SET value='true' WHERE key='students_purged_v1'`);
+    }
 
     // Raise face_threshold to 0.75 — old defaults (0.6, 0.35, 0.4) caused false positives
     // because they were calibrated for position-dependent embeddings. The new

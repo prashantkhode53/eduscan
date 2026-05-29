@@ -5,6 +5,11 @@ class ApiEndpoints {
   static const String baseUrl = 'https://eduscan-j4cg.onrender.com';
   // ──────────────────────────────────────────────────────────────────────────
 
+  // Academy (multi-tenant)
+  static const String academyRegister  = '$baseUrl/api/academy/register';
+  static const String academyLogin     = '$baseUrl/api/academy/login';
+  static const String academyProfile   = '$baseUrl/api/academy/profile';
+
   // Auth
   static const String login            = '$baseUrl/api/auth/login';
   static const String forgotPassword   = '$baseUrl/api/auth/forgot-password';

@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
 import '../widgets/custom_button.dart';
+import 'register_academy_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -188,6 +189,32 @@ class _LoginScreenState extends State<LoginScreen> {
                 onPressed: _lockSeconds > 0 ? null : _login,
                 loading: auth.loading,
                 icon: Icons.login,
+              ),
+              const SizedBox(height: 24),
+              const Divider(),
+              const SizedBox(height: 8),
+              Center(
+                child: Text(
+                  'New tuition academy?',
+                  style: TextStyle(
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 4),
+              OutlinedButton.icon(
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const RegisterAcademyScreen(),
+                  ),
+                ),
+                icon: const Icon(Icons.add_business_outlined),
+                label: const Text('Register Your Academy'),
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size.fromHeight(48),
+                ),
               ),
             ],
           ),

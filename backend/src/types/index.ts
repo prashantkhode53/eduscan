@@ -85,6 +85,36 @@ export interface ScanResponse {
   message: string;
 }
 
+// ── Academy / multi-tenant types ─────────────────────────────────────────────
+
+export type AcademyUserRole = 'admin' | 'teacher' | 'student' | 'parent';
+
+export interface AcademyUser {
+  userId: string;
+  academyId: string;
+  academyName: string;
+  role: AcademyUserRole;
+  name: string;
+  email: string;
+  type: 'academy';
+}
+
+export interface Academy {
+  id: string;
+  name: string;
+  slug: string;
+  neon_branch_id?: string;
+  admin_name: string;
+  admin_email: string;
+  phone?: string;
+  address?: string;
+  logo_url?: string;
+  status: 'active' | 'inactive';
+  created_at: string;
+}
+
+// ── Global Express augmentation ───────────────────────────────────────────────
+
 export interface ApiResponse<T> {
   success: boolean;
   data?: T;
@@ -144,6 +174,7 @@ declare global {
   namespace Express {
     interface Request {
       admin?: Admin;
+      academyUser?: AcademyUser;
     }
   }
 }

@@ -11,6 +11,7 @@ import { errorHandler, notFound } from './middleware/errorHandler';
 import { startKeepAlive } from './utils/keepAlive';
 
 import authRoutes from './routes/auth';
+import academyRoutes from './routes/academy';
 import studentRoutes from './routes/students';
 import attendanceRoutes from './routes/attendance';
 import scanRoutes from './routes/scan';
@@ -52,6 +53,7 @@ app.get('/api/health', async (_req, res) => {
 
 
 app.use('/api/auth', authRoutes);
+app.use('/api/academy', academyRoutes);
 app.use('/api/students', studentRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/attendance', scanRoutes);
