@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/attendance_provider.dart';
+import '../services/api_service.dart';
 import '../widgets/offline_banner.dart';
 import '../widgets/stat_card.dart';
 import '../constants/app_colors.dart';
@@ -25,6 +26,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _loadData() async {
+    // Silently warm up backend + InsightFace on every dashboard load.
+    // Fire-and-forget — never blocks the UI or throws to the caller.
+    ApiService.checkHealth().ignore();
+
     final att = context.read<AttendanceProvider>();
     await Future.wait([
       att.fetchDashboardStats(),
