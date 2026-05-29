@@ -3,7 +3,7 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { query, queryOne } from '../db/pool';
 import { createAcademyBranch } from '../utils/neonBranch';
-import { getPoolForConnection, academyQueryOne } from '../db/poolManager';
+import { getPoolForConnection } from '../db/poolManager';
 import { runAcademyMigrations } from '../db/academyMigrations';
 import { AppError } from '../middleware/errorHandler';
 import { AcademyUser } from '../types';
@@ -72,9 +72,19 @@ export async function registerAcademy(
     const finalSlug = slugTaken ? `${slug}_${Date.now().toString(36)}` : slug;
 
     // 1 — Create Neon branch
-    const { branchId, connectionString } = await createAcademyBranch(finalSlug);
+    console.log(`[Academy] Creating branch for slug: ${finalSlug}`);
+    let branchId: string;
+    let connectionString: string;
+    try {
+      ({ branchId, connectionString } = await createAcademyBranch(finalSlug));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('[Academy] Neon branch creation failed:', msg);
+      return next(new AppError(`Branch creation failed: ${msg}`, 500));
+    }
 
     // 2 — Run schema migrations on new branch
+    console.log(`[Academy] Running migrations on branch ${branchId}`);
     const branchPool = getPoolForConnection(connectionString);
     const { userId } = await runAcademyMigrations(branchPool, {
       name: admin_name,

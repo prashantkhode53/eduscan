@@ -51,7 +51,7 @@ export async function createAcademyBranch(slug: string): Promise<BranchResult> {
       branch: { name: branchName },
       endpoints: [{ type: 'read_write' }],
     }),
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(60_000),
   });
 
   if (!createRes.ok) {
@@ -61,40 +61,80 @@ export async function createAcademyBranch(slug: string): Promise<BranchResult> {
 
   const created = await createRes.json() as {
     branch: { id: string };
+    endpoints?: Array<{ host: string }>;
     connection_uris?: Array<{ connection_uri: string }>;
   };
 
   const branchId = created.branch.id;
+  console.log(`[Neon] Branch created: ${branchId} (${branchName})`);
 
-  // 2 — Use inline connection URI if provided, otherwise fetch separately
+  // Option A — use connection_uris bundled in the create response (Neon v2 default)
   if (created.connection_uris?.length) {
+    console.log('[Neon] Using inline connection_uri');
     return { branchId, connectionString: created.connection_uris[0].connection_uri };
   }
 
-  // Fallback: resolve role + db names from project defaults, then fetch URI
-  const [rolesRes, dbsRes] = await Promise.all([
-    fetch(`${NEON_API}/projects/${pid}/roles`, { headers: headers(), signal: AbortSignal.timeout(15_000) }),
-    fetch(`${NEON_API}/projects/${pid}/databases`, { headers: headers(), signal: AbortSignal.timeout(15_000) }),
-  ]);
-
-  const rolesData = await rolesRes.json() as { roles: Array<{ name: string }> };
-  const dbsData   = await dbsRes.json() as { databases: Array<{ name: string }> };
-
-  const roleName = rolesData.roles.find(r => !r.name.includes('superuser'))?.name ?? 'neondb_owner';
-  const dbName   = dbsData.databases[0]?.name ?? 'neondb';
-
-  const uriRes = await fetch(
-    `${NEON_API}/projects/${pid}/connection_uri?branch_id=${branchId}&role_name=${roleName}&database_name=${dbName}`,
-    { headers: headers(), signal: AbortSignal.timeout(15_000) }
-  );
-
-  if (!uriRes.ok) {
-    const body = await uriRes.text();
-    throw new Error(`Failed to get connection URI (${uriRes.status}): ${body}`);
+  // Option B — derive connection string by swapping host in DATABASE_URL.
+  // Neon branches inherit the same role/password/database from the parent,
+  // so only the endpoint hostname differs.
+  const parentUrl = process.env.DATABASE_URL;
+  if (parentUrl && created.endpoints?.length) {
+    const newHost = created.endpoints[0].host;
+    const connectionString = _swapHost(parentUrl, newHost);
+    console.log(`[Neon] Derived connection string via host swap → ${newHost}`);
+    return { branchId, connectionString };
   }
 
-  const uriData = await uriRes.json() as { uri: string };
-  return { branchId, connectionString: uriData.uri };
+  // Option C — call connection_uri API with main branch role/db names
+  // Get the main branch id first
+  const branchesRes = await fetch(
+    `${NEON_API}/projects/${pid}/branches`,
+    { headers: headers(), signal: AbortSignal.timeout(15_000) }
+  );
+  if (branchesRes.ok) {
+    const branchesData = await branchesRes.json() as {
+      branches: Array<{ id: string; name: string; primary: boolean }>
+    };
+    const mainBranch = branchesData.branches.find(b => b.primary || b.name === 'main');
+    if (mainBranch) {
+      // Get roles on main branch
+      const rolesRes = await fetch(
+        `${NEON_API}/projects/${pid}/branches/${mainBranch.id}/roles`,
+        { headers: headers(), signal: AbortSignal.timeout(15_000) }
+      );
+      const dbsRes = await fetch(
+        `${NEON_API}/projects/${pid}/branches/${mainBranch.id}/databases`,
+        { headers: headers(), signal: AbortSignal.timeout(15_000) }
+      );
+      if (rolesRes.ok && dbsRes.ok) {
+        const rolesData = await rolesRes.json() as { roles: Array<{ name: string }> };
+        const dbsData   = await dbsRes.json() as { databases: Array<{ name: string }> };
+        const roleName  = rolesData.roles.find(r => !r.name.includes('superuser'))?.name ?? 'neondb_owner';
+        const dbName    = dbsData.databases[0]?.name ?? 'neondb';
+
+        const uriRes = await fetch(
+          `${NEON_API}/projects/${pid}/connection_uri?branch_id=${branchId}&role_name=${roleName}&database_name=${dbName}`,
+          { headers: headers(), signal: AbortSignal.timeout(15_000) }
+        );
+        if (uriRes.ok) {
+          const uriData = await uriRes.json() as { uri: string };
+          console.log('[Neon] Connection URI fetched via API');
+          return { branchId, connectionString: uriData.uri };
+        }
+      }
+    }
+  }
+
+  throw new Error(
+    'Could not get connection string for new Neon branch. ' +
+    'Ensure DATABASE_URL and NEON_API_KEY are set correctly on Render.'
+  );
+}
+
+/** Replace the hostname in a postgres connection URL, keeping everything else. */
+function _swapHost(url: string, newHost: string): string {
+  // postgresql://user:pass@old-host.neon.tech/dbname?sslmode=require
+  return url.replace(/@([^/]+)\//, `@${newHost}/`);
 }
 
 /**
