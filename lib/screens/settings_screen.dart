@@ -16,6 +16,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _loadingSettings = true;
   bool _savingUrl = false;
   bool _regenLoading = false;
+  bool _reloadingCache = false;
 
   final _urlCtrl = TextEditingController();
   final _currentPwCtrl = TextEditingController();
@@ -73,6 +74,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
             backgroundColor: Colors.green),
       );
     }
+  }
+
+  Future<void> _reloadFaceCache() async {
+    setState(() => _reloadingCache = true);
+    try {
+      final count = await ApiService.reloadFaceCache();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Face cache synced — $count embeddings loaded'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Sync failed: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+    setState(() => _reloadingCache = false);
   }
 
   Future<void> _regenKioskKey() async {
@@ -346,6 +369,43 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               style: TextStyle(
                                   color: theme.colorScheme.onSurface
                                       .withValues(alpha: 0.5))),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                // Face Recognition
+                _sectionHeader('Face Recognition', theme),
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'If you manually deleted face data from the database, '
+                          'sync the cache to clear stale embeddings and fix false conflicts during registration.',
+                          style: TextStyle(
+                              fontSize: 12,
+                              color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
+                        ),
+                        const SizedBox(height: 12),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            onPressed: _reloadingCache ? null : _reloadFaceCache,
+                            icon: _reloadingCache
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(strokeWidth: 2))
+                                : const Icon(Icons.sync),
+                            label: Text(_reloadingCache
+                                ? 'Syncing…'
+                                : 'Sync Face Cache'),
+                          ),
+                        ),
                       ],
                     ),
                   ),

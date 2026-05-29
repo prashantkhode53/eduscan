@@ -3,6 +3,7 @@ import { query, queryOne } from '../db/pool';
 import { authMiddleware } from '../middleware/auth';
 import { AppError } from '../middleware/errorHandler';
 import { v4 as uuidv4 } from 'uuid';
+import { cacheReload } from '../utils/insightface';
 
 const router = Router();
 router.use(authMiddleware);
@@ -30,6 +31,15 @@ router.put('/', async (req: Request, res: Response, next: NextFunction): Promise
       [key, String(value)]
     );
     res.json({ success: true, data: { key, value }, message: 'Setting updated' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/reload-face-cache', async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const loaded = await cacheReload();
+    res.json({ success: true, data: { loaded }, message: `Face cache reloaded — ${loaded} embeddings` });
   } catch (err) {
     next(err);
   }

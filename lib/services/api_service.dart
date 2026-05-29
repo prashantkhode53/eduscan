@@ -370,6 +370,16 @@ class ApiService {
     _parse(res);
   }
 
+  static Future<int> reloadFaceCache() async {
+    final headers = await _authHeaders();
+    final res = await http
+        .post(Uri.parse('${ApiEndpoints.settings}/reload-face-cache'),
+            headers: headers)
+        .timeout(_timeout);
+    final data = _parse(res) as Map<String, dynamic>;
+    return (data['loaded'] as num).toInt();
+  }
+
   static Future<String> regenKioskKey() async {
     final headers = await _authHeaders();
     final res = await http
