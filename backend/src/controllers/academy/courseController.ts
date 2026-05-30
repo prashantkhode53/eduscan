@@ -21,9 +21,9 @@ export async function listCourses(
   req: Request, res: Response, next: NextFunction
 ): Promise<void> {
   try {
-    const { academyId } = req.academyUser!;
+    const { academySlug } = req.academyUser!;
     const courses = await academyQuery<CourseRow>(
-      academyId,
+      academySlug,
       `SELECT c.*,
               COUNT(sc.id) FILTER (WHERE sc.status = 'active') AS student_count
        FROM courses c
@@ -42,7 +42,7 @@ export async function createCourse(
   req: Request, res: Response, next: NextFunction
 ): Promise<void> {
   try {
-    const { academyId } = req.academyUser!;
+    const { academySlug } = req.academyUser!;
     const { name, description, subject, duration_months, default_fee, schedule } =
       req.body as {
         name: string; description?: string; subject?: string;
@@ -53,7 +53,7 @@ export async function createCourse(
     if (!name?.trim()) return next(new AppError('Course name is required', 400));
 
     const course = await academyQueryOne<CourseRow>(
-      academyId,
+      academySlug,
       `INSERT INTO courses (name, description, subject, duration_months, default_fee, schedule)
        VALUES ($1,$2,$3,$4,$5,$6)
        RETURNING *`,
@@ -76,13 +76,13 @@ export async function updateCourse(
   req: Request, res: Response, next: NextFunction
 ): Promise<void> {
   try {
-    const { academyId } = req.academyUser!;
+    const { academySlug } = req.academyUser!;
     const { id } = req.params;
     const { name, description, subject, duration_months, default_fee, schedule } =
       req.body as Partial<CourseRow>;
 
     const course = await academyQueryOne<CourseRow>(
-      academyId,
+      academySlug,
       `UPDATE courses
        SET name             = COALESCE($1, name),
            description      = COALESCE($2, description),
@@ -107,12 +107,12 @@ export async function deleteCourse(
   req: Request, res: Response, next: NextFunction
 ): Promise<void> {
   try {
-    const { academyId } = req.academyUser!;
+    const { academySlug } = req.academyUser!;
     const { id } = req.params;
 
     // Check no active enrollments
     const active = await academyQueryOne<{ count: string }>(
-      academyId,
+      academySlug,
       `SELECT COUNT(*) FROM student_courses WHERE course_id=$1 AND status='active'`,
       [id]
     );
@@ -121,7 +121,7 @@ export async function deleteCourse(
     }
 
     await academyQuery(
-      academyId,
+      academySlug,
       `UPDATE courses SET is_active=FALSE, updated_at=NOW() WHERE id=$1`,
       [id]
     );

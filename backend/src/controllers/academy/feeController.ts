@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { academyQuery, academyQueryOne, getAcademyPool } from '../../db/poolManager';
+import { academyQuery, academyQueryOne, academyTransaction, academyExec } from '../../db/poolManager';
 import { AppError } from '../../middleware/errorHandler';
 
 // ── GET /api/academy/fees ─────────────────────────────────────────────────────
@@ -8,7 +8,7 @@ export async function listFees(
   req: Request, res: Response, next: NextFunction
 ): Promise<void> {
   try {
-    const { academyId } = req.academyUser!;
+    const { academySlug } = req.academyUser!;
     const {
       status, student_id, course_id, month,
       page = '1', limit = '50',
@@ -17,7 +17,7 @@ export async function listFees(
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
     const rows = await academyQuery(
-      academyId,
+      academySlug,
       `SELECT fr.*,
               s.first_name, s.last_name, s.mobile,
               c.name AS course_name,
@@ -53,7 +53,7 @@ export async function listFees(
       total_due: string; total_paid: string;
       count_pending: string; count_overdue: string; count_paid: string;
     }>(
-      academyId,
+      academySlug,
       `SELECT
          COALESCE(SUM(amount_due),  0) AS total_due,
          COALESCE(SUM(amount_paid), 0) AS total_paid,
@@ -89,7 +89,7 @@ export async function collectFee(
   req: Request, res: Response, next: NextFunction
 ): Promise<void> {
   try {
-    const { academyId, userId } = req.academyUser!;
+    const { academySlug, userId } = req.academyUser!;
     const { fee_record_id, amount_paid, payment_mode = 'cash', remarks } =
       req.body as {
         fee_record_id: string;
@@ -105,7 +105,7 @@ export async function collectFee(
     const record = await academyQueryOne<{
       id: string; amount_due: number; amount_paid: number; status: string;
     }>(
-      academyId,
+      academySlug,
       `SELECT id, amount_due, amount_paid, status FROM fee_records WHERE id = $1`,
       [fee_record_id]
     );
@@ -123,7 +123,7 @@ export async function collectFee(
     ].filter(Boolean).join(' | ');
 
     const updated = await academyQueryOne(
-      academyId,
+      academySlug,
       `UPDATE fee_records
        SET amount_paid   = $1,
            status        = $2,
@@ -154,15 +154,15 @@ export async function generateMonthlyFees(
   req: Request, res: Response, next: NextFunction
 ): Promise<void> {
   try {
-    const { academyId } = req.academyUser!;
+    const { academySlug } = req.academyUser!;
     const { month } = req.body as { month?: string }; // YYYY-MM, defaults to current month
 
     const targetMonth = month ?? new Date().toISOString().substring(0, 7);
     const [year, mon] = targetMonth.split('-').map(Number);
     const dueDate = new Date(year, mon, 0).toISOString().split('T')[0]; // last day of month
 
-    const pool   = await getAcademyPool(academyId);
-    const result = await pool.query(
+    const { rowCount } = await academyExec(
+      academySlug,
       `INSERT INTO fee_records (student_id, course_id, amount_due, due_date, status)
        SELECT sc.student_id, sc.course_id, sc.fee_amount,
               $1::date, 'pending'
@@ -179,8 +179,8 @@ export async function generateMonthlyFees(
 
     res.json({
       success: true,
-      data: { generated: result.rowCount, month: targetMonth },
-      message: `${result.rowCount} fee records generated for ${targetMonth}`,
+      data: { generated: rowCount, month: targetMonth },
+      message: `${rowCount} fee records generated for ${targetMonth}`,
     });
   } catch (err) { next(err); }
 }
@@ -192,9 +192,9 @@ export async function markOverdueFees(
   req: Request, res: Response, next: NextFunction
 ): Promise<void> {
   try {
-    const { academyId } = req.academyUser!;
-    const pool   = await getAcademyPool(academyId);
-    const result = await pool.query(
+    const { academySlug } = req.academyUser!;
+    const { rowCount } = await academyExec(
+      academySlug,
       `UPDATE fee_records
        SET status = 'overdue', updated_at = NOW()
        WHERE status IN ('pending','partial')
@@ -202,8 +202,8 @@ export async function markOverdueFees(
     );
     res.json({
       success: true,
-      data: { updated: result.rowCount },
-      message: `${result.rowCount} fee records marked overdue`,
+      data: { updated: rowCount },
+      message: `${rowCount} fee records marked overdue`,
     });
   } catch (err) { next(err); }
 }
@@ -214,11 +214,11 @@ export async function getStudentFees(
   req: Request, res: Response, next: NextFunction
 ): Promise<void> {
   try {
-    const { academyId } = req.academyUser!;
+    const { academySlug } = req.academyUser!;
     const { studentId } = req.params;
 
     const records = await academyQuery(
-      academyId,
+      academySlug,
       `SELECT fr.*, c.name AS course_name,
               (fr.amount_due - fr.amount_paid) AS balance
        FROM fee_records fr
@@ -231,7 +231,7 @@ export async function getStudentFees(
     const totals = await academyQueryOne<{
       total_due: string; total_paid: string; total_balance: string;
     }>(
-      academyId,
+      academySlug,
       `SELECT COALESCE(SUM(amount_due),0)               AS total_due,
               COALESCE(SUM(amount_paid),0)              AS total_paid,
               COALESCE(SUM(amount_due - amount_paid),0) AS total_balance

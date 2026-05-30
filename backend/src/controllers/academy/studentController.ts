@@ -1,13 +1,13 @@
 import { Request, Response, NextFunction } from 'express';
-import { academyQuery, academyQueryOne, getAcademyPool } from '../../db/poolManager';
+import { academyQuery, academyQueryOne, academyTransaction } from '../../db/poolManager';
 import { AppError } from '../../middleware/errorHandler';
 import { batchEmbed, matchFace, cacheUpsert } from '../../utils/insightface';
 
 // ── ID generation ─────────────────────────────────────────────────────────────
 
-async function generateStudentId(academyId: string): Promise<string> {
+async function generateStudentId(slug: string): Promise<string> {
   const row = await academyQueryOne<{ count: string }>(
-    academyId, `SELECT COUNT(*) FROM students`
+    slug, `SELECT COUNT(*) FROM students`
   );
   const seq  = (parseInt(row?.count ?? '0') + 1).toString().padStart(5, '0');
   const year = new Date().getFullYear();
@@ -22,7 +22,7 @@ export async function registerStudent(
   req: Request, res: Response, next: NextFunction
 ): Promise<void> {
   try {
-    const { academyId } = req.academyUser!;
+    const { academySlug } = req.academyUser!;
     const {
       first_name, last_name, dob, gender, mobile,
       email, parent_name, parent_mobile, address,
@@ -65,7 +65,7 @@ export async function registerStudent(
     // 3 — Validate all course IDs exist in this academy
     const courseIds = courses.map(c => c.course_id);
     const foundCourses = await academyQuery<{ id: string; name: string; default_fee: number }>(
-      academyId,
+      academySlug,
       `SELECT id, name, default_fee FROM courses
        WHERE id = ANY($1::uuid[]) AND is_active = TRUE`,
       [courseIds]
@@ -74,14 +74,10 @@ export async function registerStudent(
       return next(new AppError('One or more course IDs are invalid', 400));
     }
 
-    // 4 — Generate student ID + persist in academy branch
-    const studentId = await generateStudentId(academyId);
-    const pool      = await getAcademyPool(academyId);
-    const client    = await pool.connect();
+    // 4 — Generate student ID + persist in academy schema
+    const studentId = await generateStudentId(academySlug);
 
-    try {
-      await client.query('BEGIN');
-
+    await academyTransaction(academySlug, async (client) => {
       await client.query(
         `INSERT INTO students
            (id, first_name, last_name, dob, gender, mobile, email,
@@ -105,7 +101,6 @@ export async function registerStudent(
           [studentId, sel.course_id, sel.fee_amount]
         );
 
-        // Auto-generate fee record due end of this month
         const dueDate = new Date();
         dueDate.setDate(1);
         dueDate.setMonth(dueDate.getMonth() + 1);
@@ -117,14 +112,7 @@ export async function registerStudent(
            dueDate.toISOString().split('T')[0]]
         );
       }
-
-      await client.query('COMMIT');
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
-    }
+    });
 
     // 5 — Push embedding to InsightFace Redis cache
     await cacheUpsert({
@@ -133,7 +121,7 @@ export async function registerStudent(
       first_name:  first_name.trim(),
       last_name:   last_name.trim(),
       class_grade: 'academy',
-      division:    academyId.substring(0, 8),
+      division:    academySlug.substring(0, 8),
       roll_no:     null,
     });
 
@@ -151,7 +139,7 @@ export async function listStudents(
   req: Request, res: Response, next: NextFunction
 ): Promise<void> {
   try {
-    const { academyId } = req.academyUser!;
+    const { academySlug } = req.academyUser!;
     const {
       search = '', course_id, page = '1', limit = '50', status = 'active'
     } = req.query as Record<string, string>;
@@ -159,7 +147,7 @@ export async function listStudents(
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
     const rows = await academyQuery(
-      academyId,
+      academySlug,
       `SELECT s.id, s.first_name, s.last_name, s.mobile, s.email,
               s.gender, s.status, s.created_at,
               COALESCE(
@@ -193,7 +181,7 @@ export async function listStudents(
     );
 
     const total = await academyQueryOne<{ count: string }>(
-      academyId,
+      academySlug,
       `SELECT COUNT(DISTINCT s.id) FROM students s
        LEFT JOIN student_courses sc ON sc.student_id = s.id
        WHERE s.status = $1
@@ -221,11 +209,11 @@ export async function getStudent(
   req: Request, res: Response, next: NextFunction
 ): Promise<void> {
   try {
-    const { academyId } = req.academyUser!;
+    const { academySlug } = req.academyUser!;
     const { id } = req.params;
 
     const student = await academyQueryOne(
-      academyId,
+      academySlug,
       `SELECT s.*,
               COALESCE(
                 json_agg(
@@ -258,23 +246,23 @@ export async function getStats(
   req: Request, res: Response, next: NextFunction
 ): Promise<void> {
   try {
-    const { academyId } = req.academyUser!;
+    const { academySlug } = req.academyUser!;
     const today = new Date().toISOString().split('T')[0];
 
     const [students, courses, presentToday, feesDue] = await Promise.all([
       academyQueryOne<{ count: string }>(
-        academyId, `SELECT COUNT(*) FROM students WHERE status='active'`
+        academySlug, `SELECT COUNT(*) FROM students WHERE status='active'`
       ),
       academyQueryOne<{ count: string }>(
-        academyId, `SELECT COUNT(*) FROM courses WHERE is_active=TRUE`
+        academySlug, `SELECT COUNT(*) FROM courses WHERE is_active=TRUE`
       ),
       academyQueryOne<{ count: string }>(
-        academyId,
+        academySlug,
         `SELECT COUNT(*) FROM attendance WHERE date=$1 AND status IN ('present','late')`,
         [today]
       ),
       academyQueryOne<{ count: string }>(
-        academyId,
+        academySlug,
         `SELECT COUNT(*) FROM fee_records WHERE status IN ('pending','overdue') AND due_date<=$1`,
         [today]
       ),

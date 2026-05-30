@@ -1,11 +1,13 @@
 /**
- * Schema migrations for each academy's Neon branch.
- * Called once when a new academy registers.
+ * Schema migrations for each academy.
+ * Creates a dedicated PostgreSQL schema named after the academy slug,
+ * then creates all tables within it.
+ * Safe to call multiple times — uses IF NOT EXISTS throughout.
  */
 
-import { Pool } from 'pg';
 import bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
+import { sharedPool } from './poolManager';
 
 export interface AcademyAdminSeed {
   name: string;
@@ -15,16 +17,20 @@ export interface AcademyAdminSeed {
 }
 
 export async function runAcademyMigrations(
-  pool: Pool,
+  slug: string,
   admin: AcademyAdminSeed
 ): Promise<{ userId: string }> {
-  const client = await pool.connect();
+  const client = await sharedPool.connect();
   try {
+    // 1 — Create schema
+    await client.query(`CREATE SCHEMA IF NOT EXISTS "${slug}"`);
+    await client.query(`SET search_path TO "${slug}", public`);
+
     await client.query('BEGIN');
 
     await client.query(`CREATE EXTENSION IF NOT EXISTS "pgcrypto"`);
 
-    // ── Users (admin / teacher / student portal login / parent) ──────────────
+    // ── Users ─────────────────────────────────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS users (
         id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -46,7 +52,7 @@ export async function runAcademyMigrations(
       )
     `);
 
-    // ── Students ──────────────────────────────────────────────────────────────
+    // ── Students ──────────────────────────────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS students (
         id              VARCHAR(20) PRIMARY KEY,
@@ -70,7 +76,7 @@ export async function runAcademyMigrations(
       )
     `);
 
-    // ── Courses ───────────────────────────────────────────────────────────────
+    // ── Courses ───────────────────────────────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS courses (
         id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -87,7 +93,7 @@ export async function runAcademyMigrations(
       )
     `);
 
-    // ── Student ↔ Course enrollment (per-student fee override) ───────────────
+    // ── Student-Course enrollment ─────────────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS student_courses (
         id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -103,7 +109,7 @@ export async function runAcademyMigrations(
       )
     `);
 
-    // ── Fee records ───────────────────────────────────────────────────────────
+    // ── Fee records ───────────────────────────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS fee_records (
         id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -122,7 +128,7 @@ export async function runAcademyMigrations(
       )
     `);
 
-    // ── Attendance ────────────────────────────────────────────────────────────
+    // ── Attendance ────────────────────────────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS attendance (
         id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -144,7 +150,7 @@ export async function runAcademyMigrations(
       )
     `);
 
-    // ── Messages ──────────────────────────────────────────────────────────────
+    // ── Messages ──────────────────────────────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS messages (
         id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -160,7 +166,7 @@ export async function runAcademyMigrations(
       )
     `);
 
-    // ── Notifications ─────────────────────────────────────────────────────────
+    // ── Notifications ─────────────────────────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS notifications (
         id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -174,7 +180,7 @@ export async function runAcademyMigrations(
       )
     `);
 
-    // ── Settings ──────────────────────────────────────────────────────────────
+    // ── Settings ──────────────────────────────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS settings (
         key        VARCHAR(50) PRIMARY KEY,
@@ -192,35 +198,43 @@ export async function runAcademyMigrations(
       ON CONFLICT (key) DO NOTHING
     `);
 
-    // ── Indexes ───────────────────────────────────────────────────────────────
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_att_date      ON attendance(date)`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_att_student   ON attendance(student_id)`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_sc_student    ON student_courses(student_id)`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_sc_course     ON student_courses(course_id)`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_fee_student   ON fee_records(student_id)`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_fee_status    ON fee_records(status)`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_fee_due       ON fee_records(due_date)`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_notif_user    ON notifications(user_id, is_read)`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_msg_receiver  ON messages(receiver_id)`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_users_role    ON users(role)`);
+    // ── Indexes ───────────────────────────────────────────────────────────
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_att_date     ON attendance(date)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_att_student  ON attendance(student_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_sc_student   ON student_courses(student_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_sc_course    ON student_courses(course_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_fee_student  ON fee_records(student_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_fee_status   ON fee_records(status)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_fee_due      ON fee_records(due_date)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_notif_user   ON notifications(user_id, is_read)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_msg_receiver ON messages(receiver_id)`);
 
     await client.query('COMMIT');
+    console.log(`[Migration] Schema "${slug}" created successfully`);
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;
   } finally {
+    try { await client.query('SET search_path TO public'); } catch (_) {}
     client.release();
   }
 
   // Seed admin user outside transaction
   const userId = uuidv4();
   const hash   = await bcrypt.hash(admin.password, 12);
-  await pool.query(
-    `INSERT INTO users (id, role, name, email, phone, password_hash)
-     VALUES ($1, 'admin', $2, $3, $4, $5)
-     ON CONFLICT (email) DO NOTHING`,
-    [userId, admin.name, admin.email, admin.phone, hash]
-  );
+  const adminClient = await sharedPool.connect();
+  try {
+    await adminClient.query(`SET search_path TO "${slug}", public`);
+    await adminClient.query(
+      `INSERT INTO users (id, role, name, email, phone, password_hash)
+       VALUES ($1, 'admin', $2, $3, $4, $5)
+       ON CONFLICT (email) DO NOTHING`,
+      [userId, admin.name, admin.email, admin.phone, hash]
+    );
+  } finally {
+    try { await adminClient.query('SET search_path TO public'); } catch (_) {}
+    adminClient.release();
+  }
 
   return { userId };
 }

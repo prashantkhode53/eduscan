@@ -92,6 +92,7 @@ export type AcademyUserRole = 'admin' | 'teacher' | 'student' | 'parent';
 export interface AcademyUser {
   userId: string;
   academyId: string;
+  academySlug: string;   // PostgreSQL schema name for this academy
   academyName: string;
   role: AcademyUserRole;
   name: string;
@@ -103,7 +104,6 @@ export interface Academy {
   id: string;
   name: string;
   slug: string;
-  neon_branch_id?: string;
   admin_name: string;
   admin_email: string;
   phone?: string;
