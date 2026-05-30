@@ -88,7 +88,7 @@ class _AcademyStudentEditScreenState
       final fees = <String, double>{};
       for (final e in enrollments) {
         final id  = e['course_id'] as String?;
-        final fee = (e['fee_amount'] as num?)?.toDouble();
+        final fee = double.tryParse(e['fee_amount']?.toString() ?? '');
         if (id != null && fee != null) fees[id] = fee;
       }
 

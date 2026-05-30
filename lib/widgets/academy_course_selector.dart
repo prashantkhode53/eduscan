@@ -272,7 +272,8 @@ class _AcademyCourseSelectorState extends State<AcademyCourseSelector> {
                   itemBuilder: (_, i) {
                     final c          = filtered[i];
                     final id         = c['id'] as String;
-                    final defaultFee = (c['default_fee'] as num).toDouble();
+                    final defaultFee = double.tryParse(
+                        c['default_fee']?.toString() ?? '0') ?? 0.0;
                     final selected   = widget.selectedFees.containsKey(id);
 
                     final meta = <String>[];
