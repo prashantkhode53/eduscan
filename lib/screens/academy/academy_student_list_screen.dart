@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../services/academy_api_service.dart';
 import 'academy_student_registration_screen.dart';
+import 'academy_student_edit_screen.dart';
 
 class AcademyStudentListScreen extends StatefulWidget {
   const AcademyStudentListScreen({super.key});
@@ -148,6 +149,7 @@ class _AcademyStudentListScreenState extends State<AcademyStudentListScreen> {
                     itemBuilder: (_, i) => _StudentCard(
                       student: _students[i],
                       theme: theme,
+                      onEdit: () => _openEdit(_students[i]),
                     ),
                   ),
       ),
@@ -166,6 +168,20 @@ class _AcademyStudentListScreenState extends State<AcademyStudentListScreen> {
           builder: (_) => const AcademyStudentRegistrationScreen()),
     );
     if (registered == true) _load();
+  }
+
+  Future<void> _openEdit(Map<String, dynamic> student) async {
+    final updated = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => AcademyStudentEditScreen(
+          studentId: student['id'] as String,
+          studentName:
+              '${student['first_name']} ${student['last_name']}',
+        ),
+      ),
+    );
+    if (updated == true) _load();
   }
 
   void _showCourseFilter() {
@@ -221,7 +237,8 @@ class _AcademyStudentListScreenState extends State<AcademyStudentListScreen> {
 class _StudentCard extends StatelessWidget {
   final Map<String, dynamic> student;
   final ThemeData theme;
-  const _StudentCard({required this.student, required this.theme});
+  final VoidCallback? onEdit;
+  const _StudentCard({required this.student, required this.theme, this.onEdit});
 
   @override
   Widget build(BuildContext context) {
@@ -300,6 +317,14 @@ class _StudentCard extends StatelessWidget {
                             ? Colors.green
                             : Colors.grey),
                   ),
+                ),
+                const SizedBox(height: 4),
+                IconButton(
+                  icon: const Icon(Icons.edit_outlined, size: 18),
+                  onPressed: onEdit,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  visualDensity: VisualDensity.compact,
                 ),
               ],
             ),

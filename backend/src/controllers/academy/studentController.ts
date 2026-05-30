@@ -279,3 +279,119 @@ export async function getStats(
     });
   } catch (err) { next(err); }
 }
+
+// ── PATCH /api/academy/students/:id ──────────────────────────────────────────
+// Atomically updates course enrolments and (optionally) face embedding.
+// courses  — full replacement list; old active enrolments are dropped first.
+// face_images — optional; if omitted, existing face data is kept unchanged.
+
+export async function updateStudent(
+  req: Request, res: Response, next: NextFunction
+): Promise<void> {
+  try {
+    const { academySlug } = req.academyUser!;
+    const { id } = req.params;
+    const { courses, face_images } = req.body as {
+      courses: CourseSelection[];
+      face_images?: string[];
+    };
+
+    if (!courses?.length) {
+      return next(new AppError('At least one course is required', 400));
+    }
+
+    const student = await academyQueryOne<{
+      id: string; first_name: string; last_name: string;
+    }>(academySlug, `SELECT id, first_name, last_name FROM students WHERE id = $1`, [id]);
+    if (!student) return next(new AppError('Student not found', 404));
+
+    const courseIds = courses.map(c => c.course_id);
+    const foundCourses = await academyQuery<{ id: string }>(
+      academySlug,
+      `SELECT id FROM courses WHERE id = ANY($1::uuid[]) AND is_active = TRUE`,
+      [courseIds]
+    );
+    if (foundCourses.length !== courseIds.length) {
+      return next(new AppError('One or more course IDs are invalid', 400));
+    }
+
+    let newEmbedding: number[] | null = null;
+    let newQuality:   number | null   = null;
+
+    if (face_images?.length) {
+      const embed = await batchEmbed(face_images);
+      if (!embed.success || !embed.embedding) {
+        return next(new AppError(
+          `Face update failed: ${embed.reason ?? 'no face detected'}`, 422
+        ));
+      }
+      newEmbedding = embed.embedding;
+      newQuality   = embed.quality ?? null;
+    }
+
+    await academyTransaction(academySlug, async (client) => {
+      await client.query(
+        `UPDATE student_courses
+         SET status = 'dropped', end_date = CURRENT_DATE
+         WHERE student_id = $1 AND status = 'active'`,
+        [id]
+      );
+
+      const month   = new Date().toISOString().substring(0, 7);
+      const dueDate = new Date(
+        new Date().getFullYear(),
+        new Date().getMonth() + 1,
+        0
+      ).toISOString().split('T')[0];
+
+      for (const sel of courses) {
+        await client.query(
+          `INSERT INTO student_courses (student_id, course_id, fee_amount, start_date, status)
+           VALUES ($1, $2, $3, CURRENT_DATE, 'active')
+           ON CONFLICT (student_id, course_id)
+           DO UPDATE SET fee_amount = $3, status = 'active', end_date = NULL`,
+          [id, sel.course_id, sel.fee_amount]
+        );
+
+        await client.query(
+          `INSERT INTO fee_records (student_id, course_id, amount_due, due_date, status)
+           SELECT $1, $2, $3, $4::date, 'pending'
+           WHERE NOT EXISTS (
+             SELECT 1 FROM fee_records fr
+             WHERE fr.student_id = $1
+               AND fr.course_id  = $2
+               AND TO_CHAR(fr.due_date, 'YYYY-MM') = $5
+           )`,
+          [id, sel.course_id, sel.fee_amount, dueDate, month]
+        );
+      }
+
+      if (newEmbedding) {
+        await client.query(
+          `UPDATE students
+           SET face_embedding = $1, face_quality = $2, updated_at = NOW()
+           WHERE id = $3`,
+          [JSON.stringify(newEmbedding), newQuality, id]
+        );
+      }
+
+      await client.query(
+        `UPDATE students SET updated_at = NOW() WHERE id = $1`, [id]
+      );
+    });
+
+    if (newEmbedding) {
+      await cacheUpsert({
+        student_id:  id,
+        embedding:   newEmbedding,
+        first_name:  student.first_name,
+        last_name:   student.last_name,
+        class_grade: 'academy',
+        division:    academySlug.substring(0, 8),
+        roll_no:     null,
+      });
+    }
+
+    res.json({ success: true, message: 'Student updated successfully' });
+  } catch (err) { next(err); }
+}

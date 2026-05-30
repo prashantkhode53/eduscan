@@ -109,6 +109,15 @@ class AcademyApiService {
     return _parse(res) as Map<String, dynamic>;
   }
 
+  static Future<Map<String, dynamic>> updateStudent(
+      String id, Map<String, dynamic> body) async {
+    final res = await http
+        .patch(Uri.parse('${ApiEndpoints.academyStudents}/$id'),
+            headers: await _headers(), body: jsonEncode(body))
+        .timeout(_regTimeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
   // ── Fees ──────────────────────────────────────────────────────────────────
 
   static Future<Map<String, dynamic>> getFees({
