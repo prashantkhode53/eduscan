@@ -36,19 +36,20 @@ class _AcademyStudentRegistrationScreenState
 
   // ── Step 3: Courses ───────────────────────────────────────────────────────
   List<Map<String, dynamic>> _availableCourses = [];
-  // course_id → fee override
   final Map<String, double> _selectedFees = {};
-  bool _loadingCourses = true;
+  bool _loadingCourses = false;
+  String? _courseError;
 
   // ── Step 4: Face ──────────────────────────────────────────────────────────
   CameraController? _camCtrl;
   CameraDescription? _frontCam;
-  bool _camReady = false;
+  bool _camReady        = false;
   bool _processingFrame = false;
-  bool _autoCapturing = false;
-  bool _done = false;
-  double _holdProgress = 0.0;
-  double _qualityScore = 0.0;
+  bool _autoCapturing   = false;
+  bool _done            = false;
+  double _holdProgress  = 0.0;
+  double _qualityScore  = 0.0;
+  String _qualityHint   = '';
   FaceOverlayState _overlayState = FaceOverlayState.idle;
   final List<String> _faceImages = [];
   static const int _requiredSamples = 5;
@@ -65,11 +66,13 @@ class _AcademyStudentRegistrationScreenState
   }
 
   Future<void> _loadCourses() async {
-    setState(() => _loadingCourses = true);
+    setState(() { _loadingCourses = true; _courseError = null; });
     try {
       final data = await AcademyApiService.getCourses();
       _availableCourses = data.cast<Map<String, dynamic>>();
-    } catch (_) {}
+    } catch (e) {
+      _courseError = e.toString().replaceFirst('Exception: ', '');
+    }
     setState(() => _loadingCourses = false);
   }
 
@@ -88,7 +91,12 @@ class _AcademyStudentRegistrationScreenState
 
   void _goNext() {
     if (_step == 0 && !(_s1Key.currentState?.validate() ?? false)) return;
-    if (_step == 1 && !(_s2Key.currentState?.validate() ?? false)) return;
+    // Step 1 (Parent & Address) has no required fields — validate if state exists,
+    // but never block navigation if form hasn't rendered yet.
+    if (_step == 1) {
+      final s2Valid = _s2Key.currentState?.validate();
+      if (s2Valid == false) return;
+    }
     if (_step == 2 && _selectedFees.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Select at least one course')),
@@ -98,12 +106,15 @@ class _AcademyStudentRegistrationScreenState
     setState(() => _step++);
     _pageCtrl.animateToPage(_step,
         duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
+    // Reload courses each time the user enters the Courses step so a previous
+    // API failure doesn't permanently block them.
+    if (_step == 2) _loadCourses();
     if (_step == 3) _initCamera();
   }
 
   void _goBack() {
     if (_step == 0) { Navigator.pop(context); return; }
-    if (_step == 3) { _disposeCamera(); }
+    if (_step == 3) _disposeCamera();
     setState(() => _step--);
     _pageCtrl.animateToPage(_step,
         duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
@@ -112,23 +123,63 @@ class _AcademyStudentRegistrationScreenState
   // ── Camera ────────────────────────────────────────────────────────────────
 
   Future<void> _initCamera() async {
-    final cameras = await availableCameras();
-    _frontCam = cameras.firstWhere(
-      (c) => c.lensDirection == CameraLensDirection.front,
-      orElse: () => cameras.first,
-    );
-    _camCtrl = CameraController(_frontCam!, ResolutionPreset.medium,
-        enableAudio: false, imageFormatGroup: ImageFormatGroup.nv21);
-    await _camCtrl!.initialize();
-    if (mounted) setState(() => _camReady = true);
-    _startStream();
+    if (_camCtrl != null) return; // guard: don't re-init if already active
+    try {
+      final cameras = await availableCameras();
+      _frontCam = cameras.firstWhere(
+        (c) => c.lensDirection == CameraLensDirection.front,
+        orElse: () => cameras.first,
+      );
+      _camCtrl = CameraController(_frontCam!, ResolutionPreset.medium,
+          enableAudio: false, imageFormatGroup: ImageFormatGroup.nv21);
+      await _camCtrl!.initialize();
+      if (mounted) setState(() => _camReady = true);
+      _startStream();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Camera error: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
   }
 
   void _disposeCamera() {
     _progressTicker?.cancel();
+    _progressTicker = null;
     _camCtrl?.dispose();
-    _camCtrl = null;
-    _camReady = false;
+    _camCtrl   = null;
+    _camReady  = false;
+    _autoCapturing = false;
+  }
+
+  // Quality score — mirrors SuperAdmin implementation (size + angles + eye openness).
+  double _computeQuality(dynamic face) {
+    final yaw   = (face.headEulerAngleY as double? ?? 0).abs();
+    final roll  = (face.headEulerAngleZ as double? ?? 0).abs();
+    final pitch = (face.headEulerAngleX as double? ?? 0).abs();
+
+    if (yaw > 25) { _qualityHint = 'Look straight ahead'; return 0.0; }
+    if (roll > 20) { _qualityHint = 'Hold your head level'; return 0.0; }
+    if (pitch > 20) { _qualityHint = 'Look directly at camera'; return 0.0; }
+
+    final sizeScore = (((face.boundingBox.width as num).toDouble() - 80) / 120).clamp(0.0, 1.0);
+    if (sizeScore < 0.05) { _qualityHint = 'Move closer to camera'; return 0.0; }
+
+    final eyeScore = ((face.leftEyeOpenProbability  as double? ?? 1.0) +
+                      (face.rightEyeOpenProbability as double? ?? 1.0)) / 2.0;
+
+    final score = (sizeScore * 0.35 +
+        (1 - yaw / 25) * 0.25 +
+        (1 - roll / 20) * 0.15 +
+        (1 - pitch / 20) * 0.15 +
+        eyeScore * 0.10)
+        .clamp(0.0, 1.0);
+
+    _qualityHint = score < 0.55
+        ? (sizeScore < 0.3 ? 'Move closer to camera' : 'Face the camera directly')
+        : '';
+    return score;
   }
 
   void _startStream() {
@@ -137,34 +188,25 @@ class _AcademyStudentRegistrationScreenState
       if (_processingFrame || _done) return;
       _processingFrame = true;
       try {
-        final inputImage =
-            FaceService.cameraImageToInputImage(image, _frontCam!);
+        final inputImage = FaceService.cameraImageToInputImage(image, _frontCam!);
         if (inputImage == null) return;
         final faces = await FaceService.detectFaces(inputImage);
         if (!mounted) return;
+
         if (faces.isEmpty) {
           setState(() {
             _overlayState = FaceOverlayState.idle;
             _qualityScore = 0;
+            _qualityHint  = '';
           });
           _cancelHold();
           return;
         }
-        final face     = faces.first;
-        final yaw      = (face.headEulerAngleY ?? 0).abs();
-        final roll     = (face.headEulerAngleZ ?? 0).abs();
-        final pitch    = (face.headEulerAngleX ?? 0).abs();
-        final sizeScore = ((face.boundingBox.width - 80) / 120).clamp(0.0, 1.0);
-        final quality = (yaw > 25 || roll > 20 || pitch > 20 || sizeScore < 0.05)
-            ? 0.0
-            : ((sizeScore * 0.4) +
-                   ((1 - yaw / 25) * 0.3) +
-                   ((1 - roll / 20) * 0.15) +
-                   ((1 - pitch / 20) * 0.15))
-                .clamp(0.0, 1.0);
+
+        final quality = _computeQuality(faces.first);
         setState(() {
-          _qualityScore  = quality;
-          _overlayState  = quality >= 0.55 ? FaceOverlayState.detected : FaceOverlayState.idle;
+          _qualityScore = quality;
+          _overlayState = quality >= 0.55 ? FaceOverlayState.detected : FaceOverlayState.idle;
         });
         if (quality >= 0.55 && !_autoCapturing) {
           _startHold();
@@ -178,11 +220,11 @@ class _AcademyStudentRegistrationScreenState
 
   void _startHold() {
     if (_autoCapturing) return;
-    _autoCapturing  = true;
-    _holdProgress   = 0.0;
-    const holdMs    = 1500;
-    const tickMs    = 50;
-    int elapsed     = 0;
+    _autoCapturing = true;
+    _holdProgress  = 0.0;
+    const holdMs   = 1500;
+    const tickMs   = 50;
+    int elapsed    = 0;
     _progressTicker = Timer.periodic(const Duration(milliseconds: tickMs), (t) {
       if (!mounted) { t.cancel(); return; }
       elapsed += tickMs;
@@ -303,6 +345,7 @@ class _AcademyStudentRegistrationScreenState
           ),
           _Step3(
             loading: _loadingCourses,
+            error:   _courseError,
             courses: _availableCourses,
             selectedFees: _selectedFees,
             onToggle: (courseId, defaultFee, selected) {
@@ -316,17 +359,19 @@ class _AcademyStudentRegistrationScreenState
             },
             onFeeChanged: (courseId, fee) =>
                 setState(() => _selectedFees[courseId] = fee),
-            onNext: _goNext,
+            onNext:  _goNext,
+            onRetry: _loadCourses,
           ),
           _Step4(
-            camCtrl: _camCtrl,
-            camReady: _camReady,
-            overlayState: _overlayState,
-            holdProgress: _holdProgress,
-            qualityScore: _qualityScore,
-            captureCount: _captureCount,
+            camCtrl:        _camCtrl,
+            camReady:       _camReady,
+            overlayState:   _overlayState,
+            holdProgress:   _holdProgress,
+            qualityScore:   _qualityScore,
+            qualityHint:    _qualityHint,
+            captureCount:   _captureCount,
             requiredSamples: _requiredSamples,
-            done: _done,
+            done:       _done,
             submitting: _submitting,
             autoCapturing: _autoCapturing,
             onCaptureNow: () {
@@ -339,7 +384,7 @@ class _AcademyStudentRegistrationScreenState
               setState(() {
                 _faceImages.clear();
                 _captureCount = 0;
-                _done = false;
+                _done         = false;
                 _overlayState = FaceOverlayState.idle;
               });
               _startStream();
@@ -372,7 +417,8 @@ class _Step1 extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
+      padding: EdgeInsets.fromLTRB(24, 24, 24,
+          MediaQuery.of(context).padding.bottom + 24),
       child: Form(
         key: formKey,
         child: Column(
@@ -425,7 +471,11 @@ class _Step1 extends StatelessWidget {
             const SizedBox(height: 12),
             _tf(emailCtrl, 'Email (optional)', type: TextInputType.emailAddress),
             const SizedBox(height: 24),
-            FilledButton(onPressed: onNext, child: const Text('Next')),
+            FilledButton(
+              onPressed: onNext,
+              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+              child: const Text('Next'),
+            ),
           ],
         ),
       ),
@@ -460,7 +510,8 @@ class _Step2 extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
+      padding: EdgeInsets.fromLTRB(24, 24, 24,
+          MediaQuery.of(context).padding.bottom + 24),
       child: Form(
         key: formKey,
         child: Column(
@@ -489,7 +540,11 @@ class _Step2 extends StatelessWidget {
                   border: OutlineInputBorder()),
             ),
             const SizedBox(height: 24),
-            FilledButton(onPressed: onNext, child: const Text('Next')),
+            FilledButton(
+              onPressed: onNext,
+              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+              child: const Text('Next'),
+            ),
           ],
         ),
       ),
@@ -498,26 +553,105 @@ class _Step2 extends StatelessWidget {
 }
 
 // ── Step 3: Course Selection ──────────────────────────────────────────────────
+// Uses StatefulWidget so each course fee TextEditingController is stable across
+// parent rebuilds — no more controller recreation on every setState.
 
-class _Step3 extends StatelessWidget {
+class _Step3 extends StatefulWidget {
   final bool loading;
+  final String? error;
   final List<Map<String, dynamic>> courses;
   final Map<String, double> selectedFees;
   final void Function(String courseId, double defaultFee, bool selected) onToggle;
   final void Function(String courseId, double fee) onFeeChanged;
   final VoidCallback onNext;
+  final VoidCallback onRetry;
 
   const _Step3({
-    required this.loading, required this.courses,
-    required this.selectedFees, required this.onToggle,
-    required this.onFeeChanged, required this.onNext,
+    required this.loading,
+    this.error,
+    required this.courses,
+    required this.selectedFees,
+    required this.onToggle,
+    required this.onFeeChanged,
+    required this.onNext,
+    required this.onRetry,
   });
+
+  @override
+  State<_Step3> createState() => _Step3State();
+}
+
+class _Step3State extends State<_Step3> {
+  // Stable controllers keyed by course ID.
+  // Created when a course is first selected; disposed when deselected.
+  final Map<String, TextEditingController> _ctrls = {};
+
+  @override
+  void didUpdateWidget(_Step3 old) {
+    super.didUpdateWidget(old);
+    // Create controllers for newly selected courses
+    for (final entry in widget.selectedFees.entries) {
+      if (!_ctrls.containsKey(entry.key)) {
+        _ctrls[entry.key] = TextEditingController(
+            text: entry.value.toStringAsFixed(0));
+      }
+    }
+    // Dispose controllers for deselected courses
+    final removed = _ctrls.keys
+        .where((k) => !widget.selectedFees.containsKey(k))
+        .toList();
+    for (final k in removed) {
+      _ctrls[k]!.dispose();
+      _ctrls.remove(k);
+    }
+  }
+
+  @override
+  void dispose() {
+    for (final c in _ctrls.values) c.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    if (loading) return const Center(child: CircularProgressIndicator());
-    if (courses.isEmpty) {
+
+    if (widget.loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (widget.error != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.cloud_off_outlined, size: 56,
+                  color: theme.colorScheme.error),
+              const SizedBox(height: 12),
+              Text('Could not load courses',
+                  style: theme.textTheme.titleMedium
+                      ?.copyWith(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              Text(widget.error!,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                      fontSize: 13,
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.6))),
+              const SizedBox(height: 20),
+              FilledButton.icon(
+                onPressed: widget.onRetry,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Retry'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (widget.courses.isEmpty) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -530,9 +664,19 @@ class _Step3 extends StatelessWidget {
                   style: TextStyle(fontWeight: FontWeight.bold)),
               const Text('Add courses in Course Master first.'),
               const SizedBox(height: 16),
-              OutlinedButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Go Back & Add Courses')),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  OutlinedButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('Go Back')),
+                  const SizedBox(width: 12),
+                  FilledButton.icon(
+                      onPressed: widget.onRetry,
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Refresh')),
+                ],
+              ),
             ],
           ),
         ),
@@ -544,16 +688,15 @@ class _Step3 extends StatelessWidget {
         Expanded(
           child: ListView.builder(
             padding: const EdgeInsets.all(16),
-            itemCount: courses.length,
+            itemCount: widget.courses.length,
             itemBuilder: (_, i) {
-              final c       = courses[i];
-              final id      = c['id'] as String;
+              final c          = widget.courses[i];
+              final id         = c['id'] as String;
               final defaultFee = (c['default_fee'] as num).toDouble();
-              final selected   = selectedFees.containsKey(id);
-              final feeCtrl = TextEditingController(
-                  text: (selectedFees[id] ?? defaultFee).toStringAsFixed(0));
+              final selected   = widget.selectedFees.containsKey(id);
 
               return Card(
+                key: ValueKey(id),
                 margin: const EdgeInsets.only(bottom: 8),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
@@ -571,7 +714,7 @@ class _Step3 extends StatelessWidget {
                           Checkbox(
                             value: selected,
                             onChanged: (v) =>
-                                onToggle(id, defaultFee, v == true),
+                                widget.onToggle(id, defaultFee, v == true),
                           ),
                           Expanded(
                             child: Column(
@@ -589,23 +732,26 @@ class _Step3 extends StatelessWidget {
                               ],
                             ),
                           ),
-                          Text('₹${defaultFee.toStringAsFixed(0)}/${c['schedule']}',
-                              style: TextStyle(
-                                  color: theme.colorScheme.primary,
-                                  fontWeight: FontWeight.w600)),
+                          Text(
+                            '₹${defaultFee.toStringAsFixed(0)}/${c['schedule']}',
+                            style: TextStyle(
+                                color: theme.colorScheme.primary,
+                                fontWeight: FontWeight.w600),
+                          ),
                         ],
                       ),
                       if (selected) ...[
                         const Divider(),
                         Row(
                           children: [
-                            const Text('Fee for this student: ₹',
+                            const Text('Fee for this student: ',
                                 style: TextStyle(fontSize: 13)),
                             const SizedBox(width: 8),
                             SizedBox(
-                              width: 100,
+                              width: 110,
                               child: TextFormField(
-                                controller: feeCtrl,
+                                // Stable controller — survives parent rebuilds
+                                controller: _ctrls[id],
                                 keyboardType: TextInputType.number,
                                 decoration: const InputDecoration(
                                   isDense: true,
@@ -614,16 +760,18 @@ class _Step3 extends StatelessWidget {
                                 ),
                                 onChanged: (v) {
                                   final fee = double.tryParse(v);
-                                  if (fee != null) onFeeChanged(id, fee);
+                                  if (fee != null) widget.onFeeChanged(id, fee);
                                 },
                               ),
                             ),
                             const SizedBox(width: 8),
-                            Text('(Default: ₹${defaultFee.toStringAsFixed(0)})',
-                                style: TextStyle(
-                                    fontSize: 11,
-                                    color: theme.colorScheme.onSurface
-                                        .withValues(alpha: 0.5))),
+                            Text(
+                              '(Default: ₹${defaultFee.toStringAsFixed(0)})',
+                              style: TextStyle(
+                                  fontSize: 11,
+                                  color: theme.colorScheme.onSurface
+                                      .withValues(alpha: 0.5)),
+                            ),
                           ],
                         ),
                       ],
@@ -635,20 +783,21 @@ class _Step3 extends StatelessWidget {
           ),
         ),
         Padding(
-          padding: const EdgeInsets.all(16),
+          padding: EdgeInsets.fromLTRB(16, 0, 16,
+              MediaQuery.of(context).padding.bottom + 16),
           child: Column(
             children: [
-              if (selectedFees.isNotEmpty)
+              if (widget.selectedFees.isNotEmpty)
                 Text(
-                  '${selectedFees.length} course${selectedFees.length > 1 ? 's' : ''} selected  ·  '
-                  'Total: ₹${selectedFees.values.fold(0.0, (a, b) => a + b).toStringAsFixed(0)}/mo',
+                  '${widget.selectedFees.length} course${widget.selectedFees.length > 1 ? 's' : ''} selected  ·  '
+                  'Total: ₹${widget.selectedFees.values.fold(0.0, (a, b) => a + b).toStringAsFixed(0)}/mo',
                   style: TextStyle(
                       color: theme.colorScheme.primary,
                       fontWeight: FontWeight.bold),
                 ),
               const SizedBox(height: 8),
               FilledButton(
-                onPressed: selectedFees.isEmpty ? null : onNext,
+                onPressed: widget.selectedFees.isEmpty ? null : widget.onNext,
                 style: FilledButton.styleFrom(
                     minimumSize: const Size.fromHeight(48)),
                 child: const Text('Next — Face Capture'),
@@ -668,16 +817,24 @@ class _Step4 extends StatelessWidget {
   final bool camReady, done, submitting, autoCapturing;
   final FaceOverlayState overlayState;
   final double holdProgress, qualityScore;
+  final String qualityHint;
   final int captureCount, requiredSamples;
   final VoidCallback onCaptureNow, onSubmit, onReset;
 
   const _Step4({
-    required this.camCtrl, required this.camReady,
-    required this.overlayState, required this.holdProgress,
-    required this.qualityScore, required this.captureCount,
-    required this.requiredSamples, required this.done,
-    required this.submitting, required this.autoCapturing,
-    required this.onCaptureNow, required this.onSubmit,
+    required this.camCtrl,
+    required this.camReady,
+    required this.overlayState,
+    required this.holdProgress,
+    required this.qualityScore,
+    required this.qualityHint,
+    required this.captureCount,
+    required this.requiredSamples,
+    required this.done,
+    required this.submitting,
+    required this.autoCapturing,
+    required this.onCaptureNow,
+    required this.onSubmit,
     required this.onReset,
   });
 
@@ -685,9 +842,11 @@ class _Step4 extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Padding(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.fromLTRB(16, 16, 16,
+          MediaQuery.of(context).padding.bottom + 16),
       child: Column(
         children: [
+          // Camera preview
           Expanded(
             child: ClipRRect(
               borderRadius: BorderRadius.circular(16),
@@ -707,6 +866,8 @@ class _Step4 extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
+
+          // Status / quality hint
           Text(
             done
                 ? 'All $requiredSamples photos captured!'
@@ -714,7 +875,9 @@ class _Step4 extends StatelessWidget {
                     ? 'Hold still — capturing ${captureCount + 1} of $requiredSamples…'
                     : qualityScore >= 0.55
                         ? 'Hold still — auto-capturing…'
-                        : 'Position your face in the oval',
+                        : qualityHint.isNotEmpty
+                            ? qualityHint
+                            : 'Position your face in the oval',
             textAlign: TextAlign.center,
             style: TextStyle(
               fontWeight: FontWeight.w600,
@@ -726,6 +889,8 @@ class _Step4 extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
+
+          // Quality bar
           if (qualityScore > 0)
             Row(children: [
               const Text('Quality: ', style: TextStyle(fontSize: 12)),
@@ -741,6 +906,8 @@ class _Step4 extends StatelessWidget {
                   style: const TextStyle(fontSize: 12)),
             ]),
           const SizedBox(height: 8),
+
+          // Capture progress dots
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: List.generate(requiredSamples, (i) {
@@ -761,6 +928,8 @@ class _Step4 extends StatelessWidget {
             }),
           ),
           const SizedBox(height: 16),
+
+          // Action buttons
           if (done) ...[
             FilledButton.icon(
               onPressed: submitting ? null : onSubmit,

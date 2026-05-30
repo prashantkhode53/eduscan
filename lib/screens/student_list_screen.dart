@@ -188,6 +188,8 @@ class _StudentListScreenState extends State<StudentListScreen> {
                         ),
                         child: ListView.builder(
                           controller: _scroll,
+                          padding: EdgeInsets.only(
+                              bottom: MediaQuery.of(context).padding.bottom + 88),
                           itemCount: provider.students.length +
                               (provider.hasMore ? 1 : 0),
                           itemBuilder: (_, i) {

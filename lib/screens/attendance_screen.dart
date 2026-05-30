@@ -75,6 +75,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      useSafeArea: true,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (ctx) => StatefulBuilder(
@@ -206,6 +207,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                             ),
                             Expanded(
                               child: ListView.separated(
+                                padding: EdgeInsets.only(
+                                    bottom: MediaQuery.of(context).padding.bottom + 88),
                                 itemCount: att.records.length,
                                 separatorBuilder: (_, __) => const Divider(height: 1),
                                 itemBuilder: (_, i) {

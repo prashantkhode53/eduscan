@@ -95,12 +95,13 @@ class AuthProvider extends ChangeNotifier {
       final academyMap = result['academy'] as Map<String, dynamic>;
 
       _academyUser = AcademyUser(
-        userId:      userMap['id']      as String,
-        academyId:   academyMap['id']   as String,
-        academyName: academyMap['name'] as String,
-        role:        userMap['role']    as String,
-        name:        userMap['name']    as String,
-        email:       userMap['email']   as String,
+        userId:      userMap['id']       as String,
+        academyId:   academyMap['id']    as String,
+        academySlug: academyMap['slug']  as String,
+        academyName: academyMap['name']  as String,
+        role:        userMap['role']     as String,
+        name:        userMap['name']     as String,
+        email:       userMap['email']    as String,
       );
       _admin = null;
 

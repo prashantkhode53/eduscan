@@ -533,11 +533,10 @@ class _FeeCollectionSheetState extends State<FeeCollectionSheet> {
     final paid    = (widget.record['amount_paid'] as num).toDouble();
     final balance = (due - paid).clamp(0.0, double.infinity);
 
-    return Padding(
+    return SingleChildScrollView(
       padding: EdgeInsets.fromLTRB(
           24, 24, 24, MediaQuery.of(context).viewInsets.bottom + 24),
       child: Column(
-        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           // Handle
