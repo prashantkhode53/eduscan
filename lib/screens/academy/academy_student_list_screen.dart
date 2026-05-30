@@ -36,21 +36,29 @@ class _AcademyStudentListScreenState extends State<AcademyStudentListScreen> {
   Future<void> _loadCourses() async {
     try {
       final data = await AcademyApiService.getCourses();
+      if (!mounted) return;
       setState(() => _courses = data.cast<Map<String, dynamic>>());
     } catch (_) {}
   }
 
   Future<void> _load() async {
+    if (!mounted) return;
     setState(() => _loading = true);
     try {
       final data = await AcademyApiService.getStudents(
         search: _search.isNotEmpty ? _search : null,
         courseId: _filterCourseId,
       );
-      _students = (data['students'] as List).cast<Map<String, dynamic>>();
-      _total    = data['total'] as int? ?? _students.length;
-    } catch (_) {}
-    setState(() => _loading = false);
+      if (!mounted) return;
+      setState(() {
+        _students = (data['students'] as List).cast<Map<String, dynamic>>();
+        _total    = data['total'] as int? ?? _students.length;
+        _loading  = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+    }
   }
 
   @override

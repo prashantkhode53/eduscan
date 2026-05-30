@@ -66,14 +66,22 @@ class _AcademyStudentRegistrationScreenState
   }
 
   Future<void> _loadCourses() async {
+    if (!mounted) return;
     setState(() { _loadingCourses = true; _courseError = null; });
     try {
       final data = await AcademyApiService.getCourses();
-      _availableCourses = data.cast<Map<String, dynamic>>();
+      if (!mounted) return;
+      setState(() {
+        _availableCourses = data.cast<Map<String, dynamic>>();
+        _loadingCourses   = false;
+      });
     } catch (e) {
-      _courseError = e.toString().replaceFirst('Exception: ', '');
+      if (!mounted) return;
+      setState(() {
+        _courseError    = e.toString().replaceFirst('Exception: ', '');
+        _loadingCourses = false;
+      });
     }
-    setState(() => _loadingCourses = false);
   }
 
   @override

@@ -43,14 +43,21 @@ class _FeesScreenState extends State<FeesScreen>
   }
 
   Future<void> _load() async {
+    if (!mounted) return;
     setState(() => _loading = true);
     try {
       final data = await AcademyApiService.getFees(
           month: _month, limit: 200);
-      _all     = (data['records'] as List).cast<Map<String, dynamic>>();
-      _summary = data['summary'] as Map<String, dynamic>? ?? {};
-    } catch (_) {}
-    setState(() => _loading = false);
+      if (!mounted) return;
+      setState(() {
+        _all     = (data['records'] as List).cast<Map<String, dynamic>>();
+        _summary = data['summary'] as Map<String, dynamic>? ?? {};
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+    }
   }
 
   List<Map<String, dynamic>> _filtered(String? status) => status == null

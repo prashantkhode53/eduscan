@@ -19,12 +19,25 @@ class _CourseMasterScreenState extends State<CourseMasterScreen> {
   }
 
   Future<void> _load() async {
+    if (!mounted) return;
     setState(() => _loading = true);
     try {
       final data = await AcademyApiService.getCourses();
-      _courses = data.cast<Map<String, dynamic>>();
-    } catch (_) {}
-    setState(() => _loading = false);
+      if (!mounted) return;
+      setState(() {
+        _courses = data.cast<Map<String, dynamic>>();
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(e.toString().replaceFirst('Exception: ', '')),
+          backgroundColor: Colors.red,
+        ));
+      }
+    }
   }
 
   Future<void> _showForm({Map<String, dynamic>? course}) async {
