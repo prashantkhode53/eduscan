@@ -590,21 +590,39 @@ class _Step3 extends StatefulWidget {
 }
 
 class _Step3State extends State<_Step3> {
-  // Stable controllers keyed by course ID.
-  // Created when a course is first selected; disposed when deselected.
+  // Stable fee controllers keyed by course ID
   final Map<String, TextEditingController> _ctrls = {};
+  // Search
+  final TextEditingController _searchCtrl = TextEditingController();
+  String _query = '';
+
+  List<Map<String, dynamic>> get _filtered {
+    if (_query.isEmpty) return widget.courses;
+    final q = _query.toLowerCase();
+    return widget.courses.where((c) {
+      final name    = (c['name']    as String? ?? '').toLowerCase();
+      final subject = (c['subject'] as String? ?? '').toLowerCase();
+      return name.contains(q) || subject.contains(q);
+    }).toList();
+  }
+
+  String _scheduleLabel(dynamic s) {
+    switch (s?.toString()) {
+      case 'quarterly': return 'Quarterly';
+      case 'onetime':   return 'One-time';
+      default:          return 'Monthly';
+    }
+  }
 
   @override
   void didUpdateWidget(_Step3 old) {
     super.didUpdateWidget(old);
-    // Create controllers for newly selected courses
     for (final entry in widget.selectedFees.entries) {
       if (!_ctrls.containsKey(entry.key)) {
         _ctrls[entry.key] = TextEditingController(
             text: entry.value.toStringAsFixed(0));
       }
     }
-    // Dispose controllers for deselected courses
     final removed = _ctrls.keys
         .where((k) => !widget.selectedFees.containsKey(k))
         .toList();
@@ -616,6 +634,7 @@ class _Step3State extends State<_Step3> {
 
   @override
   void dispose() {
+    _searchCtrl.dispose();
     for (final c in _ctrls.values) c.dispose();
     super.dispose();
   }
@@ -624,10 +643,21 @@ class _Step3State extends State<_Step3> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
+    // ── Loading ───────────────────────────────────────────────────────────
     if (widget.loading) {
-      return const Center(child: CircularProgressIndicator());
+      return Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const CircularProgressIndicator(),
+          const SizedBox(height: 16),
+          Text('Loading courses…',
+              style: TextStyle(
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.6))),
+        ],
+      );
     }
 
+    // ── API error ─────────────────────────────────────────────────────────
     if (widget.error != null) {
       return Center(
         child: Padding(
@@ -644,21 +674,20 @@ class _Step3State extends State<_Step3> {
               const SizedBox(height: 8),
               Text(widget.error!,
                   textAlign: TextAlign.center,
-                  style: TextStyle(
-                      fontSize: 13,
+                  style: TextStyle(fontSize: 13,
                       color: theme.colorScheme.onSurface.withValues(alpha: 0.6))),
               const SizedBox(height: 20),
               FilledButton.icon(
-                onPressed: widget.onRetry,
-                icon: const Icon(Icons.refresh),
-                label: const Text('Retry'),
-              ),
+                  onPressed: widget.onRetry,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Retry')),
             ],
           ),
         ),
       );
     }
 
+    // ── No courses in academy ─────────────────────────────────────────────
     if (widget.courses.isEmpty) {
       return Center(
         child: Padding(
@@ -666,12 +695,16 @@ class _Step3State extends State<_Step3> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.menu_book_outlined, size: 64),
+              Icon(Icons.menu_book_outlined, size: 64,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.3)),
               const SizedBox(height: 12),
-              const Text('No courses available.',
+              const Text('No courses available',
                   style: TextStyle(fontWeight: FontWeight.bold)),
-              const Text('Add courses in Course Master first.'),
-              const SizedBox(height: 16),
+              const SizedBox(height: 4),
+              Text('Create courses in Course Master first.',
+                  style: TextStyle(
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.6))),
+              const SizedBox(height: 20),
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
@@ -691,129 +724,346 @@ class _Step3State extends State<_Step3> {
       );
     }
 
+    // ── Main — searchable course list ─────────────────────────────────────
+    final filtered = _filtered;
+
     return Column(
       children: [
-        Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.all(16),
-            itemCount: widget.courses.length,
-            itemBuilder: (_, i) {
-              final c          = widget.courses[i];
-              final id         = c['id'] as String;
-              final defaultFee = (c['default_fee'] as num).toDouble();
-              final selected   = widget.selectedFees.containsKey(id);
+        // Search bar
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: TextField(
+            controller: _searchCtrl,
+            decoration: InputDecoration(
+              hintText: 'Search by course name or subject…',
+              prefixIcon: const Icon(Icons.search, size: 20),
+              suffixIcon: _query.isNotEmpty
+                  ? IconButton(
+                      icon: const Icon(Icons.clear, size: 18),
+                      onPressed: () {
+                        _searchCtrl.clear();
+                        setState(() => _query = '');
+                      })
+                  : null,
+              filled: true,
+              fillColor: theme.colorScheme.surfaceContainerLow,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide.none,
+              ),
+              isDense: true,
+              contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 16, vertical: 12),
+            ),
+            onChanged: (v) => setState(() => _query = v),
+          ),
+        ),
 
-              return Card(
-                key: ValueKey(id),
-                margin: const EdgeInsets.only(bottom: 8),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  side: selected
-                      ? BorderSide(color: theme.colorScheme.primary, width: 2)
-                      : BorderSide.none,
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
+        // Count hint
+        Padding(
+          padding: const EdgeInsets.fromLTRB(18, 4, 18, 4),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              _query.isEmpty
+                  ? '${widget.courses.length} course${widget.courses.length > 1 ? 's' : ''} available — tap to select'
+                  : '${filtered.length} of ${widget.courses.length} matching',
+              style: TextStyle(
+                  fontSize: 12,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.5)),
+            ),
+          ),
+        ),
+
+        // Course list
+        Expanded(
+          child: filtered.isEmpty
+              ? Center(
                   child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Row(
-                        children: [
-                          Checkbox(
-                            value: selected,
-                            onChanged: (v) =>
-                                widget.onToggle(id, defaultFee, v == true),
-                          ),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(c['name'] as String,
-                                    style: const TextStyle(
-                                        fontWeight: FontWeight.bold)),
-                                if (c['subject'] != null)
-                                  Text(c['subject'] as String,
-                                      style: TextStyle(
-                                          fontSize: 12,
-                                          color: theme.colorScheme.onSurface
-                                              .withValues(alpha: 0.6))),
-                              ],
-                            ),
-                          ),
-                          Text(
-                            '₹${defaultFee.toStringAsFixed(0)}/${c['schedule']}',
-                            style: TextStyle(
-                                color: theme.colorScheme.primary,
-                                fontWeight: FontWeight.w600),
-                          ),
-                        ],
+                      Icon(Icons.search_off_outlined,
+                          size: 48,
+                          color: theme.colorScheme.onSurface
+                              .withValues(alpha: 0.3)),
+                      const SizedBox(height: 12),
+                      Text('No courses match "$_query"',
+                          style: TextStyle(
+                              color: theme.colorScheme.onSurface
+                                  .withValues(alpha: 0.55))),
+                      const SizedBox(height: 8),
+                      TextButton.icon(
+                        onPressed: () {
+                          _searchCtrl.clear();
+                          setState(() => _query = '');
+                        },
+                        icon: const Icon(Icons.clear, size: 16),
+                        label: const Text('Clear search'),
                       ),
-                      if (selected) ...[
-                        const Divider(),
-                        Row(
-                          children: [
-                            const Text('Fee for this student: ',
-                                style: TextStyle(fontSize: 13)),
-                            const SizedBox(width: 8),
-                            SizedBox(
-                              width: 110,
-                              child: TextFormField(
-                                // Stable controller — survives parent rebuilds
-                                controller: _ctrls[id],
-                                keyboardType: TextInputType.number,
-                                decoration: const InputDecoration(
-                                  isDense: true,
-                                  border: OutlineInputBorder(),
-                                  prefixText: '₹ ',
-                                ),
-                                onChanged: (v) {
-                                  final fee = double.tryParse(v);
-                                  if (fee != null) widget.onFeeChanged(id, fee);
-                                },
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              '(Default: ₹${defaultFee.toStringAsFixed(0)})',
-                              style: TextStyle(
-                                  fontSize: 11,
-                                  color: theme.colorScheme.onSurface
-                                      .withValues(alpha: 0.5)),
-                            ),
-                          ],
+                    ],
+                  ),
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                  itemCount: filtered.length,
+                  itemBuilder: (_, i) {
+                    final c          = filtered[i];
+                    final id         = c['id'] as String;
+                    final defaultFee = (c['default_fee'] as num).toDouble();
+                    final selected   = widget.selectedFees.containsKey(id);
+
+                    final meta = <String>[];
+                    final subj = c['subject'] as String?;
+                    final dur  = c['duration_months'];
+                    if (subj != null && subj.isNotEmpty) meta.add(subj);
+                    if (dur != null) meta.add('$dur months');
+                    meta.add(_scheduleLabel(c['schedule']));
+
+                    return Card(
+                      key: ValueKey(id),
+                      margin: const EdgeInsets.only(bottom: 10),
+                      elevation: selected ? 2 : 0,
+                      shadowColor: selected
+                          ? theme.colorScheme.primary.withValues(alpha: 0.25)
+                          : null,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        side: BorderSide(
+                          color: selected
+                              ? theme.colorScheme.primary
+                              : theme.colorScheme.outlineVariant,
+                          width: selected ? 2 : 1,
                         ),
-                      ],
+                      ),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(14),
+                        onTap: () =>
+                            widget.onToggle(id, defaultFee, !selected),
+                        child: Padding(
+                          padding: const EdgeInsets.all(14),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // Header: selection indicator + name + fee
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  AnimatedContainer(
+                                    duration: const Duration(milliseconds: 200),
+                                    width: 22, height: 22,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: selected
+                                          ? theme.colorScheme.primary
+                                          : Colors.transparent,
+                                      border: Border.all(
+                                        color: selected
+                                            ? theme.colorScheme.primary
+                                            : theme.colorScheme.outline,
+                                        width: 2,
+                                      ),
+                                    ),
+                                    child: selected
+                                        ? const Icon(Icons.check,
+                                            size: 13, color: Colors.white)
+                                        : null,
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Text(
+                                      c['name'] as String,
+                                      style: theme.textTheme.bodyLarge
+                                          ?.copyWith(
+                                        fontWeight: FontWeight.bold,
+                                        color: selected
+                                            ? theme.colorScheme.primary
+                                            : null,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.end,
+                                    children: [
+                                      Text(
+                                        '₹${defaultFee.toStringAsFixed(0)}',
+                                        style: TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.bold,
+                                          color: selected
+                                              ? theme.colorScheme.primary
+                                              : theme.colorScheme.onSurface,
+                                        ),
+                                      ),
+                                      Text(
+                                        _scheduleLabel(c['schedule']),
+                                        style: TextStyle(
+                                            fontSize: 11,
+                                            color: theme.colorScheme.onSurface
+                                                .withValues(alpha: 0.5)),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+
+                              // Meta chips (subject · duration · schedule)
+                              if (meta.isNotEmpty) ...[
+                                const SizedBox(height: 8),
+                                Padding(
+                                  padding: const EdgeInsets.only(left: 34),
+                                  child: Wrap(
+                                    spacing: 6,
+                                    runSpacing: 4,
+                                    children: meta
+                                        .map((m) => _MetaChip(label: m))
+                                        .toList(),
+                                  ),
+                                ),
+                              ],
+
+                              // Fee override (only when selected)
+                              if (selected) ...[
+                                const SizedBox(height: 12),
+                                const Divider(height: 1),
+                                const SizedBox(height: 12),
+                                Row(
+                                  children: [
+                                    Icon(Icons.payments_outlined,
+                                        size: 16,
+                                        color: theme.colorScheme.primary),
+                                    const SizedBox(width: 8),
+                                    Text('Custom fee:',
+                                        style: TextStyle(
+                                            fontSize: 13,
+                                            color: theme.colorScheme.onSurface
+                                                .withValues(alpha: 0.7))),
+                                    const SizedBox(width: 10),
+                                    SizedBox(
+                                      width: 120,
+                                      child: TextFormField(
+                                        controller: _ctrls[id],
+                                        keyboardType: TextInputType.number,
+                                        decoration: const InputDecoration(
+                                          isDense: true,
+                                          border: OutlineInputBorder(),
+                                          prefixText: '₹ ',
+                                          contentPadding:
+                                              EdgeInsets.symmetric(
+                                                  horizontal: 10,
+                                                  vertical: 8),
+                                        ),
+                                        onChanged: (v) {
+                                          final fee = double.tryParse(v);
+                                          if (fee != null) {
+                                            widget.onFeeChanged(id, fee);
+                                          }
+                                        },
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Flexible(
+                                      child: Text(
+                                        'Default: ₹${defaultFee.toStringAsFixed(0)}',
+                                        style: TextStyle(
+                                            fontSize: 11,
+                                            color: theme.colorScheme.onSurface
+                                                .withValues(alpha: 0.45)),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+        ),
+
+        // Bottom bar — selection summary + CTA
+        Container(
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surface,
+            border: Border(
+              top: BorderSide(
+                  color: theme.colorScheme.outlineVariant, width: 1),
+            ),
+          ),
+          padding: EdgeInsets.fromLTRB(
+              16, 12, 16, MediaQuery.of(context).padding.bottom + 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (widget.selectedFees.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(children: [
+                        Icon(Icons.check_circle,
+                            size: 16, color: theme.colorScheme.primary),
+                        const SizedBox(width: 6),
+                        Text(
+                          '${widget.selectedFees.length} course${widget.selectedFees.length > 1 ? 's' : ''} selected',
+                          style: TextStyle(
+                              fontSize: 13,
+                              color: theme.colorScheme.onSurface
+                                  .withValues(alpha: 0.75)),
+                        ),
+                      ]),
+                      Text(
+                        'Total ₹${widget.selectedFees.values.fold(0.0, (a, b) => a + b).toStringAsFixed(0)}/mo',
+                        style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: theme.colorScheme.primary),
+                      ),
                     ],
                   ),
                 ),
-              );
-            },
-          ),
-        ),
-        Padding(
-          padding: EdgeInsets.fromLTRB(16, 0, 16,
-              MediaQuery.of(context).padding.bottom + 16),
-          child: Column(
-            children: [
-              if (widget.selectedFees.isNotEmpty)
-                Text(
-                  '${widget.selectedFees.length} course${widget.selectedFees.length > 1 ? 's' : ''} selected  ·  '
-                  'Total: ₹${widget.selectedFees.values.fold(0.0, (a, b) => a + b).toStringAsFixed(0)}/mo',
-                  style: TextStyle(
-                      color: theme.colorScheme.primary,
-                      fontWeight: FontWeight.bold),
-                ),
-              const SizedBox(height: 8),
-              FilledButton(
-                onPressed: widget.selectedFees.isEmpty ? null : widget.onNext,
+              FilledButton.icon(
+                onPressed:
+                    widget.selectedFees.isEmpty ? null : widget.onNext,
+                icon: const Icon(Icons.arrow_forward),
+                label: Text(widget.selectedFees.isEmpty
+                    ? 'Select at least one course'
+                    : 'Continue to Face Capture'),
                 style: FilledButton.styleFrom(
-                    minimumSize: const Size.fromHeight(48)),
-                child: const Text('Next — Face Capture'),
+                    minimumSize: const Size.fromHeight(50)),
               ),
             ],
           ),
         ),
       ],
+    );
+  }
+}
+
+// ── Meta chip (subject / duration / schedule label) ───────────────────────────
+
+class _MetaChip extends StatelessWidget {
+  final String label;
+  const _MetaChip({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+            fontSize: 11,
+            color: theme.colorScheme.onSurface.withValues(alpha: 0.7)),
+      ),
     );
   }
 }
