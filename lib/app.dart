@@ -13,7 +13,6 @@ import 'screens/attendance_screen.dart';
 import 'screens/reports_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/whatsapp_screen.dart';
-import 'screens/academy_login_screen.dart';
 import 'screens/academy_admin_dashboard.dart';
 
 class EduScanApp extends StatelessWidget {
@@ -58,8 +57,6 @@ class EduScanApp extends StatelessWidget {
                 page = const WhatsAppScreen();
 
               // ── Academy routes ──────────────────────────────────────────
-              case '/academy/login':
-                page = const AcademyLoginScreen();
               case '/academy/dashboard':
                 page = const AcademyAdminDashboard();
               // Phases 5-7: stubs route to admin dashboard until built
