@@ -1,17 +1,24 @@
 /**
- * Firebase Cloud Messaging — thin wrapper around firebase-admin.
+ * Firebase Cloud Messaging — thin, crash-proof wrapper around firebase-admin.
  *
- * Credentials come from FIREBASE_SERVICE_ACCOUNT_JSON env var (the full
- * service-account JSON as a string).  If the var is absent or malformed the
- * module initialises lazily so the rest of the backend still starts cleanly.
+ * firebase-admin is loaded LAZILY via require() inside init(), wrapped in
+ * try/catch.  This guarantees the rest of the backend keeps running even if:
+ *   - the firebase-admin package is not installed
+ *   - FIREBASE_SERVICE_ACCOUNT_JSON is absent or malformed
+ *   - Firebase initialisation fails for any reason
+ *
+ * A static top-level `import` would crash the entire server at startup if the
+ * package were missing — which we explicitly avoid here.
  */
 
-import admin from 'firebase-admin';
-
-let _initialised = false;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _admin: any = null;
+let _initTried = false;
 
 function init(): boolean {
-  if (_initialised) return true;
+  if (_admin) return true;
+  if (_initTried) return false; // don't retry a known failure every call
+  _initTried = true;
 
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
   if (!raw) {
@@ -20,15 +27,18 @@ function init(): boolean {
   }
 
   try {
+    // Lazy require — never crashes the server if the package is missing
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const admin = require('firebase-admin');
     const serviceAccount = JSON.parse(raw);
     if (!admin.apps.length) {
       admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
     }
-    _initialised = true;
+    _admin = admin;
     console.log('[FCM] Firebase Admin SDK initialised');
     return true;
   } catch (err) {
-    console.error('[FCM] Failed to initialise Firebase Admin SDK:', err);
+    console.error('[FCM] Firebase init failed — push notifications disabled:', err);
     return false;
   }
 }
@@ -47,7 +57,7 @@ export interface FcmPayload {
 export async function sendFcm(payload: FcmPayload): Promise<boolean> {
   if (!init()) return false;
   try {
-    await admin.messaging().send({
+    await _admin.messaging().send({
       token: payload.token,
       notification: { title: payload.title, body: payload.body },
       data: payload.data ?? {},
@@ -67,7 +77,6 @@ export async function sendFcm(payload: FcmPayload): Promise<boolean> {
     return true;
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    // Stale / unregistered token — log at debug level, not error
     if (msg.includes('registration-token-not-registered') ||
         msg.includes('invalid-registration-token')) {
       console.debug(`[FCM] stale token discarded: ${payload.token.substring(0, 20)}…`);

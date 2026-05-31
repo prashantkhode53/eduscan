@@ -7,6 +7,7 @@ dotenv.config();
 
 import { pool } from './db/pool';
 import { runMigrations } from './db/migrations';
+import { reconcileAcademySchemas } from './db/academyMigrations';
 import { errorHandler, notFound } from './middleware/errorHandler';
 import { startKeepAlive } from './utils/keepAlive';
 
@@ -92,6 +93,9 @@ async function start(): Promise<void> {
   try {
     await runMigrations();
     console.log('✅ Database migrations complete');
+
+    // Ensure all existing academy schemas have the latest columns
+    await reconcileAcademySchemas();
 
     const server = app.listen(Number(PORT), '0.0.0.0', () => {
       console.log(`🚀 EduScan backend running on port ${PORT}`);

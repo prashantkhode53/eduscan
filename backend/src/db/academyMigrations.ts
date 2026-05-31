@@ -9,6 +9,55 @@ import bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
 import { sharedPool } from './poolManager';
 
+/**
+ * Boot-time reconciliation for ALL existing academy schemas.
+ *
+ * Academies created with an older schema version may be missing columns that
+ * newer features write to (e.g. parent_fcm_token, or personal-info columns if
+ * the students table predates them).  CREATE TABLE IF NOT EXISTS never alters
+ * an existing table, so we add the columns idempotently here on every boot.
+ */
+export async function reconcileAcademySchemas(): Promise<void> {
+  let slugs: { slug: string }[] = [];
+  try {
+    const { rows } = await sharedPool.query<{ slug: string }>(
+      `SELECT slug FROM academies WHERE status = 'active'`
+    );
+    slugs = rows;
+  } catch (err) {
+    console.error('[Reconcile] could not list academies:', err);
+    return;
+  }
+
+  let ok = 0;
+  for (const { slug } of slugs) {
+    if (!/^[a-z0-9_]{1,63}$/.test(slug)) continue;
+    const client = await sharedPool.connect();
+    try {
+      await client.query(`SET search_path TO "${slug}", public`);
+      await client.query(`
+        ALTER TABLE IF EXISTS students
+          ADD COLUMN IF NOT EXISTS dob              DATE,
+          ADD COLUMN IF NOT EXISTS gender           VARCHAR(10),
+          ADD COLUMN IF NOT EXISTS email            VARCHAR(100),
+          ADD COLUMN IF NOT EXISTS parent_name      VARCHAR(100),
+          ADD COLUMN IF NOT EXISTS parent_mobile    VARCHAR(15),
+          ADD COLUMN IF NOT EXISTS address          TEXT,
+          ADD COLUMN IF NOT EXISTS face_quality     DECIMAL(4,2),
+          ADD COLUMN IF NOT EXISTS parent_fcm_token TEXT,
+          ADD COLUMN IF NOT EXISTS updated_at       TIMESTAMPTZ DEFAULT NOW()
+      `);
+      ok++;
+    } catch (err) {
+      console.error(`[Reconcile] schema "${slug}" failed:`, err);
+    } finally {
+      try { await client.query('SET search_path TO public'); } catch (_) {}
+      client.release();
+    }
+  }
+  console.log(`[Reconcile] ${ok}/${slugs.length} academy schema(s) reconciled`);
+}
+
 export interface AcademyAdminSeed {
   name: string;
   email: string;
