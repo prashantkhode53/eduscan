@@ -5,18 +5,20 @@ services:
     runtime: node
     rootDir: backend
 
-    buildCommand: npm install && npx puppeteer browsers install chrome && npm run build
+    # Puppeteer/Chrome removed — WhatsApp now lives in a standalone service.
+    buildCommand: npm install && npm run build
     startCommand: npm start
 
     envVars:
       - key: NODE_ENV
         value: production
 
+      # Secrets — set in the Render dashboard (never committed to source control)
       - key: DATABASE_URL
-        value: postgresql://neondb_owner:npg_WtykALs7i9NF@ep-crimson-brook-aqxs1ja7-pooler.c-8.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require
+        sync: false
 
       - key: JWT_SECRET
-        value: eduscan-super-secret-jwt-2024
+        sync: false
 
       # Internal URL of the Python InsightFace service (Render private networking)
       - key: INSIGHTFACE_URL
@@ -26,14 +28,10 @@ services:
           property: host
           envVarKey: INSIGHTFACE_URL
 
-      - key: PUPPETEER_CACHE_DIR
-        value: /opt/render/project/src/backend/.puppeteer-browsers
-
-      - key: WA_SESSION_PATH
-        value: /opt/render/project/src/backend/.wwebjs_auth
-
-      - key: WA_CLIENT_ID
-        value: eduscan-wa
+      # Firebase service-account JSON for parent push notifications.
+      # Set the actual value in the Render dashboard (kept out of source control).
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
 
   # ── Python InsightFace service ───────────────────────────────────────────────
   - type: web
@@ -48,8 +46,9 @@ services:
       - key: MODEL_NAME
         value: buffalo_sc
 
+      # Secret — set in the Render dashboard (never committed to source control)
       - key: DATABASE_URL
-        value: postgresql://neondb_owner:npg_WtykALs7i9NF@ep-crimson-brook-aqxs1ja7-pooler.c-8.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require
+        sync: false
 
       - key: REDIS_URL
         fromService:

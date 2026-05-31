@@ -29,7 +29,11 @@ export const errorHandler = (
 
   res.status(statusCode).json({
     success: false,
-    message: isOperational ? err.message : 'Internal server error',
+    // Operational errors carry a user-safe message. For unexpected 500s we
+    // still surface the underlying message (prefixed) to aid diagnosis — the
+    // app is pre-production and this turns opaque "Internal server error"
+    // snackbars into actionable detail.
+    message: isOperational ? err.message : `Server error: ${err.message}`,
     ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }),
   });
 };
