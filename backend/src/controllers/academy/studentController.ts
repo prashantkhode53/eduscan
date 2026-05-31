@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
-import { academyQuery, academyQueryOne, academyTransaction } from '../../db/poolManager';
+import { academyQuery, academyQueryOne, academyTransaction, academyExec } from '../../db/poolManager';
 import { AppError } from '../../middleware/errorHandler';
-import { batchEmbed, matchFace, cacheUpsert } from '../../utils/insightface';
+import { batchEmbed, matchFace, cacheUpsert, cacheDelete } from '../../utils/insightface';
 
 // ── ID generation ─────────────────────────────────────────────────────────────
 
@@ -361,13 +361,18 @@ export async function updateStudent(
         );
 
         await client.query(
+          // Explicit casts on the SELECT-list params are required: in an
+          // INSERT ... SELECT (unlike INSERT ... VALUES) Postgres does not take
+          // the parameter types from the target columns, and because $1/$2 are
+          // also used in the WHERE NOT EXISTS it otherwise fails with
+          // "inconsistent types deduced for parameter $1".
           `INSERT INTO fee_records (student_id, course_id, amount_due, due_date, status)
-           SELECT $1, $2, $3, $4::date, 'pending'
+           SELECT $1::varchar, $2::uuid, $3::numeric, $4::date, 'pending'
            WHERE NOT EXISTS (
              SELECT 1 FROM fee_records fr
              WHERE fr.student_id = $1
                AND fr.course_id  = $2
-               AND TO_CHAR(fr.due_date, 'YYYY-MM') = $5
+               AND TO_CHAR(fr.due_date, 'YYYY-MM') = $5::text
            )`,
           [id, sel.course_id, sel.fee_amount, dueDate, month]
         );
@@ -430,5 +435,40 @@ export async function updateStudent(
     }
 
     res.json({ success: true, message: 'Student updated successfully' });
+  } catch (err) { next(err); }
+}
+
+// ── DELETE /api/academy/students/:id ──────────────────────────────────────────
+// Permanently removes a student. student_courses, fee_records and attendance
+// rows are removed automatically via ON DELETE CASCADE, and the student's face
+// embedding is purged from the InsightFace cache so they can't be matched again.
+
+export async function deleteStudent(
+  req: Request, res: Response, next: NextFunction
+): Promise<void> {
+  try {
+    const { academySlug } = req.academyUser!;
+    const { id } = req.params;
+
+    const student = await academyQueryOne<{ id: string }>(
+      academySlug, `SELECT id FROM students WHERE id = $1`, [id]
+    );
+    if (!student) return next(new AppError('Student not found', 404));
+
+    await academyExec(academySlug, `DELETE FROM students WHERE id = $1`, [id]);
+
+    // Best-effort cache purge — the DB is the source of truth, so a cache
+    // failure (e.g. InsightFace service down) must not fail the delete; the
+    // stale entry is cleaned up on the next cache reconcile/reload.
+    try {
+      await cacheDelete(id);
+    } catch (err) {
+      console.error(
+        `[deleteStudent] cache delete failed for ${id}:`,
+        err instanceof Error ? err.message : err
+      );
+    }
+
+    res.json({ success: true, message: 'Student deleted successfully' });
   } catch (err) { next(err); }
 }

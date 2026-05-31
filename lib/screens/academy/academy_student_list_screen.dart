@@ -150,6 +150,7 @@ class _AcademyStudentListScreenState extends State<AcademyStudentListScreen> {
                       student: _students[i],
                       theme: theme,
                       onEdit: () => _openEdit(_students[i]),
+                      onDelete: () => _confirmDelete(_students[i]),
                     ),
                   ),
       ),
@@ -182,6 +183,53 @@ class _AcademyStudentListScreenState extends State<AcademyStudentListScreen> {
       ),
     );
     if (updated == true) _load();
+  }
+
+  Future<void> _confirmDelete(Map<String, dynamic> student) async {
+    final id   = student['id'] as String;
+    final name = '${student['first_name']} ${student['last_name']}';
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete Student'),
+        content: Text(
+          'Permanently delete $name ($id)?\n\n'
+          'This also removes their face data, course enrolments, attendance '
+          'and fee records. This action cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(SnackBar(content: Text('Deleting $name…')));
+    try {
+      await AcademyApiService.deleteStudent(id);
+      if (!mounted) return;
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(SnackBar(
+          content: Text('$name deleted'), backgroundColor: Colors.green));
+      _load();
+    } catch (e) {
+      if (!mounted) return;
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(SnackBar(
+        content: Text(e.toString().replaceFirst('Exception: ', '')),
+        backgroundColor: Colors.red,
+      ));
+    }
   }
 
   void _showCourseFilter() {
@@ -238,7 +286,9 @@ class _StudentCard extends StatelessWidget {
   final Map<String, dynamic> student;
   final ThemeData theme;
   final VoidCallback? onEdit;
-  const _StudentCard({required this.student, required this.theme, this.onEdit});
+  final VoidCallback? onDelete;
+  const _StudentCard(
+      {required this.student, required this.theme, this.onEdit, this.onDelete});
 
   @override
   Widget build(BuildContext context) {
@@ -319,12 +369,30 @@ class _StudentCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 4),
-                IconButton(
-                  icon: const Icon(Icons.edit_outlined, size: 18),
-                  onPressed: onEdit,
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                  visualDensity: VisualDensity.compact,
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.edit_outlined, size: 18),
+                      onPressed: onEdit,
+                      tooltip: 'Edit',
+                      padding: EdgeInsets.zero,
+                      constraints:
+                          const BoxConstraints(minWidth: 32, minHeight: 32),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    const SizedBox(width: 4),
+                    IconButton(
+                      icon: const Icon(Icons.delete_outline,
+                          size: 18, color: Colors.red),
+                      onPressed: onDelete,
+                      tooltip: 'Delete',
+                      padding: EdgeInsets.zero,
+                      constraints:
+                          const BoxConstraints(minWidth: 32, minHeight: 32),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  ],
                 ),
               ],
             ),

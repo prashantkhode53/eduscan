@@ -130,6 +130,14 @@ class AcademyApiService {
     return _parse(res) as Map<String, dynamic>;
   }
 
+  static Future<void> deleteStudent(String id) async {
+    final res = await http
+        .delete(Uri.parse('${ApiEndpoints.academyStudents}/$id'),
+            headers: await _headers())
+        .timeout(_timeout);
+    _parse(res);
+  }
+
   // ── Fees ──────────────────────────────────────────────────────────────────
 
   static Future<Map<String, dynamic>> getFees({
