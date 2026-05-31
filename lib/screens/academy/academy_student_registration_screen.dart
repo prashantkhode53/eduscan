@@ -45,6 +45,7 @@ class _AcademyStudentRegistrationScreenState
   CameraController? _camCtrl;
   CameraDescription? _frontCam;
   bool _camReady        = false;
+  String? _camError;    // non-null => init failed; show error + Retry
   bool _processingFrame = false;
   bool _autoCapturing   = false;
   bool _done            = false;
@@ -132,25 +133,58 @@ class _AcademyStudentRegistrationScreenState
   // â”€â”€ Camera â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   Future<void> _initCamera() async {
-    if (_camCtrl != null) return; // guard: don't re-init if already active
+    if (_camReady && _camCtrl != null) return; // already active
+    if (mounted) setState(() { _camError = null; _camReady = false; });
+    await _camCtrl?.dispose();
+    _camCtrl = null;
     try {
-      final cameras = await availableCameras();
+      final cameras =
+          await availableCameras().timeout(const Duration(seconds: 8));
+      if (cameras.isEmpty) {
+        throw CameraException('NoCamera', 'No camera found on this device.');
+      }
       _frontCam = cameras.firstWhere(
         (c) => c.lensDirection == CameraLensDirection.front,
         orElse: () => cameras.first,
       );
-      _camCtrl = CameraController(_frontCam!, ResolutionPreset.medium,
+      final ctrl = CameraController(_frontCam!, ResolutionPreset.medium,
           enableAudio: false, imageFormatGroup: ImageFormatGroup.nv21);
-      await _camCtrl!.initialize();
-      if (mounted) setState(() => _camReady = true);
+      _camCtrl = ctrl;
+      // Denied permission throws here; a stuck driver never resolves — the
+      // timeout converts that hang into an actionable error + Retry button.
+      await ctrl.initialize().timeout(
+        const Duration(seconds: 12),
+        onTimeout: () => throw TimeoutException(
+            'Camera took too long to start. Please try again.'),
+      );
+      if (!mounted) { await ctrl.dispose(); return; }
+      setState(() => _camReady = true);
       _startStream();
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Camera error: $e'), backgroundColor: Colors.red),
-        );
-      }
+      debugPrint('[academy/register] camera init failed: $e');
+      await _camCtrl?.dispose();
+      _camCtrl = null;
+      if (mounted) setState(() => _camError = _friendlyCameraError(e));
     }
+  }
+
+  String _friendlyCameraError(Object e) {
+    if (e is CameraException) {
+      switch (e.code) {
+        case 'CameraAccessDenied':
+        case 'CameraAccessDeniedWithoutPrompt':
+        case 'CameraAccessRestricted':
+          return 'Camera permission denied. Enable camera access in your '
+              'device Settings, then tap Retry.';
+        case 'NoCamera':
+          return 'No camera found on this device.';
+      }
+      return 'Camera error: ${e.description ?? e.code}';
+    }
+    if (e is TimeoutException) {
+      return e.message ?? 'Camera initialization timed out. Please try again.';
+    }
+    return 'Could not start camera: $e';
   }
 
   void _disposeCamera() {
@@ -374,6 +408,8 @@ class _AcademyStudentRegistrationScreenState
           _Step4(
             camCtrl:        _camCtrl,
             camReady:       _camReady,
+            camError:       _camError,
+            onRetryCamera:  _initCamera,
             overlayState:   _overlayState,
             holdProgress:   _holdProgress,
             qualityScore:   _qualityScore,
@@ -566,6 +602,8 @@ class _Step2 extends StatelessWidget {
 class _Step4 extends StatelessWidget {
   final CameraController? camCtrl;
   final bool camReady, done, submitting, autoCapturing;
+  final String? camError;
+  final VoidCallback onRetryCamera;
   final FaceOverlayState overlayState;
   final double holdProgress, qualityScore;
   final String qualityHint;
@@ -575,6 +613,8 @@ class _Step4 extends StatelessWidget {
   const _Step4({
     required this.camCtrl,
     required this.camReady,
+    required this.camError,
+    required this.onRetryCamera,
     required this.overlayState,
     required this.holdProgress,
     required this.qualityScore,
@@ -611,9 +651,36 @@ class _Step4 extends StatelessWidget {
                     ])
                   : Container(
                       color: Colors.black87,
-                      child: const Center(
-                          child: CircularProgressIndicator(
-                              color: Colors.white))),
+                      child: Center(
+                        child: camError != null
+                            ? Padding(
+                                padding: const EdgeInsets.all(20),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(Icons.videocam_off_outlined,
+                                        color: Colors.white70, size: 40),
+                                    const SizedBox(height: 12),
+                                    Text(camError!,
+                                        textAlign: TextAlign.center,
+                                        style: const TextStyle(
+                                            color: Colors.white, fontSize: 13)),
+                                    const SizedBox(height: 16),
+                                    ElevatedButton.icon(
+                                      onPressed: onRetryCamera,
+                                      icon: const Icon(Icons.refresh),
+                                      label: const Text('Retry'),
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: Colors.white,
+                                        foregroundColor: Colors.black,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              )
+                            : const CircularProgressIndicator(
+                                color: Colors.white),
+                      )),
             ),
           ),
           const SizedBox(height: 12),

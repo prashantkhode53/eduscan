@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { query, queryOne } from '../db/pool';
-import { sharedPool } from '../db/poolManager';
+import { sharedPool, academyQueryOne, academyExec } from '../db/poolManager';
 import { runAcademyMigrations } from '../db/academyMigrations';
 import { AppError } from '../middleware/errorHandler';
 import { AcademyUser } from '../types';
@@ -152,21 +152,13 @@ export async function loginAcademyUser(
       return next(new AppError('This academy account is inactive. Contact support.', 403));
     }
 
-    // Query user from academy's schema
-    const client = await sharedPool.connect();
-    let user: UserRow | undefined;
-    try {
-      await client.query(`SET search_path TO "${academy.slug}", public`);
-      const result = await client.query<UserRow>(
-        `SELECT id, role, name, email, password_hash, failed_attempts, is_active
-         FROM users WHERE email = $1`,
-        [email.toLowerCase()]
-      );
-      user = result.rows[0];
-    } finally {
-      try { await client.query('SET search_path TO public'); } catch (_) {}
-      client.release();
-    }
+    // Query user from academy's schema (helper pins search_path per-transaction)
+    const user = await academyQueryOne<UserRow>(
+      academy.slug,
+      `SELECT id, role, name, email, password_hash, failed_attempts, is_active
+       FROM users WHERE email = $1`,
+      [email.toLowerCase()]
+    );
 
     if (!user)           return next(new AppError('Invalid credentials', 401));
     if (!user.is_active) return next(new AppError('Account inactive. Contact your academy admin.', 403));
@@ -175,33 +167,21 @@ export async function loginAcademyUser(
     if (!match) {
       const attempts = user.failed_attempts + 1;
       const lock     = attempts >= 5;
-      const updateClient = await sharedPool.connect();
-      try {
-        await updateClient.query(`SET search_path TO "${academy.slug}", public`);
-        await updateClient.query(
-          `UPDATE users SET failed_attempts=$1, is_active=CASE WHEN $2 THEN FALSE ELSE is_active END WHERE id=$3`,
-          [attempts, lock, user.id]
-        );
-      } finally {
-        try { await updateClient.query('SET search_path TO public'); } catch (_) {}
-        updateClient.release();
-      }
+      await academyExec(
+        academy.slug,
+        `UPDATE users SET failed_attempts=$1, is_active=CASE WHEN $2 THEN FALSE ELSE is_active END WHERE id=$3`,
+        [attempts, lock, user.id]
+      );
       if (lock) return next(new AppError('Account locked after 5 failed attempts.', 403));
       return next(new AppError(`Invalid credentials. ${5 - attempts} attempt(s) remaining.`, 401));
     }
 
     // Reset failed attempts
-    const resetClient = await sharedPool.connect();
-    try {
-      await resetClient.query(`SET search_path TO "${academy.slug}", public`);
-      await resetClient.query(
-        `UPDATE users SET failed_attempts=0, last_login=NOW() WHERE id=$1`,
-        [user.id]
-      );
-    } finally {
-      try { await resetClient.query('SET search_path TO public'); } catch (_) {}
-      resetClient.release();
-    }
+    await academyExec(
+      academy.slug,
+      `UPDATE users SET failed_attempts=0, last_login=NOW() WHERE id=$1`,
+      [user.id]
+    );
 
     const token = issueToken({
       userId:      user.id,

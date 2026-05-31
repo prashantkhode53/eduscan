@@ -20,6 +20,7 @@ class _FaceRecaptureScreenState extends State<FaceRecaptureScreen> {
   CameraController? _cameraCtrl;
   CameraDescription? _frontCamera;
   bool _cameraReady = false;
+  String? _initError;   // non-null => init failed; show error + Retry
 
   Face? _detectedFace;
   FaceOverlayState _overlayState = FaceOverlayState.idle;
@@ -44,20 +45,59 @@ class _FaceRecaptureScreenState extends State<FaceRecaptureScreen> {
   }
 
   Future<void> _initCamera() async {
-    final cameras = await availableCameras();
-    _frontCamera = cameras.firstWhere(
-      (c) => c.lensDirection == CameraLensDirection.front,
-      orElse: () => cameras.first,
-    );
-    _cameraCtrl = CameraController(
-      _frontCamera!,
-      ResolutionPreset.medium,
-      enableAudio: false,
-      imageFormatGroup: ImageFormatGroup.nv21,
-    );
-    await _cameraCtrl!.initialize();
-    if (mounted) setState(() => _cameraReady = true);
-    _startStream();
+    if (mounted) setState(() { _initError = null; _cameraReady = false; });
+    await _cameraCtrl?.dispose();
+    _cameraCtrl = null;
+    try {
+      final cameras =
+          await availableCameras().timeout(const Duration(seconds: 8));
+      if (cameras.isEmpty) {
+        throw CameraException('NoCamera', 'No camera found on this device.');
+      }
+      _frontCamera = cameras.firstWhere(
+        (c) => c.lensDirection == CameraLensDirection.front,
+        orElse: () => cameras.first,
+      );
+      final ctrl = CameraController(
+        _frontCamera!,
+        ResolutionPreset.medium,
+        enableAudio: false,
+        imageFormatGroup: ImageFormatGroup.nv21,
+      );
+      _cameraCtrl = ctrl;
+      await ctrl.initialize().timeout(
+        const Duration(seconds: 12),
+        onTimeout: () => throw TimeoutException(
+            'Camera took too long to start. Please try again.'),
+      );
+      if (!mounted) { await ctrl.dispose(); return; }
+      setState(() => _cameraReady = true);
+      _startStream();
+    } catch (e) {
+      debugPrint('[face-recapture] camera init failed: $e');
+      await _cameraCtrl?.dispose();
+      _cameraCtrl = null;
+      if (mounted) setState(() => _initError = _friendlyCameraError(e));
+    }
+  }
+
+  String _friendlyCameraError(Object e) {
+    if (e is CameraException) {
+      switch (e.code) {
+        case 'CameraAccessDenied':
+        case 'CameraAccessDeniedWithoutPrompt':
+        case 'CameraAccessRestricted':
+          return 'Camera permission denied. Enable camera access in your '
+              'device Settings, then tap Retry.';
+        case 'NoCamera':
+          return 'No camera found on this device.';
+      }
+      return 'Camera error: ${e.description ?? e.code}';
+    }
+    if (e is TimeoutException) {
+      return e.message ?? 'Camera initialization timed out. Please try again.';
+    }
+    return 'Could not start camera: $e';
   }
 
   void _startStream() {
@@ -239,8 +279,35 @@ class _FaceRecaptureScreenState extends State<FaceRecaptureScreen> {
                       )
                     : Container(
                         color: Colors.black87,
-                        child: const Center(
-                          child: CircularProgressIndicator(color: Colors.white),
+                        child: Center(
+                          child: _initError != null
+                              ? Padding(
+                                  padding: const EdgeInsets.all(20),
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(Icons.videocam_off_outlined,
+                                          color: Colors.white70, size: 40),
+                                      const SizedBox(height: 12),
+                                      Text(_initError!,
+                                          textAlign: TextAlign.center,
+                                          style: const TextStyle(
+                                              color: Colors.white, fontSize: 13)),
+                                      const SizedBox(height: 16),
+                                      ElevatedButton.icon(
+                                        onPressed: _initCamera,
+                                        icon: const Icon(Icons.refresh),
+                                        label: const Text('Retry'),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: Colors.white,
+                                          foregroundColor: Colors.black,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                )
+                              : const CircularProgressIndicator(
+                                  color: Colors.white),
                         ),
                       ),
               ),

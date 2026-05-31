@@ -7,7 +7,7 @@
 
 import bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
-import { sharedPool } from './poolManager';
+import { sharedPool, academyExec } from './poolManager';
 
 /**
  * Boot-time reconciliation for ALL existing academy schemas.
@@ -32,10 +32,9 @@ export async function reconcileAcademySchemas(): Promise<void> {
   let ok = 0;
   for (const { slug } of slugs) {
     if (!/^[a-z0-9_]{1,63}$/.test(slug)) continue;
-    const client = await sharedPool.connect();
     try {
-      await client.query(`SET search_path TO "${slug}", public`);
-      await client.query(`
+      // academyExec pins the search_path per-transaction (PgBouncer-safe).
+      await academyExec(slug, `
         ALTER TABLE IF EXISTS students
           ADD COLUMN IF NOT EXISTS dob              DATE,
           ADD COLUMN IF NOT EXISTS gender           VARCHAR(10),
@@ -50,9 +49,6 @@ export async function reconcileAcademySchemas(): Promise<void> {
       ok++;
     } catch (err) {
       console.error(`[Reconcile] schema "${slug}" failed:`, err);
-    } finally {
-      try { await client.query('SET search_path TO public'); } catch (_) {}
-      client.release();
     }
   }
   console.log(`[Reconcile] ${ok}/${slugs.length} academy schema(s) reconciled`);
@@ -73,9 +69,13 @@ export async function runAcademyMigrations(
   try {
     // 1 — Create schema
     await client.query(`CREATE SCHEMA IF NOT EXISTS "${slug}"`);
-    await client.query(`SET search_path TO "${slug}", public`);
 
+    // SET LOCAL must live *inside* the transaction: under PgBouncer transaction
+    // pooling a pre-BEGIN session SET can land on a different backend than the
+    // CREATE TABLE statements, silently creating the academy's tables in
+    // `public` and leaving the new academy permanently broken.
     await client.query('BEGIN');
+    await client.query(`SET LOCAL search_path TO "${slug}", public`);
 
     await client.query(`CREATE EXTENSION IF NOT EXISTS "pgcrypto"`);
 
@@ -268,29 +268,23 @@ export async function runAcademyMigrations(
     await client.query('COMMIT');
     console.log(`[Migration] Schema "${slug}" created successfully`);
   } catch (err) {
-    await client.query('ROLLBACK');
+    try { await client.query('ROLLBACK'); } catch (_) {}
     throw err;
   } finally {
-    try { await client.query('SET search_path TO public'); } catch (_) {}
     client.release();
   }
 
-  // Seed admin user outside transaction
+  // Seed admin user outside the schema-creation transaction.
+  // academyExec pins the search_path per-transaction (PgBouncer-safe).
   const userId = uuidv4();
   const hash   = await bcrypt.hash(admin.password, 12);
-  const adminClient = await sharedPool.connect();
-  try {
-    await adminClient.query(`SET search_path TO "${slug}", public`);
-    await adminClient.query(
-      `INSERT INTO users (id, role, name, email, phone, password_hash)
-       VALUES ($1, 'admin', $2, $3, $4, $5)
-       ON CONFLICT (email) DO NOTHING`,
-      [userId, admin.name, admin.email, admin.phone, hash]
-    );
-  } finally {
-    try { await adminClient.query('SET search_path TO public'); } catch (_) {}
-    adminClient.release();
-  }
+  await academyExec(
+    slug,
+    `INSERT INTO users (id, role, name, email, phone, password_hash)
+     VALUES ($1, 'admin', $2, $3, $4, $5)
+     ON CONFLICT (email) DO NOTHING`,
+    [userId, admin.name, admin.email, admin.phone, hash]
+  );
 
   return { userId };
 }

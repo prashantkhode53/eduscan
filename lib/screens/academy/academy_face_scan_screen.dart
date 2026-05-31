@@ -18,6 +18,7 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen> {
   CameraController? _cameraCtrl;
   CameraDescription? _frontCamera;
   bool _cameraReady = false;
+  String? _initError;     // non-null => init failed; show error + Retry instead of spinner
 
   String _mode = 'checkin';
 
@@ -51,20 +52,62 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen> {
   }
 
   Future<void> _initCamera() async {
-    final cameras = await availableCameras();
-    _frontCamera = cameras.firstWhere(
-      (c) => c.lensDirection == CameraLensDirection.front,
-      orElse: () => cameras.first,
-    );
-    _cameraCtrl = CameraController(
-      _frontCamera!,
-      ResolutionPreset.medium,
-      enableAudio: false,
-      imageFormatGroup: ImageFormatGroup.nv21,
-    );
-    await _cameraCtrl!.initialize();
-    if (mounted) setState(() => _cameraReady = true);
-    _startScanning();
+    if (mounted) setState(() { _initError = null; _cameraReady = false; });
+    // Discard any half-built controller from a previous failed attempt.
+    await _cameraCtrl?.dispose();
+    _cameraCtrl = null;
+    try {
+      final cameras =
+          await availableCameras().timeout(const Duration(seconds: 8));
+      if (cameras.isEmpty) {
+        throw CameraException('NoCamera', 'No camera found on this device.');
+      }
+      _frontCamera = cameras.firstWhere(
+        (c) => c.lensDirection == CameraLensDirection.front,
+        orElse: () => cameras.first,
+      );
+      final ctrl = CameraController(
+        _frontCamera!,
+        ResolutionPreset.medium,
+        enableAudio: false,
+        imageFormatGroup: ImageFormatGroup.nv21,
+      );
+      _cameraCtrl = ctrl;
+      // A denied permission throws synchronously here; a stuck driver never
+      // resolves — the timeout converts that hang into an actionable error.
+      await ctrl.initialize().timeout(
+        const Duration(seconds: 12),
+        onTimeout: () => throw TimeoutException(
+            'Camera took too long to start. Please try again.'),
+      );
+      if (!mounted) { await ctrl.dispose(); return; }
+      setState(() => _cameraReady = true);
+      _startScanning();
+    } catch (e) {
+      debugPrint('[academy/scan] camera init failed: $e');
+      await _cameraCtrl?.dispose();
+      _cameraCtrl = null;
+      if (mounted) setState(() => _initError = _friendlyCameraError(e));
+    }
+  }
+
+  String _friendlyCameraError(Object e) {
+    if (e is CameraException) {
+      switch (e.code) {
+        case 'CameraAccessDenied':
+        case 'CameraAccessDeniedWithoutPrompt':
+        case 'CameraAccessRestricted':
+          return 'Camera permission denied. Enable camera access in your '
+              'device Settings, then tap Retry.';
+        case 'NoCamera':
+          return 'No camera found on this device.';
+      }
+      return 'Camera error: ${e.description ?? e.code}';
+    }
+    if (e is TimeoutException) {
+      return e.message ?? 'Camera initialization timed out. Please try again.';
+    }
+    return 'Could not start camera: $e';
   }
 
   void _startScanning() {
@@ -263,6 +306,8 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen> {
                   children: [
                     if (_cameraReady && _cameraCtrl != null)
                       CameraPreview(_cameraCtrl!)
+                    else if (_initError != null)
+                      _buildCameraError()
                     else
                       const Center(
                         child: CircularProgressIndicator(color: Colors.white),
@@ -571,6 +616,35 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen> {
       ),
     );
   }
+
+  Widget _buildCameraError() => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.videocam_off_outlined,
+                  color: Colors.white70, size: 40),
+              const SizedBox(height: 12),
+              Text(
+                _initError ?? 'Camera unavailable',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white, fontSize: 13),
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                onPressed: _initCamera,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Retry'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.white,
+                  foregroundColor: Colors.black,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
 
   Widget _counter(String label, String value, Color color) => Column(
         children: [

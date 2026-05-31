@@ -40,11 +40,23 @@ async function withSchema<T>(
   assertSafeSlug(slug);
   const client = await pool.connect();
   try {
-    await client.query(`SET search_path TO "${slug}", public`);
-    return await fn(client);
+    // The search_path MUST be set inside the same transaction as the query.
+    // Neon's connection pooler (PgBouncer) runs in *transaction* pooling mode:
+    // a session-level `SET search_path` and the query that follows can be
+    // routed to different backend connections, leaving the query pointed at
+    // `public` — where the per-academy tables don't exist (intermittent
+    // `relation "..." does not exist` 500s, or silent cross-tenant reads for
+    // tables that happen to exist in public). BEGIN pins one backend for the
+    // whole transaction; SET LOCAL scopes the path to it and auto-resets at
+    // COMMIT, so no manual reset is needed.
+    await client.query(`BEGIN; SET LOCAL search_path TO "${slug}", public;`);
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    throw err;
   } finally {
-    // Always reset before returning to pool
-    try { await client.query('SET search_path TO public'); } catch (_) {}
     client.release();
   }
 }
@@ -78,15 +90,16 @@ export async function academyTransaction(
   assertSafeSlug(slug);
   const client = await pool.connect();
   try {
-    await client.query(`SET search_path TO "${slug}", public`);
-    await client.query('BEGIN');
+    // SET LOCAL goes *inside* the transaction so the search_path is pinned to
+    // the same pooled backend that runs fn()'s statements (see withSchema for
+    // why a session-level SET is unsafe under PgBouncer transaction pooling).
+    await client.query(`BEGIN; SET LOCAL search_path TO "${slug}", public;`);
     await fn(client);
     await client.query('COMMIT');
   } catch (err) {
-    await client.query('ROLLBACK');
+    try { await client.query('ROLLBACK'); } catch (_) {}
     throw err;
   } finally {
-    try { await client.query('SET search_path TO public'); } catch (_) {}
     client.release();
   }
 }

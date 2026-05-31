@@ -21,20 +21,29 @@ export const errorHandler = (
   const statusCode = (err as AppError).statusCode ?? 500;
   const isOperational = (err as AppError).isOperational ?? false;
 
-  if (process.env.NODE_ENV !== 'production' || isOperational) {
+  const isProd = process.env.NODE_ENV === 'production';
+
+  if (!isProd || isOperational) {
     console.error(`[Error] ${err.message}`);
   } else {
+    // Always log the full error + stack server-side so 500s stay diagnosable.
     console.error('[Error] Unhandled server error:', err);
   }
 
+  // Operational errors (AppError: 400/401/403/404/409/422) carry a user-safe
+  // message. Unexpected errors get a generic message in production so internal
+  // details (SQL text, stack traces, table names) are never leaked to clients;
+  // the full error is logged above. Non-production still surfaces detail+stack.
+  const clientMessage = isOperational
+    ? err.message
+    : isProd
+      ? 'Something went wrong. Please try again.'
+      : `Server error: ${err.message}`;
+
   res.status(statusCode).json({
     success: false,
-    // Operational errors carry a user-safe message. For unexpected 500s we
-    // still surface the underlying message (prefixed) to aid diagnosis — the
-    // app is pre-production and this turns opaque "Internal server error"
-    // snackbars into actionable detail.
-    message: isOperational ? err.message : `Server error: ${err.message}`,
-    ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }),
+    message: clientMessage,
+    ...(!isProd && { stack: err.stack }),
   });
 };
 
