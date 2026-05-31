@@ -318,22 +318,29 @@ class _FeeCard extends StatelessWidget {
   final VoidCallback onCollect;
   const _FeeCard({required this.record, required this.onCollect});
 
+  String _fmtDate(dynamic raw) {
+    final s = raw?.toString() ?? '';
+    // Strip ISO timestamp → keep only YYYY-MM-DD
+    return s.contains('T') ? s.split('T')[0] : s;
+  }
+
   @override
   Widget build(BuildContext context) {
-    final theme    = Theme.of(context);
-    final status   = record['status'] as String;
-    final due      = double.tryParse(record['amount_due']?.toString()  ?? '0') ?? 0.0;
-    final paid     = double.tryParse(record['amount_paid']?.toString() ?? '0') ?? 0.0;
-    final balance  = due - paid;
-    final isPaid   = status == 'paid';
-    final color    = _statusColor(status);
+    final theme   = Theme.of(context);
+    final status  = record['status'] as String;
+    final due     = double.tryParse(record['amount_due']?.toString()  ?? '0') ?? 0.0;
+    final paid    = double.tryParse(record['amount_paid']?.toString() ?? '0') ?? 0.0;
+    final balance = (due - paid).clamp(0.0, double.infinity);
+    final isPaid  = status == 'paid';
+    final color   = _statusColor(status);
 
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // ── Header: name + status badge ───────────────────────────────
             Row(
               children: [
                 Expanded(
@@ -343,6 +350,7 @@ class _FeeCard extends StatelessWidget {
                       Text(
                         '${record['first_name']} ${record['last_name']}',
                         style: const TextStyle(fontWeight: FontWeight.bold),
+                        overflow: TextOverflow.ellipsis,
                       ),
                       Text(
                         record['course_name'] as String? ?? 'Course',
@@ -350,53 +358,77 @@ class _FeeCard extends StatelessWidget {
                             fontSize: 12,
                             color: theme.colorScheme.onSurface
                                 .withValues(alpha: 0.6)),
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ],
                   ),
                 ),
+                const SizedBox(width: 8),
                 _StatusBadge(status: status, color: color),
               ],
             ),
             const SizedBox(height: 10),
-            // Progress bar
-            LinearProgressIndicator(
-              value: due > 0 ? (paid / due).clamp(0.0, 1.0) : 0,
-              color: isPaid ? Colors.green : color,
-              backgroundColor: Colors.grey.shade200,
-              minHeight: 6,
+
+            // ── Progress bar ───────────────────────────────────────────────
+            ClipRRect(
+              borderRadius: BorderRadius.circular(3),
+              child: LinearProgressIndicator(
+                value: due > 0 ? (paid / due).clamp(0.0, 1.0) : 0,
+                color: isPaid ? Colors.green : color,
+                backgroundColor: Colors.grey.shade200,
+                minHeight: 6,
+              ),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
+
+            // ── Amount row (no button here — button below) ─────────────────
             Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Due: ₹${due.toStringAsFixed(0)}',
-                          style: const TextStyle(fontSize: 12)),
-                      Text(
-                        paid > 0
-                            ? 'Paid: ₹${paid.toStringAsFixed(0)}'
-                            : 'Due date: ${record['due_date']}',
-                        style: TextStyle(
-                            fontSize: 12,
-                            color: theme.colorScheme.onSurface
-                                .withValues(alpha: 0.6)),
-                      ),
-                    ],
-                  ),
+                Text(
+                  'Due: ₹${due.toStringAsFixed(0)}',
+                  style: const TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w600),
                 ),
-                if (!isPaid)
-                  FilledButton.tonal(
-                    onPressed: onCollect,
-                    style: FilledButton.styleFrom(
-                        visualDensity: VisualDensity.compact),
-                    child: Text('Collect ₹${balance.toStringAsFixed(0)}'),
+                if (paid > 0)
+                  Text(
+                    'Paid: ₹${paid.toStringAsFixed(0)}',
+                    style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.green),
+                  )
+                else
+                  Text(
+                    'By ${_fmtDate(record['due_date'])}',
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: theme.colorScheme.onSurface
+                            .withValues(alpha: 0.55)),
                   ),
-                if (isPaid)
-                  Icon(Icons.check_circle, color: Colors.green, size: 28),
               ],
             ),
+            const SizedBox(height: 10),
+
+            // ── Action ─────────────────────────────────────────────────────
+            if (isPaid)
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: const [
+                  Icon(Icons.check_circle, color: Colors.green, size: 28),
+                  SizedBox(width: 6),
+                  Text('Paid',
+                      style: TextStyle(
+                          color: Colors.green, fontWeight: FontWeight.w600)),
+                ],
+              )
+            else
+              FilledButton.tonal(
+                onPressed: onCollect,
+                style: FilledButton.styleFrom(
+                    minimumSize: const Size.fromHeight(40)),
+                child: Text('Collect  ₹${balance.toStringAsFixed(0)}'),
+              ),
           ],
         ),
       ),
@@ -405,10 +437,10 @@ class _FeeCard extends StatelessWidget {
 
   Color _statusColor(String s) {
     switch (s) {
-      case 'paid':    return Colors.green;
-      case 'overdue': return Colors.red;
-      case 'partial': return Colors.blue;
-      default:        return Colors.orange;
+      case 'paid':     return Colors.green;
+      case 'overdue':  return Colors.red;
+      case 'partial':  return Colors.blue;
+      default:         return Colors.orange;
     }
   }
 }
