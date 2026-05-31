@@ -4,8 +4,7 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 
 /// Monitors network state and notifies listeners on changes.
 class ConnectivityProvider extends ChangeNotifier {
-  bool _isOnline  = true;
-  bool _wasOnline = true;
+  bool _isOnline = true;
 
   StreamSubscription<ConnectivityResult>? _subscription;
 
@@ -22,8 +21,7 @@ class ConnectivityProvider extends ChangeNotifier {
     notifyListeners();
 
     _subscription = Connectivity().onConnectivityChanged.listen((result) {
-      _isOnline  = _hasConnection(result);
-      _wasOnline = _isOnline;
+      _isOnline = _hasConnection(result);
       notifyListeners();
     });
   }

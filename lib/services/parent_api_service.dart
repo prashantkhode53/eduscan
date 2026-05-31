@@ -4,15 +4,21 @@ import '../constants/api_endpoints.dart';
 import 'storage_service.dart';
 
 class ParentApiService {
-  static const Duration _timeout = Duration(seconds: 20);
+  static const Duration _timeout     = Duration(seconds: 20);
+  static const Duration _faceTimeout = Duration(seconds: 35); // InsightFace cold start
 
-  static Future<Map<String, String>> _headers() async {
+  static Future<Map<String, String>> _authHeaders() async {
     final token = await StorageService.getParentToken();
     return {
       'Content-Type': 'application/json',
       if (token != null) 'Authorization': 'Bearer $token',
     };
   }
+
+  static Map<String, String> _sessionHeaders(String sessionToken) => {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $sessionToken',
+      };
 
   static dynamic _parse(http.Response res) {
     final body = jsonDecode(res.body) as Map<String, dynamic>;
@@ -22,14 +28,16 @@ class ParentApiService {
     throw Exception(body['message'] ?? 'Request failed (${res.statusCode})');
   }
 
-  static Future<Map<String, dynamic>> login({
+  /// Step 1 — Validate Academy Code + Student ID + Mobile.
+  /// Returns { session_token, student_name, academy_name }.
+  static Future<Map<String, dynamic>> checkCredentials({
     required String academySlug,
     required String studentId,
     required String mobile,
   }) async {
     final res = await http
         .post(
-          Uri.parse(ApiEndpoints.parentLogin),
+          Uri.parse(ApiEndpoints.parentCheckCredentials),
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({
             'academy_slug': academySlug.toLowerCase().trim(),
@@ -41,11 +49,28 @@ class ParentApiService {
     return _parse(res) as Map<String, dynamic>;
   }
 
+  /// Step 2 — Send face image for verification.
+  /// [sessionToken] is the 5-min token from [checkCredentials].
+  /// Returns { token, student, academy, confidence } on success.
+  static Future<Map<String, dynamic>> verifyFace({
+    required String sessionToken,
+    required String faceImageBase64,
+  }) async {
+    final res = await http
+        .post(
+          Uri.parse(ApiEndpoints.parentVerifyFace),
+          headers: _sessionHeaders(sessionToken),
+          body: jsonEncode({'face_image': faceImageBase64}),
+        )
+        .timeout(_faceTimeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
   static Future<void> saveFcmToken(String fcmToken) async {
     final res = await http
         .post(
           Uri.parse(ApiEndpoints.parentFcmToken),
-          headers: await _headers(),
+          headers: await _authHeaders(),
           body: jsonEncode({'fcm_token': fcmToken}),
         )
         .timeout(_timeout);
@@ -54,7 +79,7 @@ class ParentApiService {
 
   static Future<Map<String, dynamic>> getProfile() async {
     final res = await http
-        .get(Uri.parse(ApiEndpoints.parentProfile), headers: await _headers())
+        .get(Uri.parse(ApiEndpoints.parentProfile), headers: await _authHeaders())
         .timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
   }
@@ -63,7 +88,7 @@ class ParentApiService {
     final uri = Uri.parse(ApiEndpoints.parentAttendance)
         .replace(queryParameters: {'days': days.toString()});
     final res = await http
-        .get(uri, headers: await _headers())
+        .get(uri, headers: await _authHeaders())
         .timeout(_timeout);
     return (_parse(res) as List).cast<Map<String, dynamic>>();
   }

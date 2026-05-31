@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../models/parent_user.dart';
-import '../services/parent_api_service.dart';
 import '../services/storage_service.dart';
 
 class ParentAuthProvider extends ChangeNotifier {
@@ -28,51 +27,43 @@ class ParentAuthProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<bool> login({
-    required String academySlug,
-    required String studentId,
-    required String mobile,
+  /// Called after successful face verification — stores JWT and user.
+  Future<void> completeLogin({
+    required String token,
+    required Map<String, dynamic> studentData,
+    required Map<String, dynamic> academyData,
   }) async {
-    _loading = true;
-    _error   = null;
+    _token = token;
+    _user = ParentUser(
+      studentId:        studentData['id']          as String,
+      studentFirstName: studentData['first_name']  as String,
+      studentLastName:  studentData['last_name']   as String,
+      parentName:       studentData['parent_name'] as String? ?? '',
+      academySlug:      academyData['slug']        as String,
+      academyName:      academyData['name']        as String,
+    );
+    await StorageService.saveParentToken(_token!);
+    await StorageService.saveParentUser(_user!.toJson());
     notifyListeners();
-    try {
-      final data    = await ParentApiService.login(
-        academySlug: academySlug,
-        studentId:   studentId,
-        mobile:      mobile,
-      );
-      _token = data['token'] as String;
-
-      final s = data['student'] as Map<String, dynamic>;
-      final a = data['academy'] as Map<String, dynamic>;
-      _user = ParentUser(
-        studentId:        s['id']          as String,
-        studentFirstName: s['first_name']  as String,
-        studentLastName:  s['last_name']   as String,
-        parentName:       s['parent_name'] as String? ?? '',
-        academySlug:      a['slug']        as String,
-        academyName:      a['name']        as String,
-      );
-
-      await StorageService.saveParentToken(_token!);
-      await StorageService.saveParentUser(_user!.toJson());
-
-      _loading = false;
-      notifyListeners();
-      return true;
-    } catch (e) {
-      _error   = e.toString().replaceFirst('Exception: ', '');
-      _loading = false;
-      notifyListeners();
-      return false;
-    }
   }
 
   Future<void> logout() async {
     _token = null;
     _user  = null;
+    _error = null;
     await StorageService.clearParent();
+    notifyListeners();
+  }
+
+  void setLoading(bool v) {
+    _loading = v;
+    if (v) _error = null;
+    notifyListeners();
+  }
+
+  void setError(String? e) {
+    _error   = e;
+    _loading = false;
     notifyListeners();
   }
 

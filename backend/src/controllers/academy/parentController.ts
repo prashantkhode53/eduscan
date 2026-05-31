@@ -3,6 +3,8 @@ import jwt from 'jsonwebtoken';
 import { academyQuery, academyQueryOne } from '../../db/poolManager';
 import { queryOne } from '../../db/pool';
 import { AppError } from '../../middleware/errorHandler';
+import { batchEmbed } from '../../utils/insightface';
+import { cosineSimilarity } from '../../utils/faceMatch';
 
 function jwtSecret(): string {
   const s = process.env.JWT_SECRET;
@@ -10,14 +12,15 @@ function jwtSecret(): string {
   return s;
 }
 
-/** Strip non-digits and return last 10 — handles +91, 0-prefix, spaces etc. */
 function normalMobile(m: string): string {
   return m.replace(/\D/g, '').slice(-10);
 }
 
-// ── POST /api/academy/parent/login ────────────────────────────────────────────
+// ── POST /api/academy/parent/check-credentials ────────────────────────────────
+// Step 1: validate Academy Code + Student ID + Mobile.
+// Returns a short-lived (5 min) session token used to unlock the face-scan step.
 
-export async function parentLogin(
+export async function checkCredentials(
   req: Request, res: Response, next: NextFunction
 ): Promise<void> {
   try {
@@ -31,34 +34,49 @@ export async function parentLogin(
       return next(new AppError('academy_slug, student_id and mobile are required', 400));
     }
 
-    // Validate academy exists and is active
-    const academy = await queryOne<{ id: string; name: string; slug: string; status: string }>(
+    const academy = await queryOne<{
+      id: string; name: string; slug: string; status: string;
+    }>(
       `SELECT id, name, slug, status FROM academies WHERE slug = $1`,
       [academy_slug.toLowerCase().trim()]
     );
-    if (!academy)              return next(new AppError('Academy not found. Check your academy code.', 404));
+    if (!academy)                    return next(new AppError('Academy not found. Check your academy code.', 404));
     if (academy.status !== 'active') return next(new AppError('This academy is inactive.', 403));
 
-    // Find student and validate parent mobile
     const student = await academyQueryOne<{
       id: string; first_name: string; last_name: string;
-      parent_name: string | null; parent_mobile: string | null; status: string;
+      parent_name: string | null; parent_mobile: string | null;
+      face_embedding: unknown; status: string;
     }>(
       academy.slug,
-      `SELECT id, first_name, last_name, parent_name, parent_mobile, status
+      `SELECT id, first_name, last_name, parent_name, parent_mobile,
+              face_embedding, status
        FROM students WHERE id = $1 AND status = 'active'`,
       [student_id.trim().toUpperCase()]
     );
 
-    if (!student)                 return next(new AppError('Student not found or inactive.', 404));
-    if (!student.parent_mobile)   return next(new AppError('No parent mobile on file. Contact academy admin.', 403));
+    if (!student)               return next(new AppError('Student not found or inactive.', 404));
+    if (!student.parent_mobile) return next(new AppError('No parent mobile on file. Contact academy admin.', 403));
+
     if (normalMobile(student.parent_mobile) !== normalMobile(mobile)) {
       return next(new AppError('Student ID or mobile number is incorrect.', 401));
     }
 
-    const token = jwt.sign(
+    const hasFace = student.face_embedding !== null &&
+                    Array.isArray(student.face_embedding) &&
+                    (student.face_embedding as unknown[]).length > 0;
+
+    if (!hasFace) {
+      return next(new AppError(
+        'No face registered for this student. Please contact your academy admin to complete registration.',
+        403
+      ));
+    }
+
+    // Issue a 5-minute session token — only valid for the face-scan step
+    const sessionToken = jwt.sign(
       {
-        type:        'parent',
+        type:        'parent_session',
         studentId:   student.id,
         academySlug: academy.slug,
         academyName: academy.name,
@@ -66,10 +84,101 @@ export async function parentLogin(
         mobile:      normalMobile(mobile),
       },
       jwtSecret(),
+      { expiresIn: '5m' } as import('jsonwebtoken').SignOptions
+    );
+
+    console.log(`[parent/check-credentials] OK: ${student.id} @ ${academy.slug}`);
+
+    res.json({
+      success: true,
+      data: {
+        session_token: sessionToken,
+        student_name:  `${student.first_name} ${student.last_name}`,
+        academy_name:  academy.name,
+      },
+      message: 'Credentials verified. Please scan your face to continue.',
+    });
+  } catch (err) { next(err); }
+}
+
+// ── POST /api/academy/parent/verify-face ─────────────────────────────────────
+// Step 2: verify face against stored embedding.
+// Requires valid session token (from step 1) as Bearer header.
+// Returns a 30-day parent JWT on success.
+
+export async function verifyFace(
+  req: Request, res: Response, next: NextFunction
+): Promise<void> {
+  try {
+    const { studentId, academySlug, academyName, parentName, mobile } = req.parentSession!;
+    const { face_image } = req.body as { face_image?: string };
+
+    if (!face_image) return next(new AppError('face_image is required', 400));
+
+    // Get stored face embedding
+    const student = await academyQueryOne<{
+      id: string; first_name: string; last_name: string;
+      face_embedding: unknown; parent_name: string | null;
+    }>(
+      academySlug,
+      `SELECT id, first_name, last_name, face_embedding, parent_name
+       FROM students WHERE id = $1 AND status = 'active'`,
+      [studentId]
+    );
+
+    if (!student)              return next(new AppError('Student not found.', 404));
+    if (!student.face_embedding) return next(new AppError('No face registered. Contact admin.', 403));
+
+    // Extract embedding from the scan image via InsightFace
+    let embed;
+    try {
+      embed = await batchEmbed([face_image]);
+    } catch {
+      return next(new AppError('Face recognition service unavailable. Please try again.', 503));
+    }
+
+    if (!embed.success || !embed.embedding) {
+      return next(new AppError(
+        embed.reason === 'no_face_detected'
+          ? 'No face detected. Look directly at the camera.'
+          : 'Face scan failed. Ensure good lighting and try again.',
+        422
+      ));
+    }
+
+    // Cosine similarity against stored embedding
+    const stored: number[] = typeof student.face_embedding === 'string'
+      ? JSON.parse(student.face_embedding)
+      : (student.face_embedding as number[]);
+
+    const score = cosineSimilarity(embed.embedding, stored);
+    const threshold = 0.70;
+
+    console.log(`[parent/verify-face] ${studentId} score=${score.toFixed(4)} threshold=${threshold}`);
+
+    if (score < threshold) {
+      return next(new AppError(
+        `Face not recognised (${(score * 100).toFixed(1)}% match, need ≥${threshold * 100}%). ` +
+        'Try in better lighting or contact admin.',
+        401
+      ));
+    }
+
+    // Issue 30-day parent JWT
+    const token = jwt.sign(
+      {
+        type:        'parent',
+        studentId:   student.id,
+        academySlug: academySlug,
+        academyName: academyName,
+        parentName:  student.parent_name ?? parentName,
+        mobile:      mobile,
+      },
+      jwtSecret(),
       { expiresIn: '30d' } as import('jsonwebtoken').SignOptions
     );
 
-    console.log(`[parent/login] ${student.id} @ ${academy.slug}`);
+    console.log(`[parent/verify-face] LOGIN SUCCESS: ${studentId} @ ${academySlug} score=${score.toFixed(4)}`);
 
     res.json({
       success: true,
@@ -81,9 +190,10 @@ export async function parentLogin(
           last_name:   student.last_name,
           parent_name: student.parent_name ?? '',
         },
-        academy: { name: academy.name, slug: academy.slug },
+        academy: { name: academyName, slug: academySlug },
+        confidence: Math.round(score * 10000) / 10000,
       },
-      message: 'Login successful',
+      message: 'Face verified. Login successful.',
     });
   } catch (err) { next(err); }
 }
@@ -142,15 +252,11 @@ export async function getParentProfile(
       ),
       academyQuery<Record<string, unknown>>(
         academySlug,
-        `SELECT fr.status,
-                fr.amount_due,
-                fr.amount_paid,
-                fr.due_date,
+        `SELECT fr.status, fr.amount_due, fr.amount_paid, fr.due_date,
                 (SELECT name FROM courses WHERE id = fr.course_id) AS course_name
          FROM fee_records fr
          WHERE fr.student_id = $1 AND fr.status IN ('pending', 'overdue')
-         ORDER BY fr.due_date ASC
-         LIMIT 5`,
+         ORDER BY fr.due_date ASC LIMIT 5`,
         [studentId]
       ),
     ]);

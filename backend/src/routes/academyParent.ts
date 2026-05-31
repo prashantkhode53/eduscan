@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import { authLimiter } from '../middleware/rateLimiter';
-import { parentAuthMiddleware } from '../middleware/parentAuth';
+import { parentAuthMiddleware, parentSessionMiddleware } from '../middleware/parentAuth';
 import {
-  parentLogin,
+  checkCredentials,
+  verifyFace,
   saveFcmToken,
   getParentProfile,
   getAttendanceHistory,
@@ -10,13 +11,16 @@ import {
 
 const router = Router();
 
-// Public — rate-limited
-router.post('/login', authLimiter, parentLogin);
+// ── Step 1: validate credentials → returns 5-min session token ───────────────
+router.post('/check-credentials', authLimiter, checkCredentials);
 
-// Protected — requires valid parent JWT
-router.use(parentAuthMiddleware);
-router.post('/fcm-token',   saveFcmToken);
-router.get('/profile',      getParentProfile);
-router.get('/attendance',   getAttendanceHistory);
+// ── Step 2: verify face → returns 30-day parent JWT ──────────────────────────
+// Uses the session token (not the full parent JWT) as Bearer
+router.post('/verify-face', parentSessionMiddleware, verifyFace);
+
+// ── Protected routes — require valid 30-day parent JWT ────────────────────────
+router.post('/fcm-token',  parentAuthMiddleware, saveFcmToken);
+router.get('/profile',     parentAuthMiddleware, getParentProfile);
+router.get('/attendance',  parentAuthMiddleware, getAttendanceHistory);
 
 export default router;
