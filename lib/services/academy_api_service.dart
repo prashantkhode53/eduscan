@@ -109,6 +109,18 @@ class AcademyApiService {
     return _parse(res) as Map<String, dynamic>;
   }
 
+  static Future<Map<String, dynamic>> scanFace(
+      String imageBase64, String mode) async {
+    final res = await http
+        .post(
+          Uri.parse(ApiEndpoints.academyAttendanceScan),
+          headers: await _headers(),
+          body: jsonEncode({'image_base64': imageBase64, 'mode': mode}),
+        )
+        .timeout(const Duration(seconds: 20));
+    return _parse(res) as Map<String, dynamic>;
+  }
+
   static Future<Map<String, dynamic>> updateStudent(
       String id, Map<String, dynamic> body) async {
     final res = await http

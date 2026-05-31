@@ -7,6 +7,7 @@ import 'academy/course_master_screen.dart';
 import 'academy/academy_student_list_screen.dart';
 import 'academy/academy_student_registration_screen.dart';
 import 'academy/fees_screen.dart';
+import 'academy/academy_face_scan_screen.dart';
 
 class AcademyAdminDashboard extends StatefulWidget {
   const AcademyAdminDashboard({super.key});
@@ -196,10 +197,10 @@ class _HomeTabState extends State<_HomeTab> {
                   icon: Icons.face_outlined,
                   label: 'Face Scan',
                   color: Colors.green,
-                  onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                        content: Text(
-                            'Face scan kiosk — coming in next update')),
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const AcademyFaceScanScreen()),
                   ),
                 ),
                 _QuickAction(

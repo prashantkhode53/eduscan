@@ -11,7 +11,8 @@ class ApiEndpoints {
   static const String academyProfile   = '$baseUrl/api/academy/profile';
   static const String academyCourses   = '$baseUrl/api/academy/courses';
   static const String academyStudents  = '$baseUrl/api/academy/students';
-  static const String academyFees      = '$baseUrl/api/academy/fees';
+  static const String academyFees           = '$baseUrl/api/academy/fees';
+  static const String academyAttendanceScan = '$baseUrl/api/academy/attendance/scan';
 
   // Auth
   static const String login            = '$baseUrl/api/auth/login';
