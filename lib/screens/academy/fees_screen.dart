@@ -322,9 +322,9 @@ class _FeeCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme    = Theme.of(context);
     final status   = record['status'] as String;
-    final due      = record['amount_due'] as num;
-    final paid     = record['amount_paid'] as num;
-    final balance  = (due - paid).toDouble();
+    final due      = double.tryParse(record['amount_due']?.toString()  ?? '0') ?? 0.0;
+    final paid     = double.tryParse(record['amount_paid']?.toString() ?? '0') ?? 0.0;
+    final balance  = due - paid;
     final isPaid   = status == 'paid';
     final color    = _statusColor(status);
 
@@ -487,8 +487,8 @@ class _FeeCollectionSheetState extends State<FeeCollectionSheet> {
   @override
   void initState() {
     super.initState();
-    final due   = (widget.record['amount_due']  as num).toDouble();
-    final paid  = (widget.record['amount_paid'] as num).toDouble();
+    final due   = double.tryParse(widget.record['amount_due']?.toString()  ?? '0') ?? 0.0;
+    final paid  = double.tryParse(widget.record['amount_paid']?.toString() ?? '0') ?? 0.0;
     final balance = (due - paid).clamp(0.0, double.infinity);
     _amountCtrl.text = balance.toStringAsFixed(0);
   }
@@ -536,8 +536,8 @@ class _FeeCollectionSheetState extends State<FeeCollectionSheet> {
   @override
   Widget build(BuildContext context) {
     final theme   = Theme.of(context);
-    final due     = (widget.record['amount_due']  as num).toDouble();
-    final paid    = (widget.record['amount_paid'] as num).toDouble();
+    final due     = double.tryParse(widget.record['amount_due']?.toString()  ?? '0') ?? 0.0;
+    final paid    = double.tryParse(widget.record['amount_paid']?.toString() ?? '0') ?? 0.0;
     final balance = (due - paid).clamp(0.0, double.infinity);
 
     return SingleChildScrollView(
