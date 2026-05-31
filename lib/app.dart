@@ -13,9 +13,12 @@ import 'screens/attendance_screen.dart';
 import 'screens/reports_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/academy_admin_dashboard.dart';
+import 'screens/academy/parent_login_screen.dart';
+import 'screens/academy/parent_dashboard_screen.dart';
 
 class EduScanApp extends StatelessWidget {
-  const EduScanApp({super.key});
+  final GlobalKey<NavigatorState>? navigatorKey;
+  const EduScanApp({super.key, this.navigatorKey});
 
   @override
   Widget build(BuildContext context) {
@@ -27,6 +30,7 @@ class EduScanApp extends StatelessWidget {
           themeMode: auth.themeMode,
           theme: AppColors.lightTheme,
           darkTheme: AppColors.darkTheme,
+          navigatorKey: navigatorKey,
           initialRoute: '/',
           onGenerateRoute: (settings) {
             Widget page;
@@ -52,6 +56,12 @@ class EduScanApp extends StatelessWidget {
                 page = const ReportsScreen();
               case '/settings':
                 page = const SettingsScreen();
+
+              // ── Parent routes ───────────────────────────────────────────
+              case '/parent/login':
+                page = const ParentLoginScreen();
+              case '/parent/dashboard':
+                page = const ParentDashboardScreen();
 
               // ── Academy routes ──────────────────────────────────────────
               case '/academy/dashboard':

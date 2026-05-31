@@ -92,7 +92,14 @@ class _SplashScreenState extends State<SplashScreen>
           Navigator.of(context).pushReplacementNamed('/dashboard');
         }
       } else {
-        Navigator.of(context).pushReplacementNamed('/login');
+        // Check parent token before falling back to login
+        final parentToken = await StorageService.getParentToken();
+        if (!mounted) return;
+        if (parentToken != null && !JwtDecoder.isExpired(parentToken)) {
+          Navigator.of(context).pushReplacementNamed('/parent/dashboard');
+        } else {
+          Navigator.of(context).pushReplacementNamed('/login');
+        }
       }
     } catch (e) {
       debugPrint('Splash init error: $e');

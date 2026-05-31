@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { academyQuery, academyQueryOne } from '../../db/poolManager';
 import { batchEmbed } from '../../utils/insightface';
 import { cosineSimilarity } from '../../utils/faceMatch';
+import { sendFcm } from '../../utils/fcm';
 
 interface StudentRow {
   id: string;
@@ -9,6 +10,7 @@ interface StudentRow {
   last_name: string;
   mobile: string;
   face_embedding: unknown;
+  parent_fcm_token: string | null;
 }
 
 interface AttendanceRow {
@@ -79,7 +81,7 @@ export async function scanAcademy(
     // 2. Load all active academy students with stored face embeddings
     const students = await academyQuery<StudentRow>(
       academySlug,
-      `SELECT id, first_name, last_name, mobile, face_embedding
+      `SELECT id, first_name, last_name, mobile, face_embedding, parent_fcm_token
        FROM students
        WHERE status = 'active' AND face_embedding IS NOT NULL`
     );
@@ -213,6 +215,17 @@ export async function scanAcademy(
         [student.id, today, timeStr, confidence]
       );
       console.log(`[academy/scan] CHECK-IN: ${student.id} at ${timeStr} score=${confidence}`);
+
+      // Fire-and-forget push to parent
+      if (student.parent_fcm_token) {
+        void sendFcm({
+          token: student.parent_fcm_token,
+          title: `${student.first_name} checked in ✅`,
+          body:  `${req.academyUser!.academyName} • ${timeStr.substring(0, 5)}`,
+          data:  { type: 'attendance', action: 'checkin', studentId: student.id, time: timeStr },
+        });
+      }
+
       res.json({
         success: true,
         action: 'checkin',
@@ -254,6 +267,20 @@ export async function scanAcademy(
     );
 
     console.log(`[academy/scan] CHECK-OUT: ${student.id} at ${timeStr} duration=${durationMins}m`);
+
+    // Fire-and-forget push to parent
+    if (student.parent_fcm_token) {
+      const h = Math.floor(durationMins / 60);
+      const m = durationMins % 60;
+      const dur = h > 0 ? `${h}h ${m}m` : `${m}m`;
+      void sendFcm({
+        token: student.parent_fcm_token,
+        title: `${student.first_name} checked out 🏠`,
+        body:  `${req.academyUser!.academyName} • ${timeStr.substring(0, 5)} (${dur})`,
+        data:  { type: 'attendance', action: 'checkout', studentId: student.id, time: timeStr },
+      });
+    }
+
     res.json({
       success: true,
       action: 'checkout',

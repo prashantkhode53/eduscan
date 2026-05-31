@@ -248,6 +248,21 @@ class _LoginScreenState extends State<LoginScreen> {
               const Divider(),
               const SizedBox(height: 20),
 
+              // ── Parent login ───────────────────────────────────────────────
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: () =>
+                    Navigator.pushNamed(context, '/parent/login'),
+                icon: const Icon(Icons.family_restroom_outlined),
+                label: const Text('Parent / Guardian Login'),
+                style: OutlinedButton.styleFrom(
+                    minimumSize: const Size.fromHeight(48)),
+              ),
+
+              const SizedBox(height: 24),
+              const Divider(),
+              const SizedBox(height: 20),
+
               // ── Register academy ───────────────────────────────────────────
               Text(
                 "Don't have an academy yet?",

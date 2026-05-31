@@ -14,6 +14,12 @@ class ApiEndpoints {
   static const String academyFees           = '$baseUrl/api/academy/fees';
   static const String academyAttendanceScan = '$baseUrl/api/academy/attendance/scan';
 
+  // Parent (FCM / attendance notifications)
+  static const String parentLogin      = '$baseUrl/api/academy/parent/login';
+  static const String parentFcmToken   = '$baseUrl/api/academy/parent/fcm-token';
+  static const String parentProfile    = '$baseUrl/api/academy/parent/profile';
+  static const String parentAttendance = '$baseUrl/api/academy/parent/attendance';
+
   // Auth
   static const String login            = '$baseUrl/api/auth/login';
   static const String forgotPassword   = '$baseUrl/api/auth/forgot-password';

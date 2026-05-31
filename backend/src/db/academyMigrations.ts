@@ -68,12 +68,19 @@ export async function runAcademyMigrations(
         parent_name     VARCHAR(100),
         parent_mobile   VARCHAR(15),
         address         TEXT,
-        face_embedding  JSONB,
-        face_quality    DECIMAL(4,2),
-        status          VARCHAR(10) DEFAULT 'active',
-        created_at      TIMESTAMPTZ DEFAULT NOW(),
-        updated_at      TIMESTAMPTZ DEFAULT NOW()
+        face_embedding    JSONB,
+        face_quality      DECIMAL(4,2),
+        parent_fcm_token  TEXT,
+        status            VARCHAR(10) DEFAULT 'active',
+        created_at        TIMESTAMPTZ DEFAULT NOW(),
+        updated_at        TIMESTAMPTZ DEFAULT NOW()
       )
+    `);
+
+    // Idempotent column addition for academies created before parent-notification feature
+    await client.query(`
+      ALTER TABLE IF EXISTS students
+        ADD COLUMN IF NOT EXISTS parent_fcm_token TEXT
     `);
 
     // ── Courses ───────────────────────────────────────────────────────────

@@ -101,6 +101,41 @@ class StorageService {
     try { return jsonDecode(raw) as Map<String, dynamic>; } catch (_) { return null; }
   }
 
+  // ── Parent ────────────────────────────────────────────────────────────────
+
+  static const _keyParentToken = 'parent_token';
+  static const _keyParentUser  = 'parent_user';
+
+  static Future<void> saveParentToken(String token) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyParentToken, token);
+  }
+
+  static Future<String?> getParentToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_keyParentToken);
+  }
+
+  static Future<void> saveParentUser(Map<String, dynamic> user) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyParentUser, jsonEncode(user));
+  }
+
+  static Future<Map<String, dynamic>?> getParentUser() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_keyParentUser);
+    if (raw == null) return null;
+    try { return jsonDecode(raw) as Map<String, dynamic>; } catch (_) { return null; }
+  }
+
+  static Future<void> clearParent() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_keyParentToken);
+    await prefs.remove(_keyParentUser);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+
   static Future<void> clear() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_keyToken);
