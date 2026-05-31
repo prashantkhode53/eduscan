@@ -21,23 +21,23 @@ import attendanceRoutes from './routes/attendance';
 import scanRoutes from './routes/scan';
 import reportRoutes from './routes/reports';
 import settingsRoutes from './routes/settings';
-import { whatsappRouter, runWhatsAppMigrations, whatsappService } from './whatsapp';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors({
   origin: '*',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Kiosk-Key'],
 }));
 
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(morgan('combined'));
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true }));
+// 5 MB covers face-scan payloads (base64 JPEG × 5 ≈ 2 MB max)
+app.use(express.json({ limit: '5mb' }));
+app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 
-// Health check is exempt from rate limiting — used by keep-alive and Flutter warm-up
+// Health check — exempt from rate limiting
 app.get('/api/health', async (_req, res) => {
   try {
     await pool.query('SELECT 1');
@@ -55,20 +55,17 @@ app.get('/api/health', async (_req, res) => {
   }
 });
 
-
-app.use('/api/auth', authRoutes);
-app.use('/api/academy',          academyRoutes);
-app.use('/api/academy/courses',  academyCoursesRoutes);
-app.use('/api/academy/students', academyStudentsRoutes);
+app.use('/api/auth',               authRoutes);
+app.use('/api/academy',            academyRoutes);
+app.use('/api/academy/courses',    academyCoursesRoutes);
+app.use('/api/academy/students',   academyStudentsRoutes);
 app.use('/api/academy/fees',       academyFeesRoutes);
 app.use('/api/academy/attendance', academyAttendanceRoutes);
-app.use('/api/students', studentRoutes);
-app.use('/api/attendance', attendanceRoutes);
-app.use('/api/attendance', scanRoutes);
-app.use('/api/reports', reportRoutes);
-app.use('/api/settings', settingsRoutes);
-app.use('/whatsapp', whatsappRouter);
-console.log('✅ WhatsApp routes mounted at /whatsapp');
+app.use('/api/students',    studentRoutes);
+app.use('/api/attendance',  attendanceRoutes);
+app.use('/api/attendance',  scanRoutes);
+app.use('/api/reports',     reportRoutes);
+app.use('/api/settings',    settingsRoutes);
 
 app.get('/api/routes', (_req, res) => {
   const routes: string[] = [];
@@ -93,14 +90,6 @@ async function start(): Promise<void> {
   try {
     await runMigrations();
     console.log('✅ Database migrations complete');
-
-    await runWhatsAppMigrations();
-
-    // WhatsApp client starts non-blocking — its failure never crashes the server
-    whatsappService.initialize().catch((err: unknown) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error('❌ WhatsApp init error:', msg);
-    });
 
     const server = app.listen(Number(PORT), '0.0.0.0', () => {
       console.log(`🚀 EduScan backend running on port ${PORT}`);

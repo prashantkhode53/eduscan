@@ -15,7 +15,7 @@ import { Pool, PoolClient } from 'pg';
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
-  max: 20,
+  max: 5,                    // free-tier: keep memory footprint small
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 10_000,
 });
