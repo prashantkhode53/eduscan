@@ -291,9 +291,16 @@ export async function updateStudent(
   try {
     const { academySlug } = req.academyUser!;
     const { id } = req.params;
-    const { courses, face_images } = req.body as {
+    const {
+      courses, face_images,
+      first_name, last_name, mobile, email,
+      dob, gender, parent_name, parent_mobile, address,
+    } = req.body as {
       courses: CourseSelection[];
       face_images?: string[];
+      first_name?: string; last_name?: string; mobile?: string;
+      email?: string; dob?: string; gender?: string;
+      parent_name?: string; parent_mobile?: string; address?: string;
     };
 
     if (!courses?.length) {
@@ -366,6 +373,36 @@ export async function updateStudent(
         );
       }
 
+      // Update personal info fields when provided
+      if (first_name || last_name || mobile) {
+        await client.query(
+          `UPDATE students SET
+             first_name    = COALESCE($1, first_name),
+             last_name     = COALESCE($2, last_name),
+             mobile        = COALESCE($3, mobile),
+             email         = $4,
+             dob           = $5,
+             gender        = $6,
+             parent_name   = $7,
+             parent_mobile = $8,
+             address       = $9,
+             updated_at    = NOW()
+           WHERE id = $10`,
+          [
+            first_name?.trim()    || null,
+            last_name?.trim()     || null,
+            mobile?.trim()        || null,
+            email?.trim()         || null,
+            dob                   || null,
+            gender                || null,
+            parent_name?.trim()   || null,
+            parent_mobile?.trim() || null,
+            address?.trim()       || null,
+            id,
+          ]
+        );
+      }
+
       if (newEmbedding) {
         await client.query(
           `UPDATE students
@@ -375,17 +412,17 @@ export async function updateStudent(
         );
       }
 
-      await client.query(
-        `UPDATE students SET updated_at = NOW() WHERE id = $1`, [id]
-      );
+      if (!first_name && !last_name && !mobile && !newEmbedding) {
+        await client.query(`UPDATE students SET updated_at = NOW() WHERE id = $1`, [id]);
+      }
     });
 
     if (newEmbedding) {
       await cacheUpsert({
         student_id:  id,
         embedding:   newEmbedding,
-        first_name:  student.first_name,
-        last_name:   student.last_name,
+        first_name:  first_name?.trim() || student.first_name,
+        last_name:   last_name?.trim()  || student.last_name,
         class_grade: 'academy',
         division:    academySlug.substring(0, 8),
         roll_no:     null,

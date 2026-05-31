@@ -7,7 +7,7 @@ import '../../services/face_service.dart';
 import '../../widgets/face_overlay_painter.dart';
 import '../../widgets/academy_course_selector.dart';
 
-/// 2-step wizard: (0) course selection  (1) face update.
+/// 3-step wizard: (0) Personal Info  (1) Courses  (2) Face update.
 /// Returns true via Navigator.pop when the student is successfully updated.
 class AcademyStudentEditScreen extends StatefulWidget {
   final String studentId;
@@ -33,15 +33,27 @@ class _AcademyStudentEditScreenState
   bool _initialLoading = true;
   String? _loadError;
 
-  // ── Step 0: Courses ────────────────────────────────────────────────────────
+  // ── Step 0: Personal Info ──────────────────────────────────────────────────
+  final _s0Key          = GlobalKey<FormState>();
+  final _firstNameCtrl  = TextEditingController();
+  final _lastNameCtrl   = TextEditingController();
+  final _mobileCtrl     = TextEditingController();
+  final _emailCtrl      = TextEditingController();
+  final _dobCtrl        = TextEditingController();
+  final _parentNameCtrl = TextEditingController();
+  final _parentMobCtrl  = TextEditingController();
+  final _addressCtrl    = TextEditingController();
+  String? _gender;
+
+  // ── Step 1: Courses ────────────────────────────────────────────────────────
   List<Map<String, dynamic>> _availableCourses = [];
   final Map<String, double> _selectedFees = {};
   bool _loadingCourses = false;
   String? _courseError;
 
-  // ── Step 1: Face ───────────────────────────────────────────────────────────
-  bool _hasFaceData = false;
-  bool _isRescanning = false;
+  // ── Step 2: Face ───────────────────────────────────────────────────────────
+  bool _hasFaceData   = false;
+  bool _isRescanning  = false;
 
   CameraController? _camCtrl;
   CameraDescription? _frontCam;
@@ -79,7 +91,20 @@ class _AcademyStudentEditScreenState
       final studentData = results[0] as Map<String, dynamic>;
       final courses     = (results[1] as List).cast<Map<String, dynamic>>();
 
-      // Pre-populate from active enrolments
+      // Pre-populate personal info
+      _firstNameCtrl.text  = studentData['first_name']   as String? ?? '';
+      _lastNameCtrl.text   = studentData['last_name']    as String? ?? '';
+      _mobileCtrl.text     = studentData['mobile']       as String? ?? '';
+      _emailCtrl.text      = studentData['email']        as String? ?? '';
+      _parentNameCtrl.text = studentData['parent_name']  as String? ?? '';
+      _parentMobCtrl.text  = studentData['parent_mobile'] as String? ?? '';
+      _addressCtrl.text    = studentData['address']      as String? ?? '';
+      // DOB: strip ISO timestamp → YYYY-MM-DD
+      final rawDob = studentData['dob']?.toString() ?? '';
+      _dobCtrl.text = rawDob.contains('T') ? rawDob.split('T')[0] : rawDob;
+      _gender = studentData['gender'] as String?;
+
+      // Pre-populate courses from active enrolments
       final enrollments = (studentData['courses'] as List? ?? [])
           .cast<Map<String, dynamic>>()
           .where((c) => c['status'] == 'active')
@@ -135,6 +160,11 @@ class _AcademyStudentEditScreenState
   @override
   void dispose() {
     _pageCtrl.dispose();
+    _firstNameCtrl.dispose(); _lastNameCtrl.dispose();
+    _mobileCtrl.dispose();    _emailCtrl.dispose();
+    _dobCtrl.dispose();
+    _parentNameCtrl.dispose(); _parentMobCtrl.dispose();
+    _addressCtrl.dispose();
     _progressTicker?.cancel();
     _camCtrl?.dispose();
     super.dispose();
@@ -143,7 +173,10 @@ class _AcademyStudentEditScreenState
   // ── Navigation ─────────────────────────────────────────────────────────────
 
   void _goNext() {
-    if (_step == 0 && _selectedFees.isEmpty) {
+    if (_step == 0) {
+      if (!(_s0Key.currentState?.validate() ?? false)) return;
+    }
+    if (_step == 1 && _selectedFees.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Select at least one course')),
       );
@@ -152,22 +185,24 @@ class _AcademyStudentEditScreenState
     setState(() => _step++);
     _pageCtrl.animateToPage(_step,
         duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
-    // Auto-start camera only when student has no face data yet
-    if (_step == 1 && !_hasFaceData) _initCamera();
+    // Auto-start camera only on face step when student has no face data yet
+    if (_step == 2 && !_hasFaceData) _initCamera();
   }
 
   void _goBack() {
     if (_step == 0) { Navigator.pop(context); return; }
-    _disposeCamera();
+    if (_step == 2) _disposeCamera();
     setState(() {
       _step--;
-      _isRescanning = false;
-      _faceImages.clear();
-      _captureCount = 0;
-      _faceDone     = false;
-      _overlayState = FaceOverlayState.idle;
-      _qualityScore = 0;
-      _holdProgress = 0;
+      if (_step < 2) {
+        _isRescanning = false;
+        _faceImages.clear();
+        _captureCount = 0;
+        _faceDone     = false;
+        _overlayState = FaceOverlayState.idle;
+        _qualityScore = 0;
+        _holdProgress = 0;
+      }
     });
     _pageCtrl.animateToPage(_step,
         duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
@@ -191,9 +226,7 @@ class _AcademyStudentEditScreenState
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content: Text('Camera error: $e'),
-              backgroundColor: Colors.red),
+          SnackBar(content: Text('Camera error: $e'), backgroundColor: Colors.red),
         );
       }
     }
@@ -201,7 +234,7 @@ class _AcademyStudentEditScreenState
 
   void _disposeCamera() {
     _progressTicker?.cancel();
-    _progressTicker = null;
+    _progressTicker  = null;
     _camCtrl?.dispose();
     _camCtrl         = null;
     _camReady        = false;
@@ -221,10 +254,7 @@ class _AcademyStudentEditScreenState
     final sizeScore =
         (((face.boundingBox.width as num).toDouble() - 80) / 120)
             .clamp(0.0, 1.0);
-    if (sizeScore < 0.05) {
-      _qualityHint = 'Move closer to camera';
-      return 0.0;
-    }
+    if (sizeScore < 0.05) { _qualityHint = 'Move closer to camera'; return 0.0; }
 
     final eyeScore =
         ((face.leftEyeOpenProbability  as double? ?? 1.0) +
@@ -249,18 +279,13 @@ class _AcademyStudentEditScreenState
       if (_processingFrame || _faceDone) return;
       _processingFrame = true;
       try {
-        final inputImage =
-            FaceService.cameraImageToInputImage(image, _frontCam!);
+        final inputImage = FaceService.cameraImageToInputImage(image, _frontCam!);
         if (inputImage == null) return;
         final faces = await FaceService.detectFaces(inputImage);
         if (!mounted) return;
 
         if (faces.isEmpty) {
-          setState(() {
-            _overlayState = FaceOverlayState.idle;
-            _qualityScore = 0;
-            _qualityHint  = '';
-          });
+          setState(() { _overlayState = FaceOverlayState.idle; _qualityScore = 0; _qualityHint = ''; });
           _cancelHold();
           return;
         }
@@ -268,8 +293,7 @@ class _AcademyStudentEditScreenState
         final quality = _computeQuality(faces.first);
         setState(() {
           _qualityScore = quality;
-          _overlayState =
-              quality >= 0.55 ? FaceOverlayState.detected : FaceOverlayState.idle;
+          _overlayState = quality >= 0.55 ? FaceOverlayState.detected : FaceOverlayState.idle;
         });
         if (quality >= 0.55 && !_autoCapturing) {
           _startHold();
@@ -336,7 +360,18 @@ class _AcademyStudentEditScreenState
           .map((e) => {'course_id': e.key, 'fee_amount': e.value})
           .toList();
 
-      final body = <String, dynamic>{'courses': courses};
+      final body = <String, dynamic>{
+        'first_name':    _firstNameCtrl.text.trim(),
+        'last_name':     _lastNameCtrl.text.trim(),
+        'mobile':        _mobileCtrl.text.trim(),
+        'email':         _emailCtrl.text.trim().isNotEmpty ? _emailCtrl.text.trim() : null,
+        'dob':           _dobCtrl.text.isNotEmpty ? _dobCtrl.text : null,
+        'gender':        _gender,
+        'parent_name':   _parentNameCtrl.text.trim().isNotEmpty ? _parentNameCtrl.text.trim() : null,
+        'parent_mobile': _parentMobCtrl.text.trim().isNotEmpty  ? _parentMobCtrl.text.trim()  : null,
+        'address':       _addressCtrl.text.trim().isNotEmpty    ? _addressCtrl.text.trim()    : null,
+        'courses':       courses,
+      };
       if (withNewFace && _faceImages.isNotEmpty) {
         body['face_images'] = _faceImages;
       }
@@ -366,7 +401,7 @@ class _AcademyStudentEditScreenState
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    const steps = ['Update Courses', 'Update Face'];
+    const steps = ['Personal Info', 'Update Courses', 'Update Face'];
 
     if (_initialLoading) {
       return Scaffold(
@@ -384,19 +419,15 @@ class _AcademyStudentEditScreenState
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.cloud_off_outlined,
-                    size: 56, color: theme.colorScheme.error),
+                Icon(Icons.cloud_off_outlined, size: 56, color: theme.colorScheme.error),
                 const SizedBox(height: 12),
                 Text('Failed to load student data',
-                    style: theme.textTheme.titleMedium
-                        ?.copyWith(fontWeight: FontWeight.bold)),
+                    style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
                 const SizedBox(height: 8),
                 Text(_loadError!,
                     textAlign: TextAlign.center,
-                    style: TextStyle(
-                        fontSize: 13,
-                        color: theme.colorScheme.onSurface
-                            .withValues(alpha: 0.6))),
+                    style: TextStyle(fontSize: 13,
+                        color: theme.colorScheme.onSurface.withValues(alpha: 0.6))),
                 const SizedBox(height: 20),
                 FilledButton.icon(
                     onPressed: _loadAll,
@@ -426,6 +457,10 @@ class _AcademyStudentEditScreenState
         controller: _pageCtrl,
         physics: const NeverScrollableScrollPhysics(),
         children: [
+          // ── Step 0: Personal Info ──────────────────────────────────────────
+          _buildPersonalInfoStep(theme),
+
+          // ── Step 1: Courses ────────────────────────────────────────────────
           AcademyCourseSelector(
             loading: _loadingCourses,
             error: _courseError,
@@ -446,6 +481,8 @@ class _AcademyStudentEditScreenState
             onRetry: _reloadCourses,
             nextLabel: 'Continue to Face Update',
           ),
+
+          // ── Step 2: Face ───────────────────────────────────────────────────
           _FaceStep(
             hasFaceData: _hasFaceData,
             isRescanning: _isRescanning,
@@ -462,16 +499,16 @@ class _AcademyStudentEditScreenState
               _initCamera();
             },
             onKeepFace: _submitting ? null : () => _submit(withNewFace: false),
-            camCtrl: _camCtrl,
-            camReady: _camReady,
-            overlayState: _overlayState,
-            holdProgress: _holdProgress,
-            qualityScore: _qualityScore,
-            qualityHint: _qualityHint,
-            captureCount: _captureCount,
+            camCtrl:        _camCtrl,
+            camReady:       _camReady,
+            overlayState:   _overlayState,
+            holdProgress:   _holdProgress,
+            qualityScore:   _qualityScore,
+            qualityHint:    _qualityHint,
+            captureCount:   _captureCount,
             requiredSamples: _requiredSamples,
-            done: _faceDone,
-            submitting: _submitting,
+            done:          _faceDone,
+            submitting:    _submitting,
             autoCapturing: _autoCapturing,
             onCaptureNow: () {
               _cancelHold();
@@ -493,9 +530,144 @@ class _AcademyStudentEditScreenState
       ),
     );
   }
+
+  // ── Step 0 widget ──────────────────────────────────────────────────────────
+
+  Widget _buildPersonalInfoStep(ThemeData theme) {
+    return Form(
+      key: _s0Key,
+      child: SingleChildScrollView(
+        padding: EdgeInsets.fromLTRB(
+            24, 16, 24, MediaQuery.of(context).padding.bottom + 24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Read-only student ID
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainerLow,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: theme.colorScheme.outlineVariant),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.badge_outlined, size: 16,
+                      color: theme.colorScheme.primary),
+                  const SizedBox(width: 8),
+                  Text('Student ID',
+                      style: TextStyle(fontSize: 12,
+                          color: theme.colorScheme.onSurface
+                              .withValues(alpha: 0.6))),
+                  const Spacer(),
+                  Text(widget.studentId,
+                      style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: theme.colorScheme.primary)),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            Row(children: [
+              Expanded(child: _tf(_firstNameCtrl, 'First Name *',
+                  v: (v) => v!.trim().isEmpty ? 'Required' : null)),
+              const SizedBox(width: 12),
+              Expanded(child: _tf(_lastNameCtrl, 'Last Name *',
+                  v: (v) => v!.trim().isEmpty ? 'Required' : null)),
+            ]),
+            const SizedBox(height: 12),
+
+            _tf(_mobileCtrl, 'Mobile *',
+                type: TextInputType.phone,
+                v: (v) => v!.trim().length < 10 ? 'Enter valid mobile number' : null),
+            const SizedBox(height: 12),
+
+            _tf(_emailCtrl, 'Email (optional)', type: TextInputType.emailAddress),
+            const SizedBox(height: 12),
+
+            DropdownButtonFormField<String>(
+              value: _gender,
+              decoration: const InputDecoration(
+                  labelText: 'Gender', border: OutlineInputBorder()),
+              items: const [
+                DropdownMenuItem(value: 'male',   child: Text('Male')),
+                DropdownMenuItem(value: 'female', child: Text('Female')),
+                DropdownMenuItem(value: 'other',  child: Text('Other')),
+              ],
+              onChanged: (v) => setState(() => _gender = v),
+            ),
+            const SizedBox(height: 12),
+
+            TextFormField(
+              controller: _dobCtrl,
+              readOnly: true,
+              decoration: const InputDecoration(
+                labelText: 'Date of Birth',
+                prefixIcon: Icon(Icons.calendar_today),
+                border: OutlineInputBorder(),
+              ),
+              onTap: () async {
+                DateTime initial = DateTime(2005);
+                if (_dobCtrl.text.isNotEmpty) {
+                  try { initial = DateTime.parse(_dobCtrl.text); } catch (_) {}
+                }
+                final d = await showDatePicker(
+                  context: context,
+                  initialDate: initial,
+                  firstDate: DateTime(1990),
+                  lastDate: DateTime.now(),
+                );
+                if (d != null) {
+                  setState(() =>
+                      _dobCtrl.text = d.toIso8601String().split('T')[0]);
+                }
+              },
+            ),
+            const SizedBox(height: 12),
+
+            _tf(_parentNameCtrl, 'Parent / Guardian Name'),
+            const SizedBox(height: 12),
+
+            _tf(_parentMobCtrl, 'Parent Mobile', type: TextInputType.phone),
+            const SizedBox(height: 12),
+
+            TextFormField(
+              controller: _addressCtrl,
+              maxLines: 3,
+              decoration: const InputDecoration(
+                  labelText: 'Address', border: OutlineInputBorder()),
+            ),
+            const SizedBox(height: 24),
+
+            FilledButton(
+              onPressed: _goNext,
+              style: FilledButton.styleFrom(
+                  minimumSize: const Size.fromHeight(48)),
+              child: const Text('Next'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _tf(
+    TextEditingController ctrl,
+    String label, {
+    TextInputType type = TextInputType.text,
+    String? Function(String?)? v,
+  }) =>
+      TextFormField(
+        controller: ctrl,
+        keyboardType: type,
+        decoration: InputDecoration(
+            labelText: label, border: const OutlineInputBorder()),
+        validator: v,
+      );
 }
 
-// ── Face step widget ───────────────────────────────────────────────────────────
+// ── Face step widget ──────────────────────────────────────────────────────────
 
 class _FaceStep extends StatelessWidget {
   final bool hasFaceData;
@@ -547,8 +719,7 @@ class _FaceStep extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Container(
-            width: 80,
-            height: 80,
+            width: 80, height: 80,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: Colors.green.withValues(alpha: 0.12),
@@ -557,28 +728,22 @@ class _FaceStep extends StatelessWidget {
                 size: 44, color: Colors.green),
           ),
           const SizedBox(height: 20),
-          Text(
-            'Face Already Registered',
-            style: theme.textTheme.titleLarge
-                ?.copyWith(fontWeight: FontWeight.bold),
-          ),
+          Text('Face Already Registered',
+              style: theme.textTheme.titleLarge
+                  ?.copyWith(fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
           Text(
             "This student's face is on record. Keep it, or capture new photos to update it.",
             textAlign: TextAlign.center,
-            style: TextStyle(
-                fontSize: 14,
+            style: TextStyle(fontSize: 14,
                 color: theme.colorScheme.onSurface.withValues(alpha: 0.65)),
           ),
           const SizedBox(height: 40),
           FilledButton.icon(
             onPressed: onKeepFace,
             icon: submitting
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.white))
+                ? const SizedBox(width: 16, height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                 : const Icon(Icons.check_circle_outline),
             label: Text(submitting ? 'Saving…' : 'Keep Current Face & Save'),
             style: FilledButton.styleFrom(
@@ -618,8 +783,7 @@ class _FaceStep extends StatelessWidget {
                   : Container(
                       color: Colors.black87,
                       child: const Center(
-                          child: CircularProgressIndicator(
-                              color: Colors.white))),
+                          child: CircularProgressIndicator(color: Colors.white))),
             ),
           ),
           const SizedBox(height: 12),
@@ -683,23 +847,18 @@ class _FaceStep extends StatelessWidget {
             FilledButton.icon(
               onPressed: submitting ? null : onSubmitWithFace,
               icon: submitting
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: Colors.white))
+                  ? const SizedBox(width: 16, height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                   : const Icon(Icons.check_circle_outline),
               label: Text(submitting ? 'Saving…' : 'Save with New Face'),
               style: FilledButton.styleFrom(
                   minimumSize: const Size.fromHeight(48)),
             ),
             const SizedBox(height: 8),
-            TextButton(
-                onPressed: onReset, child: const Text('Retake Photos')),
+            TextButton(onPressed: onReset, child: const Text('Retake Photos')),
           ] else
             OutlinedButton.icon(
-              onPressed:
-                  (!autoCapturing && qualityScore > 0) ? onCaptureNow : null,
+              onPressed: (!autoCapturing && qualityScore > 0) ? onCaptureNow : null,
               icon: const Icon(Icons.camera_alt_outlined),
               label: Text(autoCapturing ? 'Capturing…' : 'Capture Now'),
               style: OutlinedButton.styleFrom(
