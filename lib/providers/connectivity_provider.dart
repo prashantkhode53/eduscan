@@ -9,12 +9,6 @@ class ConnectivityProvider extends ChangeNotifier {
 
   StreamSubscription<ConnectivityResult>? _subscription;
 
-  // Fires whenever connectivity is RESTORED (offline → online).
-  // WhatsAppProvider subscribes to this to auto-reconnect SSE.
-  final StreamController<void> _reconnectController =
-      StreamController<void>.broadcast();
-  Stream<void> get onReconnected => _reconnectController.stream;
-
   bool get isOnline => _isOnline;
 
   ConnectivityProvider() {
@@ -28,12 +22,7 @@ class ConnectivityProvider extends ChangeNotifier {
     notifyListeners();
 
     _subscription = Connectivity().onConnectivityChanged.listen((result) {
-      _isOnline = _hasConnection(result);
-
-      if (_isOnline && !_wasOnline) {
-        // Just came back online — broadcast so consumers can reconnect
-        _reconnectController.add(null);
-      }
+      _isOnline  = _hasConnection(result);
       _wasOnline = _isOnline;
       notifyListeners();
     });
@@ -48,7 +37,6 @@ class ConnectivityProvider extends ChangeNotifier {
   @override
   void dispose() {
     _subscription?.cancel();
-    _reconnectController.close();
     super.dispose();
   }
 }
