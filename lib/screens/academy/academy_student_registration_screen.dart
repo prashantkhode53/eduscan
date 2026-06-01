@@ -61,6 +61,12 @@ class _AcademyStudentRegistrationScreenState
   // â”€â”€ Submit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   bool _submitting = false;
 
+  // Two-phase save: the student's details (Personal/Parent/Courses) are
+  // persisted BEFORE the face scan so they're never lost if the scan fails.
+  // _studentId holds the created record; the face is attached afterwards.
+  String? _studentId;
+  bool _savingDetails = false;
+
   @override
   void initState() {
     super.initState();
@@ -99,7 +105,7 @@ class _AcademyStudentRegistrationScreenState
 
   // â”€â”€ Navigation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-  void _goNext() {
+  Future<void> _goNext() async {
     if (_step == 0 && !(_s1Key.currentState?.validate() ?? false)) return;
     // Step 1 (Parent & Address) has no required fields â€” validate if state exists,
     // but never block navigation if form hasn't rendered yet.
@@ -107,11 +113,17 @@ class _AcademyStudentRegistrationScreenState
       final s2Valid = _s2Key.currentState?.validate();
       if (s2Valid == false) return;
     }
-    if (_step == 2 && _selectedFees.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Select at least one course')),
-      );
-      return;
+    if (_step == 2) {
+      if (_selectedFees.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Select at least one course')),
+        );
+        return;
+      }
+      // Phase 1 — persist Personal/Parent/Course details BEFORE the face scan.
+      // Only advance to the face step once they're safely saved.
+      final saved = await _saveDetails();
+      if (!saved) return;
     }
     setState(() => _step++);
     _pageCtrl.animateToPage(_step,
@@ -120,6 +132,55 @@ class _AcademyStudentRegistrationScreenState
     // API failure doesn't permanently block them.
     if (_step == 2) _loadCourses();
     if (_step == 3) _initCamera();
+  }
+
+  /// Phase 1: create (or, after a back-navigation, update) the student's
+  /// details with no face attached. Returns true when persisted.
+  Future<bool> _saveDetails() async {
+    if (_savingDetails) return false;
+    setState(() => _savingDetails = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final courses = _selectedFees.entries
+          .map((e) => {'course_id': e.key, 'fee_amount': e.value})
+          .toList();
+      final details = <String, dynamic>{
+        'first_name':    _firstNameCtrl.text.trim(),
+        'last_name':     _lastNameCtrl.text.trim(),
+        'dob':           _dobCtrl.text.isNotEmpty ? _dobCtrl.text : null,
+        'gender':        _gender,
+        'mobile':        _mobileCtrl.text.trim(),
+        'email':         _emailCtrl.text.trim().isNotEmpty ? _emailCtrl.text.trim() : null,
+        'parent_name':   _parentNameCtrl.text.trim().isNotEmpty ? _parentNameCtrl.text.trim() : null,
+        'parent_mobile': _parentMobCtrl.text.trim().isNotEmpty ? _parentMobCtrl.text.trim() : null,
+        'address':       _addressCtrl.text.trim().isNotEmpty ? _addressCtrl.text.trim() : null,
+        'courses':       courses,
+      };
+
+      if (_studentId == null) {
+        final res = await AcademyApiService.registerStudent(details); // no face yet
+        _studentId = res['id'] as String?;
+      } else {
+        // Returning after a back-navigation — sync any edits to the same record.
+        await AcademyApiService.updateStudent(_studentId!, details);
+      }
+
+      if (mounted) {
+        messenger.showSnackBar(const SnackBar(
+            content: Text('Details saved — now capture the face'),
+            backgroundColor: Colors.green));
+      }
+      return _studentId != null;
+    } catch (e) {
+      if (mounted) {
+        messenger.showSnackBar(SnackBar(
+            content: Text(e.toString().replaceFirst('Exception: ', '')),
+            backgroundColor: Colors.red));
+      }
+      return false;
+    } finally {
+      if (mounted) setState(() => _savingDetails = false);
+    }
   }
 
   void _goBack() {
@@ -309,26 +370,17 @@ class _AcademyStudentRegistrationScreenState
 
   // â”€â”€ Submit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+  /// Phase 2: attach the captured face to the student saved in Phase 1.
   Future<void> _submit() async {
     setState(() => _submitting = true);
     try {
-      final courses = _selectedFees.entries
-          .map((e) => {'course_id': e.key, 'fee_amount': e.value})
-          .toList();
+      // Safety net: if details somehow weren't saved yet, save them first.
+      if (_studentId == null) {
+        final saved = await _saveDetails();
+        if (!saved) { if (mounted) setState(() => _submitting = false); return; }
+      }
 
-      await AcademyApiService.registerStudent({
-        'first_name':    _firstNameCtrl.text.trim(),
-        'last_name':     _lastNameCtrl.text.trim(),
-        'dob':           _dobCtrl.text.isNotEmpty ? _dobCtrl.text : null,
-        'gender':        _gender,
-        'mobile':        _mobileCtrl.text.trim(),
-        'email':         _emailCtrl.text.trim().isNotEmpty ? _emailCtrl.text.trim() : null,
-        'parent_name':   _parentNameCtrl.text.trim().isNotEmpty ? _parentNameCtrl.text.trim() : null,
-        'parent_mobile': _parentMobCtrl.text.trim().isNotEmpty ? _parentMobCtrl.text.trim() : null,
-        'address':       _addressCtrl.text.trim().isNotEmpty ? _addressCtrl.text.trim() : null,
-        'courses':       courses,
-        'face_images':   _faceImages,
-      });
+      await AcademyApiService.updateStudentFace(_studentId!, _faceImages);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -341,7 +393,9 @@ class _AcademyStudentRegistrationScreenState
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.toString()), backgroundColor: Colors.red),
+          SnackBar(
+              content: Text(e.toString().replaceFirst('Exception: ', '')),
+              backgroundColor: Colors.red),
         );
         setState(() => _submitting = false);
       }
@@ -368,7 +422,8 @@ class _AcademyStudentRegistrationScreenState
           ),
         ),
       ),
-      body: PageView(
+      body: Stack(children: [
+        PageView(
         controller: _pageCtrl,
         physics: const NeverScrollableScrollPhysics(),
         children: [
@@ -436,7 +491,15 @@ class _AcademyStudentRegistrationScreenState
             },
           ),
         ],
-      ),
+        ),
+        if (_savingDetails)
+          const Positioned.fill(
+            child: ColoredBox(
+              color: Color(0x66000000),
+              child: Center(child: CircularProgressIndicator()),
+            ),
+          ),
+      ]),
     );
   }
 }

@@ -138,6 +138,17 @@ class AcademyApiService {
     _parse(res);
   }
 
+  /// Phase 2 of registration / re-capture: attach or replace ONLY the face.
+  static Future<void> updateStudentFace(
+      String id, List<String> faceImages) async {
+    final res = await http
+        .patch(Uri.parse('${ApiEndpoints.academyStudents}/$id/face'),
+            headers: await _headers(),
+            body: jsonEncode({'face_images': faceImages}))
+        .timeout(_regTimeout);
+    _parse(res);
+  }
+
   // ── Fees ──────────────────────────────────────────────────────────────────
 
   static Future<Map<String, dynamic>> getFees({

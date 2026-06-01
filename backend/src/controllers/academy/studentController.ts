@@ -41,25 +41,33 @@ export async function registerStudent(
     if (!courses?.length) {
       return next(new AppError('At least one course must be selected', 400));
     }
-    if (!face_images?.length) {
-      return next(new AppError('Face images are required for registration', 400));
-    }
 
-    // 1 — Generate face embedding via InsightFace
-    const embedResult = await batchEmbed(face_images);
-    if (!embedResult.success || !embedResult.embedding) {
-      return next(new AppError(
-        `Face registration failed: ${embedResult.reason ?? 'no face detected'}`, 422
-      ));
-    }
+    // Face is OPTIONAL here. The registration UI saves the student's details
+    // first (so they're never lost if the scan or InsightFace service fails)
+    // and attaches the face in a second step via PATCH /:id/face. A one-shot
+    // create that includes face_images still behaves exactly as before.
+    let embedding: number[] | null = null;
+    let quality:   number | null   = null;
+    if (face_images?.length) {
+      // 1 — Generate face embedding via InsightFace
+      const embedResult = await batchEmbed(face_images);
+      if (!embedResult.success || !embedResult.embedding) {
+        return next(new AppError(
+          `Face registration failed: ${embedResult.reason ?? 'no face detected'}`, 422
+        ));
+      }
 
-    // 2 — Duplicate check (confidence >= 0.88 = already registered)
-    const matchResult = await matchFace(face_images[0]);
-    if (matchResult.matched && (matchResult.confidence ?? 0) >= 0.88) {
-      return next(new AppError(
-        `Face already registered — ${(matchResult.confidence! * 100).toFixed(1)}% match with existing student.`,
-        409
-      ));
+      // 2 — Duplicate check (confidence >= 0.88 = already registered)
+      const matchResult = await matchFace(face_images[0]);
+      if (matchResult.matched && (matchResult.confidence ?? 0) >= 0.88) {
+        return next(new AppError(
+          `Face already registered — ${(matchResult.confidence! * 100).toFixed(1)}% match with existing student.`,
+          409
+        ));
+      }
+
+      embedding = embedResult.embedding;
+      quality   = embedResult.quality ?? null;
     }
 
     // 3 — Validate all course IDs exist in this academy
@@ -77,6 +85,14 @@ export async function registerStudent(
     // 4 — Generate student ID + persist in academy schema
     const studentId = await generateStudentId(academySlug);
 
+    // First fee is due at the end of the current month. This matches
+    // updateStudent's fee logic so a two-phase save (details now, edits on a
+    // back-navigation) never produces duplicate fee records for the same month.
+    const month   = new Date().toISOString().substring(0, 7);
+    const dueDate = new Date(
+      new Date().getFullYear(), new Date().getMonth() + 1, 0
+    ).toISOString().split('T')[0];
+
     await academyTransaction(academySlug, async (client) => {
       await client.query(
         `INSERT INTO students
@@ -88,42 +104,46 @@ export async function registerStudent(
           dob ?? null, gender ?? null, mobile,
           email ?? null, parent_name ?? null, parent_mobile ?? null,
           address ?? null,
-          JSON.stringify(embedResult.embedding),
-          embedResult.quality ?? null,
+          embedding ? JSON.stringify(embedding) : null,
+          quality,
         ]
       );
 
-      // Enrol in each course + generate first fee record
+      // Enrol in each course + generate first fee record (idempotent)
       for (const sel of courses) {
         await client.query(
           `INSERT INTO student_courses (student_id, course_id, fee_amount, start_date)
-           VALUES ($1,$2,$3,CURRENT_DATE)`,
+           VALUES ($1,$2,$3,CURRENT_DATE)
+           ON CONFLICT (student_id, course_id) DO NOTHING`,
           [studentId, sel.course_id, sel.fee_amount]
         );
 
-        const dueDate = new Date();
-        dueDate.setDate(1);
-        dueDate.setMonth(dueDate.getMonth() + 1);
-
         await client.query(
           `INSERT INTO fee_records (student_id, course_id, amount_due, due_date, status)
-           VALUES ($1,$2,$3,$4,'pending')`,
-          [studentId, sel.course_id, sel.fee_amount,
-           dueDate.toISOString().split('T')[0]]
+           SELECT $1::varchar, $2::uuid, $3::numeric, $4::date, 'pending'
+           WHERE NOT EXISTS (
+             SELECT 1 FROM fee_records fr
+             WHERE fr.student_id = $1
+               AND fr.course_id  = $2
+               AND TO_CHAR(fr.due_date, 'YYYY-MM') = $5::text
+           )`,
+          [studentId, sel.course_id, sel.fee_amount, dueDate, month]
         );
       }
     });
 
-    // 5 — Push embedding to InsightFace Redis cache
-    await cacheUpsert({
-      student_id:  studentId,
-      embedding:   embedResult.embedding,
-      first_name:  first_name.trim(),
-      last_name:   last_name.trim(),
-      class_grade: 'academy',
-      division:    academySlug.substring(0, 8),
-      roll_no:     null,
-    });
+    // 5 — Push embedding to InsightFace Redis cache (only when a face was given)
+    if (embedding) {
+      await cacheUpsert({
+        student_id:  studentId,
+        embedding,
+        first_name:  first_name.trim(),
+        last_name:   last_name.trim(),
+        class_grade: 'academy',
+        division:    academySlug.substring(0, 8),
+        roll_no:     null,
+      });
+    }
 
     res.status(201).json({
       success: true,
@@ -435,6 +455,67 @@ export async function updateStudent(
     }
 
     res.json({ success: true, message: 'Student updated successfully' });
+  } catch (err) { next(err); }
+}
+
+// ── PATCH /api/academy/students/:id/face ──────────────────────────────────────
+// Phase 2 of registration (and re-capture): attaches/updates ONLY the face
+// embedding for an existing student — no enrolment or fee side-effects. Lets
+// the UI persist the student's details before the scan and the face after.
+
+export async function updateStudentFace(
+  req: Request, res: Response, next: NextFunction
+): Promise<void> {
+  try {
+    const { academySlug } = req.academyUser!;
+    const { id } = req.params;
+    const { face_images } = req.body as { face_images: string[] };
+
+    if (!face_images?.length) {
+      return next(new AppError('face_images are required', 400));
+    }
+
+    const student = await academyQueryOne<{
+      id: string; first_name: string; last_name: string;
+    }>(academySlug, `SELECT id, first_name, last_name FROM students WHERE id = $1`, [id]);
+    if (!student) return next(new AppError('Student not found', 404));
+
+    const embed = await batchEmbed(face_images);
+    if (!embed.success || !embed.embedding) {
+      return next(new AppError(
+        `Face capture failed: ${embed.reason ?? 'no face detected'}`, 422
+      ));
+    }
+
+    // Duplicate check — a high-confidence match to a DIFFERENT student means
+    // this face is already registered to someone else.
+    const match = await matchFace(face_images[0]);
+    if (match.matched && match.student_id && match.student_id !== id &&
+        (match.confidence ?? 0) >= 0.88) {
+      return next(new AppError(
+        `Face already registered to another student — ${(match.confidence! * 100).toFixed(1)}% match.`,
+        409
+      ));
+    }
+
+    await academyExec(
+      academySlug,
+      `UPDATE students SET face_embedding = $1, face_quality = $2, updated_at = NOW()
+       WHERE id = $3`,
+      [JSON.stringify(embed.embedding), embed.quality ?? null, id]
+    );
+
+    await cacheUpsert({
+      student_id:  id,
+      embedding:   embed.embedding,
+      first_name:  student.first_name,
+      last_name:   student.last_name,
+      class_grade: 'academy',
+      division:    academySlug.substring(0, 8),
+      roll_no:     null,
+    });
+
+    res.json({ success: true, message: 'Face saved successfully' });
   } catch (err) { next(err); }
 }
 
