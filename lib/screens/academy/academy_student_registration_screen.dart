@@ -134,17 +134,8 @@ class _AcademyStudentRegistrationScreenState
     if (_step == 3) _initCamera();
   }
 
-  /// Phase 1: create (or, after a back-navigation, update) the student's
-  /// details with no face attached. Returns true when persisted.
-  Future<bool> _saveDetails() async {
-    if (_savingDetails) return false;
-    setState(() => _savingDetails = true);
-    final messenger = ScaffoldMessenger.of(context);
-    try {
-      final courses = _selectedFees.entries
-          .map((e) => {'course_id': e.key, 'fee_amount': e.value})
-          .toList();
-      final details = <String, dynamic>{
+  /// Assembles the student detail payload (everything except the face).
+  Map<String, dynamic> _detailsBody() => {
         'first_name':    _firstNameCtrl.text.trim(),
         'last_name':     _lastNameCtrl.text.trim(),
         'dob':           _dobCtrl.text.isNotEmpty ? _dobCtrl.text : null,
@@ -154,28 +145,47 @@ class _AcademyStudentRegistrationScreenState
         'parent_name':   _parentNameCtrl.text.trim().isNotEmpty ? _parentNameCtrl.text.trim() : null,
         'parent_mobile': _parentMobCtrl.text.trim().isNotEmpty ? _parentMobCtrl.text.trim() : null,
         'address':       _addressCtrl.text.trim().isNotEmpty ? _addressCtrl.text.trim() : null,
-        'courses':       courses,
+        'courses': _selectedFees.entries
+            .map((e) => {'course_id': e.key, 'fee_amount': e.value})
+            .toList(),
       };
 
+  /// Phase 1: persist the student's details before the face scan so they are
+  /// never lost if the scan fails. Returns true when the wizard may advance to
+  /// the face step.
+  ///
+  /// Backend-version safe: if the server still requires a face at creation
+  /// time, we don't block — the details and face are saved together after the
+  /// scan instead (see [_submit]). Genuine validation errors still stop here so
+  /// they surface immediately rather than after capturing photos.
+  Future<bool> _saveDetails() async {
+    if (_savingDetails) return false;
+    setState(() => _savingDetails = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
       if (_studentId == null) {
-        final res = await AcademyApiService.registerStudent(details); // no face yet
+        final res = await AcademyApiService.registerStudent(_detailsBody());
         _studentId = res['id'] as String?;
+        if (mounted) {
+          messenger.showSnackBar(const SnackBar(
+              content: Text("Details saved. Now capture the student's face."),
+              backgroundColor: Colors.green));
+        }
       } else {
-        // Returning after a back-navigation — sync any edits to the same record.
-        await AcademyApiService.updateStudent(_studentId!, details);
+        // Returning after a back-navigation - sync any edits to the same record.
+        await AcademyApiService.updateStudent(_studentId!, _detailsBody());
       }
-
-      if (mounted) {
-        messenger.showSnackBar(const SnackBar(
-            content: Text('Details saved — now capture the face'),
-            backgroundColor: Colors.green));
-      }
-      return _studentId != null;
+      return true;
     } catch (e) {
+      final msg = e.toString().replaceFirst('Exception: ', '');
+      // Older backend that still requires a face to create a student: proceed
+      // and let the single combined save happen after the scan.
+      if (_studentId == null && msg.contains('Face images are required')) {
+        return true;
+      }
       if (mounted) {
-        messenger.showSnackBar(SnackBar(
-            content: Text(e.toString().replaceFirst('Exception: ', '')),
-            backgroundColor: Colors.red));
+        messenger.showSnackBar(
+            SnackBar(content: Text(msg), backgroundColor: Colors.red));
       }
       return false;
     } finally {
@@ -370,17 +380,24 @@ class _AcademyStudentRegistrationScreenState
 
   // â”€â”€ Submit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-  /// Phase 2: attach the captured face to the student saved in Phase 1.
+  /// Phase 2: attach the captured face and finish.
+  ///
+  /// If Phase 1 already created the student we only update the face. Otherwise
+  /// (older backend, or a deferred Phase 1) we do a single create with
+  /// everything — so registration always completes regardless of backend
+  /// version and can never get stuck.
   Future<void> _submit() async {
     setState(() => _submitting = true);
     try {
-      // Safety net: if details somehow weren't saved yet, save them first.
-      if (_studentId == null) {
-        final saved = await _saveDetails();
-        if (!saved) { if (mounted) setState(() => _submitting = false); return; }
+      if (_studentId != null) {
+        await AcademyApiService.updateStudentFace(_studentId!, _faceImages);
+      } else {
+        final res = await AcademyApiService.registerStudent({
+          ..._detailsBody(),
+          'face_images': _faceImages,
+        });
+        _studentId = res['id'] as String?;
       }
-
-      await AcademyApiService.updateStudentFace(_studentId!, _faceImages);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -751,14 +768,14 @@ class _Step4 extends StatelessWidget {
           // Status / quality hint
           Text(
             done
-                ? 'All $requiredSamples photos captured!'
+                ? 'All $requiredSamples photos captured'
                 : autoCapturing
-                    ? 'Hold still â€” capturing ${captureCount + 1} of $requiredSamplesâ€¦'
+                    ? 'Hold still - capturing photo ${captureCount + 1} of $requiredSamples...'
                     : qualityScore >= 0.55
-                        ? 'Hold still â€” auto-capturingâ€¦'
+                        ? 'Hold still - capturing automatically...'
                         : qualityHint.isNotEmpty
                             ? qualityHint
-                            : 'Position your face in the oval',
+                            : 'Position your face within the oval',
             textAlign: TextAlign.center,
             style: TextStyle(
               fontWeight: FontWeight.w600,
@@ -820,7 +837,7 @@ class _Step4 extends StatelessWidget {
                       child: CircularProgressIndicator(
                           strokeWidth: 2, color: Colors.white))
                   : const Icon(Icons.check_circle_outline),
-              label: Text(submitting ? 'Registeringâ€¦' : 'Register Student'),
+              label: Text(submitting ? 'Registering...' : 'Register Student'),
               style: FilledButton.styleFrom(
                   minimumSize: const Size.fromHeight(48)),
             ),
@@ -830,7 +847,7 @@ class _Step4 extends StatelessWidget {
             OutlinedButton.icon(
               onPressed: (!autoCapturing && qualityScore > 0) ? onCaptureNow : null,
               icon: const Icon(Icons.camera_alt_outlined),
-              label: Text(autoCapturing ? 'Capturingâ€¦' : 'Capture Now'),
+              label: Text(autoCapturing ? 'Capturing...' : 'Capture Now'),
               style: OutlinedButton.styleFrom(
                   minimumSize: const Size.fromHeight(48)),
             ),

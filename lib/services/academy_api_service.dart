@@ -94,10 +94,13 @@ class AcademyApiService {
 
   static Future<Map<String, dynamic>> registerStudent(
       Map<String, dynamic> body) async {
+    // The long timeout only applies when a face is included (InsightFace
+    // embedding is slow); a details-only "save before scan" is a quick DB write.
+    final hasFace = (body['face_images'] as List?)?.isNotEmpty ?? false;
     final res = await http
         .post(Uri.parse(ApiEndpoints.academyStudents),
             headers: await _headers(), body: jsonEncode(body))
-        .timeout(_regTimeout);
+        .timeout(hasFace ? _regTimeout : _timeout);
     return _parse(res) as Map<String, dynamic>;
   }
 
