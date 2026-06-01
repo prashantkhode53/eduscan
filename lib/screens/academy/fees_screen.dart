@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../services/academy_api_service.dart';
+import 'student_fees_detail_tab.dart';
 
 class FeesScreen extends StatefulWidget {
   const FeesScreen({super.key});
@@ -32,7 +33,10 @@ class _FeesScreenState extends State<FeesScreen>
   @override
   void initState() {
     super.initState();
-    _tabCtrl = TabController(length: _tabs.length, vsync: this);
+    // +1 for the "By Student" tab appended after the status tabs.
+    _tabCtrl = TabController(length: _tabs.length + 1, vsync: this);
+    // Rebuild on tab change so the month strip can be hidden on the By Student tab.
+    _tabCtrl.addListener(() { if (mounted) setState(() {}); });
     _load();
   }
 
@@ -157,21 +161,24 @@ class _FeesScreenState extends State<FeesScreen>
         bottom: TabBar(
           controller: _tabCtrl,
           isScrollable: true,
-          tabs: _tabs
-              .map((t) => Tab(
-                    child: Text(
-                      t.status == null
-                          ? 'All (${_all.length})'
-                          : '${t.label} (${_filtered(t.status).length})',
-                    ),
-                  ))
-              .toList(),
+          tabs: [
+            ..._tabs.map((t) => Tab(
+                  child: Text(
+                    t.status == null
+                        ? 'All (${_all.length})'
+                        : '${t.label} (${_filtered(t.status).length})',
+                  ),
+                )),
+            const Tab(text: 'By Student'),
+          ],
         ),
       ),
       body: Column(
         children: [
-          // Month header + summary strip
-          Container(
+          // Month header + summary strip (hidden on the By Student tab,
+          // which is not scoped to a single month).
+          if (_tabCtrl.index < _tabs.length)
+            Container(
             color: theme.colorScheme.surfaceContainerLow,
             padding:
                 const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -226,25 +233,25 @@ class _FeesScreenState extends State<FeesScreen>
           Expanded(
             child: TabBarView(
               controller: _tabCtrl,
-              children: _tabs
-                  .map((t) => _FeeList(
-                        records: _filtered(t.status),
-                        loading: _loading,
-                        onCollect: (record) async {
-                          final ok = await showModalBottomSheet<bool>(
-                            context: context,
-                            isScrollControlled: true,
-                            useSafeArea: true,
-                            shape: const RoundedRectangleBorder(
-                                borderRadius: BorderRadius.vertical(
-                                    top: Radius.circular(20))),
-                            builder: (_) =>
-                                FeeCollectionSheet(record: record),
-                          );
-                          if (ok == true) _load();
-                        },
-                      ))
-                  .toList(),
+              children: [
+                ..._tabs.map((t) => _FeeList(
+                      records: _filtered(t.status),
+                      loading: _loading,
+                      onCollect: (record) async {
+                        final ok = await showModalBottomSheet<bool>(
+                          context: context,
+                          isScrollControlled: true,
+                          useSafeArea: true,
+                          shape: const RoundedRectangleBorder(
+                              borderRadius: BorderRadius.vertical(
+                                  top: Radius.circular(20))),
+                          builder: (_) => FeeCollectionSheet(record: record),
+                        );
+                        if (ok == true) _load();
+                      },
+                    )),
+                const StudentFeesDetailTab(),
+              ],
             ),
           ),
         ],
