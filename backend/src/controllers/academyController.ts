@@ -23,7 +23,7 @@ function jwtSecret(): string {
 
 function issueToken(payload: AcademyUser): string {
   return jwt.sign(payload, jwtSecret(), {
-    expiresIn: process.env.JWT_EXPIRES_IN ?? '8h',
+    expiresIn: process.env.JWT_EXPIRES_IN ?? '365d',
   } as import('jsonwebtoken').SignOptions);
 }
 

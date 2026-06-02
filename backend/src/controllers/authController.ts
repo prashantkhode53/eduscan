@@ -77,7 +77,7 @@ export async function login(req: Request, res: Response, next: NextFunction): Pr
 
     const admin = toAdmin(row);
     const token = jwt.sign(admin, secret, {
-      expiresIn: process.env.JWT_EXPIRES_IN ?? '8h',
+      expiresIn: process.env.JWT_EXPIRES_IN ?? '365d',
     } as jwt.SignOptions);
 
     const response: ApiResponse<AuthResponse> = {
