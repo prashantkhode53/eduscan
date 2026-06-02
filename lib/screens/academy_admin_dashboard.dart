@@ -8,6 +8,7 @@ import 'academy/academy_student_list_screen.dart';
 import 'academy/academy_student_registration_screen.dart';
 import 'academy/fees_screen.dart';
 import 'academy/academy_face_scan_screen.dart';
+import 'academy/qr_code_screen.dart';
 
 class AcademyAdminDashboard extends StatefulWidget {
   const AcademyAdminDashboard({super.key});
@@ -228,6 +229,16 @@ class _HomeTabState extends State<_HomeTab> {
                     );
                     _loadStats();
                   },
+                ),
+                _QuickAction(
+                  icon: Icons.qr_code_2_outlined,
+                  label: 'QR Codes',
+                  color: Colors.teal,
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const QrCodeScreen()),
+                  ),
                 ),
               ],
             ),

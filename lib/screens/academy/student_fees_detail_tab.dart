@@ -1,5 +1,10 @@
+import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import '../../services/academy_api_service.dart';
+import '../../services/fee_pdf_service.dart';
+import '../../providers/auth_provider.dart';
+import 'package:provider/provider.dart';
 
 /// "By Student" tab of Fees Management.
 ///
@@ -135,6 +140,7 @@ class _StudentFeesDetailTabState extends State<StudentFeesDetailTab>
         builder: (_) => StudentFeeDetailScreen(
           studentId:   student['id'] as String,
           studentName: '${student['first_name'] ?? ''} ${student['last_name'] ?? ''}'.trim(),
+          mobile:      student['mobile'] as String? ?? '',
           courseId:    _courseId,
           courseName:  _courseName,
         ),
@@ -491,13 +497,15 @@ class _StudentTile extends StatelessWidget {
 class StudentFeeDetailScreen extends StatefulWidget {
   final String studentId;
   final String studentName;
-  final String? courseId;   // when set, scope the view to this course/batch
+  final String mobile;
+  final String? courseId;
   final String? courseName;
 
   const StudentFeeDetailScreen({
     super.key,
     required this.studentId,
     required this.studentName,
+    this.mobile = '',
     this.courseId,
     this.courseName,
   });
@@ -511,10 +519,54 @@ class _StudentFeeDetailScreenState extends State<StudentFeeDetailScreen> {
   String? _error;
   List<Map<String, dynamic>> _records = [];
 
+  // Active QR for payment display
+  Map<String, dynamic>? _activeQr;
+  bool _loadingQr = true;
+
+  // PDF generation
+  bool _generatingPdf = false;
+
   @override
   void initState() {
     super.initState();
     _load();
+    _loadActiveQr();
+  }
+
+  Future<void> _loadActiveQr() async {
+    try {
+      final qr = await AcademyApiService.getActiveQrCode();
+      if (mounted) setState(() { _activeQr = qr; _loadingQr = false; });
+    } catch (_) {
+      if (mounted) setState(() => _loadingQr = false);
+    }
+  }
+
+  Future<void> _downloadPdf() async {
+    if (_generatingPdf) return;
+    setState(() => _generatingPdf = true);
+    try {
+      final academyName =
+          context.read<AuthProvider>().academyUser?.academyName ?? 'Academy';
+      await FeePdfService.generate(
+        context:     context,
+        academyName: academyName,
+        studentName: widget.studentName,
+        studentId:   widget.studentId,
+        mobile:      widget.mobile,
+        courseName:  widget.courseName ?? '',
+        records:     _records,
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('PDF error: ${e.toString().replaceFirst("Exception: ", "")}'),
+          backgroundColor: Colors.red,
+        ));
+      }
+    } finally {
+      if (mounted) setState(() => _generatingPdf = false);
+    }
   }
 
   Future<void> _load() async {
@@ -560,6 +612,20 @@ class _StudentFeeDetailScreenState extends State<StudentFeeDetailScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.studentName.isEmpty ? 'Fee Details' : widget.studentName),
+        actions: [
+          if (!_loading && _records.isNotEmpty)
+            _generatingPdf
+                ? const Padding(
+                    padding: EdgeInsets.all(14),
+                    child: SizedBox(
+                        width: 20, height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)))
+                : IconButton(
+                    icon: const Icon(Icons.picture_as_pdf_outlined),
+                    tooltip: 'Download PDF',
+                    onPressed: _downloadPdf,
+                  ),
+        ],
         bottom: widget.courseName != null
             ? PreferredSize(
                 preferredSize: const Size.fromHeight(28),
@@ -613,6 +679,10 @@ class _StudentFeeDetailScreenState extends State<StudentFeeDetailScreen> {
                           ),
                           const SizedBox(height: 10),
                           ..._buildInstallments(),
+                          const SizedBox(height: 8),
+                          // Active QR for payment
+                          if (!_loadingQr && _activeQr != null)
+                            _ActiveQrCard(qr: _activeQr!),
                         ],
                       ),
                     ),
@@ -920,6 +990,76 @@ class _ErrorState extends StatelessWidget {
               icon: const Icon(Icons.refresh),
               label: const Text('Retry'),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Active QR card ────────────────────────────────────────────────────────────
+
+class _ActiveQrCard extends StatelessWidget {
+  final Map<String, dynamic> qr;
+  const _ActiveQrCard({required this.qr});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme   = Theme.of(context);
+    final imgData = qr['image_data'] as String? ?? '';
+    Uint8List? bytes;
+    try {
+      final b64 = imgData.contains(',') ? imgData.split(',').last : imgData;
+      bytes = base64Decode(b64);
+    } catch (_) {}
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.qr_code_2, color: theme.colorScheme.primary, size: 20),
+                const SizedBox(width: 8),
+                Text('Pay via QR',
+                    style: theme.textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.bold)),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (bytes != null)
+              Center(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.memory(bytes, width: 200, height: 200, fit: BoxFit.contain),
+                ),
+              ),
+            if (bytes == null)
+              Center(
+                child: Icon(Icons.qr_code_2_outlined, size: 80,
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.3)),
+              ),
+            const SizedBox(height: 10),
+            Center(
+              child: Text(
+                qr['name'] as String? ?? 'Academy QR',
+                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+              ),
+            ),
+            if ((qr['description'] as String?)?.isNotEmpty ?? false) ...[
+              const SizedBox(height: 4),
+              Center(
+                child: Text(
+                  qr['description'] as String,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
+                ),
+              ),
+            ],
           ],
         ),
       ),
