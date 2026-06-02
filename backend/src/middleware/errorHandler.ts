@@ -3,11 +3,13 @@ import { Request, Response, NextFunction } from 'express';
 export class AppError extends Error {
   public statusCode: number;
   public isOperational: boolean;
+  public data?: Record<string, unknown>;
 
-  constructor(message: string, statusCode: number) {
+  constructor(message: string, statusCode: number, data?: Record<string, unknown>) {
     super(message);
     this.statusCode = statusCode;
     this.isOperational = true;
+    this.data = data;
     Error.captureStackTrace(this, this.constructor);
   }
 }
@@ -40,9 +42,13 @@ export const errorHandler = (
       ? 'Something went wrong. Please try again.'
       : `Server error: ${err.message}`;
 
+  const appErr = err as AppError;
   res.status(statusCode).json({
     success: false,
     message: clientMessage,
+    // Include structured data only for operational errors (e.g. FACE_DUPLICATE 409)
+    // — never leak internal data from unexpected 500s.
+    ...(isOperational && appErr.data ? { data: appErr.data } : {}),
     ...(!isProd && { stack: err.stack }),
   });
 };

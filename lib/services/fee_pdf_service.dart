@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:open_filex/open_filex.dart';
@@ -61,6 +63,9 @@ class FeePdfService {
   /// [studentName], [studentId], [mobile], [courseName] — student info.
   /// [academyName] — header branding.
   /// [records] — sorted list of fee_records from getStudentFees API.
+  /// [qrImageData] — optional base64 QR image (with or without data-URI prefix).
+  /// [qrName] — display name below the QR image.
+  /// [qrDescription] — optional sub-label below the QR name.
   static Future<void> generate({
     required BuildContext context,
     required String academyName,
@@ -69,6 +74,9 @@ class FeePdfService {
     required String mobile,
     required String courseName,
     required List<Map<String, dynamic>> records,
+    String? qrImageData,
+    String? qrName,
+    String? qrDescription,
   }) async {
     // Derive summary totals
     double totalDue  = 0, totalPaid = 0;
@@ -88,6 +96,15 @@ class FeePdfService {
       (r) => r['status'] != 'paid',
       orElse: () => const {},
     );
+
+    // Decode QR image bytes (if provided)
+    Uint8List? qrBytes;
+    if (qrImageData != null && qrImageData.isNotEmpty) {
+      try {
+        final b64 = qrImageData.contains(',') ? qrImageData.split(',').last : qrImageData;
+        qrBytes = base64Decode(b64);
+      } catch (_) {}
+    }
 
     final pdf = pw.Document();
     final primary = PdfColor.fromHex('#1A56DB');
@@ -346,6 +363,62 @@ class FeePdfService {
           }),
           pw.Container(height: 1, color: divider),
           pw.SizedBox(height: 16),
+
+          // ── QR Code section ──────────────────────────────────────────────
+          if (qrBytes != null) ...[
+            pw.Text('Payment QR Code',
+                style: pw.TextStyle(
+                    fontSize: 11, fontWeight: pw.FontWeight.bold, color: dark)),
+            pw.SizedBox(height: 8),
+            pw.Container(
+              padding: const pw.EdgeInsets.all(12),
+              decoration: pw.BoxDecoration(
+                color: lightBg,
+                borderRadius: const pw.BorderRadius.all(pw.Radius.circular(5)),
+                border: pw.Border.all(color: divider),
+              ),
+              child: pw.Row(
+                crossAxisAlignment: pw.CrossAxisAlignment.center,
+                children: [
+                  pw.Image(pw.MemoryImage(qrBytes), width: 110, height: 110),
+                  pw.SizedBox(width: 16),
+                  pw.Expanded(
+                    child: pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
+                      children: [
+                        pw.Text(
+                          'Scan to Pay',
+                          style: pw.TextStyle(
+                              fontSize: 9, color: grey),
+                        ),
+                        pw.SizedBox(height: 4),
+                        pw.Text(
+                          qrName ?? 'Academy QR',
+                          style: pw.TextStyle(
+                              fontSize: 11,
+                              fontWeight: pw.FontWeight.bold,
+                              color: dark),
+                        ),
+                        if (qrDescription != null && qrDescription.isNotEmpty) ...[
+                          pw.SizedBox(height: 4),
+                          pw.Text(
+                            qrDescription,
+                            style: pw.TextStyle(fontSize: 8, color: grey),
+                          ),
+                        ],
+                        pw.SizedBox(height: 8),
+                        pw.Text(
+                          'Use any UPI app to scan and pay your fee installment.',
+                          style: pw.TextStyle(fontSize: 7.5, color: grey),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            pw.SizedBox(height: 16),
+          ],
 
           // ── Footer note ──────────────────────────────────────────────────
           pw.Container(

@@ -415,15 +415,44 @@ class _AcademyStudentRegistrationScreenState
         Navigator.pop(context, true);
       }
     } catch (e) {
-      if (mounted) {
+      if (!mounted) return;
+      setState(() => _submitting = false);
+      if (e is FaceDuplicateException) {
+        _showFaceDuplicateDialog(e);
+      } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
               content: Text(e.toString().replaceFirst('Exception: ', '')),
               backgroundColor: Colors.red),
         );
-        setState(() => _submitting = false);
       }
     }
+  }
+
+  void _showFaceDuplicateDialog(FaceDuplicateException e) {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _FaceDuplicateDialog(
+        exception: e,
+        onRetake: () {
+          Navigator.pop(context); // close dialog
+          // Reset face captures so the admin can try again (e.g. different
+          // person stepped in front of camera).
+          setState(() {
+            _faceImages.clear();
+            _captureCount = 0;
+            _done         = false;
+            _overlayState = FaceOverlayState.idle;
+          });
+          _startStream();
+        },
+        onCancel: () {
+          Navigator.pop(context); // close dialog
+          Navigator.pop(context); // leave registration screen
+        },
+      ),
+    );
   }
 
   // â”€â”€ Build â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -897,4 +926,175 @@ class _Step4 extends StatelessWidget {
       ),
     );
   }
+}
+
+// ── Face Duplicate Dialog ─────────────────────────────────────────────────────
+
+class _FaceDuplicateDialog extends StatelessWidget {
+  final FaceDuplicateException exception;
+  final VoidCallback onRetake;
+  final VoidCallback onCancel;
+
+  const _FaceDuplicateDialog({
+    required this.exception,
+    required this.onRetake,
+    required this.onCancel,
+  });
+
+  String _fmtDate(String? raw) {
+    if (raw == null || raw.isEmpty) return '';
+    try {
+      final d = DateTime.parse(raw).toLocal();
+      const m = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      return '${d.day.toString().padLeft(2, '0')} ${m[d.month]} ${d.year}';
+    } catch (_) {
+      return raw.split('T').first;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final e = exception;
+    final pct = e.confidence != null
+        ? '${(e.confidence! * 100).toStringAsFixed(1)}%'
+        : null;
+
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      titlePadding: EdgeInsets.zero,
+      title: Container(
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+        decoration: BoxDecoration(
+          color: Colors.red.shade50,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+        ),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 22,
+              backgroundColor: Colors.red.shade100,
+              child: Icon(Icons.face_retouching_off,
+                  color: Colors.red.shade700, size: 24),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Face Already Registered',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.red.shade800)),
+                  if (pct != null)
+                    Text('$pct confidence match',
+                        style: TextStyle(
+                            fontSize: 12, color: Colors.red.shade600)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'This face is already enrolled under another student profile. '
+            'Registration cannot proceed to prevent duplicate entries.',
+            style: TextStyle(
+                fontSize: 13,
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.75)),
+          ),
+          const SizedBox(height: 16),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceContainerLow,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                  color: theme.colorScheme.outlineVariant),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _row(theme, Icons.badge_outlined, 'Student ID',
+                    e.studentId ?? '—'),
+                if (e.studentName != null && e.studentName!.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  _row(theme, Icons.person_outline, 'Name', e.studentName!),
+                ],
+                if (e.courses.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  _row(theme, Icons.menu_book_outlined, 'Course(s)',
+                      e.courses.join(', ')),
+                ],
+                if (e.registeredAt != null && e.registeredAt!.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  _row(theme, Icons.calendar_today_outlined, 'Registered on',
+                      _fmtDate(e.registeredAt)),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Icon(Icons.info_outline,
+                  size: 14,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.5)),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'If this is a different person, ask them to retake the photos.',
+                  style: TextStyle(
+                      fontSize: 11,
+                      color: theme.colorScheme.onSurface
+                          .withValues(alpha: 0.55)),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+      actionsPadding:
+          const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      actions: [
+        OutlinedButton.icon(
+          onPressed: onRetake,
+          icon: const Icon(Icons.camera_alt_outlined, size: 18),
+          label: const Text('Retake Photos'),
+        ),
+        FilledButton.icon(
+          onPressed: onCancel,
+          icon: const Icon(Icons.cancel_outlined, size: 18),
+          label: const Text('Cancel Registration'),
+          style: FilledButton.styleFrom(backgroundColor: Colors.red),
+        ),
+      ],
+    );
+  }
+
+  Widget _row(ThemeData theme, IconData icon, String label, String value) =>
+      Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon,
+              size: 15,
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.55)),
+          const SizedBox(width: 8),
+          Text('$label: ',
+              style: TextStyle(
+                  fontSize: 12,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.65))),
+          Expanded(
+            child: Text(value,
+                style: const TextStyle(
+                    fontSize: 12, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      );
 }

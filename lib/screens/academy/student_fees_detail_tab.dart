@@ -549,13 +549,16 @@ class _StudentFeeDetailScreenState extends State<StudentFeeDetailScreen> {
       final academyName =
           context.read<AuthProvider>().academyUser?.academyName ?? 'Academy';
       await FeePdfService.generate(
-        context:     context,
-        academyName: academyName,
-        studentName: widget.studentName,
-        studentId:   widget.studentId,
-        mobile:      widget.mobile,
-        courseName:  widget.courseName ?? '',
-        records:     _records,
+        context:        context,
+        academyName:    academyName,
+        studentName:    widget.studentName,
+        studentId:      widget.studentId,
+        mobile:         widget.mobile,
+        courseName:     widget.courseName ?? '',
+        records:        _records,
+        qrImageData:    _activeQr?['image_data'] as String?,
+        qrName:         _activeQr?['name'] as String?,
+        qrDescription:  _activeQr?['description'] as String?,
       );
     } catch (e) {
       if (mounted) {

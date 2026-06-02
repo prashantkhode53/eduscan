@@ -3,6 +3,29 @@ import 'package:http/http.dart' as http;
 import '../constants/api_endpoints.dart';
 import 'storage_service.dart';
 
+/// Thrown when the backend returns a 409 FACE_DUPLICATE response.
+/// Carries the matched student's details so the UI can show a rich warning.
+class FaceDuplicateException implements Exception {
+  final String message;
+  final String? studentId;
+  final String? studentName;
+  final List<String> courses;
+  final String? registeredAt;
+  final double? confidence;
+
+  const FaceDuplicateException({
+    required this.message,
+    this.studentId,
+    this.studentName,
+    this.courses = const [],
+    this.registeredAt,
+    this.confidence,
+  });
+
+  @override
+  String toString() => message;
+}
+
 /// All API calls scoped to an academy (requires academy JWT in Authorization header).
 class AcademyApiService {
   static const Duration _timeout     = Duration(seconds: 30);
@@ -20,6 +43,26 @@ class AcademyApiService {
     final body = jsonDecode(res.body) as Map<String, dynamic>;
     if (res.statusCode >= 200 && res.statusCode < 300) {
       return body['data'] ?? body;
+    }
+    // Structured face-duplicate 409 — raise a typed exception so the UI can
+    // show a rich dialog instead of a generic red snackbar.
+    if (res.statusCode == 409) {
+      final data = body['data'] as Map<String, dynamic>?;
+      if (data != null && data['code'] == 'FACE_DUPLICATE') {
+        final dup = data['duplicate'] as Map<String, dynamic>? ?? {};
+        final rawCourses = dup['courses'];
+        final courses = rawCourses is List
+            ? rawCourses.map((e) => e.toString()).toList()
+            : <String>[];
+        throw FaceDuplicateException(
+          message:      body['message'] as String? ?? 'Face already registered.',
+          studentId:    dup['student_id']    as String?,
+          studentName:  dup['student_name']  as String?,
+          courses:      courses,
+          registeredAt: dup['registered_at'] as String?,
+          confidence:   (dup['confidence']   as num?)?.toDouble(),
+        );
+      }
     }
     throw Exception(body['message'] ?? 'Request failed (${res.statusCode})');
   }

@@ -82,9 +82,41 @@ export async function registerStudent(
       // 2 — Duplicate check (confidence >= 0.88 = already registered)
       const matchResult = await matchFace(face_images[0]);
       if (matchResult.matched && (matchResult.confidence ?? 0) >= 0.88) {
+        // Look up the matched student so the client can show a useful warning.
+        const dup = matchResult.student_id
+          ? await academyQueryOne<{
+              id: string; first_name: string; last_name: string;
+              created_at: string; course_names: string[];
+            }>(
+              academySlug,
+              `SELECT s.id, s.first_name, s.last_name, s.created_at,
+                      COALESCE(
+                        json_agg(c.name ORDER BY c.name)
+                        FILTER (WHERE c.id IS NOT NULL), '[]'
+                      ) AS course_names
+               FROM students s
+               LEFT JOIN student_courses sc
+                 ON sc.student_id = s.id AND sc.status = 'active'
+               LEFT JOIN courses c ON c.id = sc.course_id
+               WHERE s.id = $1
+               GROUP BY s.id`,
+              [matchResult.student_id]
+            )
+          : null;
+
         return next(new AppError(
-          `Face already registered — ${(matchResult.confidence! * 100).toFixed(1)}% match with existing student.`,
-          409
+          `Face already registered — ${(matchResult.confidence! * 100).toFixed(1)}% match with an existing student.`,
+          409,
+          {
+            code: 'FACE_DUPLICATE',
+            duplicate: {
+              student_id:    dup?.id    ?? matchResult.student_id ?? null,
+              student_name:  dup ? `${dup.first_name} ${dup.last_name}` : null,
+              courses:       dup?.course_names ?? [],
+              registered_at: dup?.created_at  ?? null,
+              confidence:    matchResult.confidence,
+            },
+          }
         ));
       }
 
@@ -514,9 +546,37 @@ export async function updateStudentFace(
     const match = await matchFace(face_images[0]);
     if (match.matched && match.student_id && match.student_id !== id &&
         (match.confidence ?? 0) >= 0.88) {
+      const dup = await academyQueryOne<{
+        id: string; first_name: string; last_name: string;
+        created_at: string; course_names: string[];
+      }>(
+        academySlug,
+        `SELECT s.id, s.first_name, s.last_name, s.created_at,
+                COALESCE(
+                  json_agg(c.name ORDER BY c.name)
+                  FILTER (WHERE c.id IS NOT NULL), '[]'
+                ) AS course_names
+         FROM students s
+         LEFT JOIN student_courses sc
+           ON sc.student_id = s.id AND sc.status = 'active'
+         LEFT JOIN courses c ON c.id = sc.course_id
+         WHERE s.id = $1
+         GROUP BY s.id`,
+        [match.student_id]
+      );
       return next(new AppError(
         `Face already registered to another student — ${(match.confidence! * 100).toFixed(1)}% match.`,
-        409
+        409,
+        {
+          code: 'FACE_DUPLICATE',
+          duplicate: {
+            student_id:    dup?.id    ?? match.student_id,
+            student_name:  dup ? `${dup.first_name} ${dup.last_name}` : null,
+            courses:       dup?.course_names ?? [],
+            registered_at: dup?.created_at  ?? null,
+            confidence:    match.confidence,
+          },
+        }
       ));
     }
 
