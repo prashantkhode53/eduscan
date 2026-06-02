@@ -66,6 +66,7 @@ class _AcademyStudentRegistrationScreenState
   // _studentId holds the created record; the face is attached afterwards.
   String? _studentId;
   bool _savingDetails = false;
+  Future<void>? _detailsSave; // in-flight Phase 1 (runs in the background)
 
   @override
   void initState() {
@@ -120,10 +121,11 @@ class _AcademyStudentRegistrationScreenState
         );
         return;
       }
-      // Phase 1 — persist Personal/Parent/Course details BEFORE the face scan.
-      // Only advance to the face step once they're safely saved.
-      final saved = await _saveDetails();
-      if (!saved) return;
+      // Phase 1 — save details in the BACKGROUND so this step never freezes
+      // (the backend may be cold-starting). The face step opens immediately;
+      // the save finishes while the user positions/captures, and _submit()
+      // awaits it before completing registration.
+      _detailsSave = _saveDetails();
     }
     setState(() => _step++);
     _pageCtrl.animateToPage(_step,
@@ -389,6 +391,12 @@ class _AcademyStudentRegistrationScreenState
   Future<void> _submit() async {
     setState(() => _submitting = true);
     try {
+      // Wait for the background Phase-1 save to finish (usually already done by
+      // the time 5 photos are captured). Swallow its error — the fallback
+      // one-shot create below handles a failed/incomplete Phase 1.
+      if (_detailsSave != null) {
+        try { await _detailsSave; } catch (_) {}
+      }
       if (_studentId != null) {
         await AcademyApiService.updateStudentFace(_studentId!, _faceImages);
       } else {
@@ -509,11 +517,30 @@ class _AcademyStudentRegistrationScreenState
           ),
         ],
         ),
+        // Non-blocking "saving details" hint while Phase 1 runs in the
+        // background. IgnorePointer keeps the camera fully interactive.
         if (_savingDetails)
-          const Positioned.fill(
-            child: ColoredBox(
-              color: Color(0x66000000),
-              child: Center(child: CircularProgressIndicator()),
+          Positioned(
+            top: 8, left: 0, right: 0,
+            child: IgnorePointer(
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.6),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                    SizedBox(
+                        width: 12, height: 12,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white)),
+                    SizedBox(width: 8),
+                    Text('Saving details...',
+                        style: TextStyle(color: Colors.white, fontSize: 12)),
+                  ]),
+                ),
+              ),
             ),
           ),
       ]),
