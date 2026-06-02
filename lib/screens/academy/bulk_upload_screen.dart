@@ -39,46 +39,29 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   // ── Template ──────────────────────────────────────────────────────────────
 
+  // CSV is used for the template: it is 100% reliable (no xlsx package
+  // quirks), opens in Excel / Google Sheets / Numbers, and the admin can
+  // save it back as .xlsx or keep it as .csv for upload.
   Future<void> _downloadTemplate() async {
     try {
-      final excel = Excel.createExcel();
-      excel.rename('Sheet1', 'Students');
-      final sheet = excel['Students'];
-
-      sheet.appendRow([
-        TextCellValue('First Name*'),
-        TextCellValue('Last Name*'),
-        TextCellValue('Gender (Male/Female/Other)'),
-        TextCellValue('Date Of Birth* (DD/MM/YYYY)'),
-        TextCellValue('Mobile* (10 digits)'),
-        TextCellValue('Email'),
-        TextCellValue('Parent/Guardian Name*'),
-        TextCellValue('Parent Mobile* (10 digits)'),
-        TextCellValue('Address'),
-      ]);
-
-      // Sample row
-      sheet.appendRow([
-        TextCellValue('Priya'),
-        TextCellValue('Sharma'),
-        TextCellValue('Female'),
-        TextCellValue('15/08/2005'),
-        TextCellValue('9876543210'),
-        TextCellValue('priya@example.com'),
-        TextCellValue('Meena Sharma'),
-        TextCellValue('9123456789'),
-        TextCellValue('Pune, Maharashtra'),
-      ]);
-
-      final bytes = Uint8List.fromList(excel.save()!);
-      final dir   = await getApplicationDocumentsDirectory();
-      final file  = File('${dir.path}/EduScan_Student_Template.xlsx');
-      await file.writeAsBytes(bytes);
+      const lines = [
+        'First Name*,Last Name*,Gender (Male/Female/Other),'
+            'Date Of Birth* (DD/MM/YYYY),Mobile* (10 digits),'
+            'Email,Parent/Guardian Name*,Parent Mobile* (10 digits),Address',
+        'Priya,Sharma,Female,15/08/2005,9876543210,'
+            'priya@example.com,Meena Sharma,9123456789,Pune',
+        'Rahul,Kumar,Male,20/03/2007,8765432109,'
+            ',Suresh Kumar,7654321098,Mumbai',
+      ];
+      final content = lines.join('\n');
+      final dir  = await getApplicationDocumentsDirectory();
+      final file = File('${dir.path}/EduScan_Student_Template.csv');
+      await file.writeAsString(content);
       await OpenFilex.open(file.path);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Template error: $e'),
+          content: Text('Template download error: $e'),
           backgroundColor: Colors.red,
         ));
       }
@@ -135,6 +118,40 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     }
   }
 
+  // Extracts a plain string from any Excel CellValue type.
+  // Calling .toString() on the CellValue object returns the class name
+  // ("TextCellValue(Priya)") not the inner value — so we branch explicitly.
+  // Phone numbers entered as numbers in Excel come back as DoubleCellValue;
+  // we strip the decimal so "9876543210.0" becomes "9876543210".
+  String _cellStr(Data? cell) {
+    if (cell == null || cell.value == null) return '';
+    final v = cell.value!;
+    // In excel 4.x, TextCellValue.value is the package's own TextSpan class
+    // (not Flutter's). It has String? text + List<TextSpan>? children.
+    // Its toString() recursively concatenates text + all children — that is
+    // exactly the plain-text content of the cell, even for rich-text cells.
+    if (v is TextCellValue) return v.value.toString().trim();
+    if (v is IntCellValue)  return v.value.toString();
+    if (v is DoubleCellValue) {
+      final d = v.value;
+      if (!d.isNaN && !d.isInfinite && d == d.truncateToDouble()) {
+        return d.toInt().toString(); // 9876543210.0 → "9876543210"
+      }
+      return d.toString();
+    }
+    if (v is DateCellValue) {
+      // Convert Excel date cell to DD/MM/YYYY (our accepted DOB format)
+      return '${v.day.toString().padLeft(2, '0')}/'
+             '${v.month.toString().padLeft(2, '0')}/${v.year}';
+    }
+    if (v is DateTimeCellValue) {
+      return '${v.day.toString().padLeft(2, '0')}/'
+             '${v.month.toString().padLeft(2, '0')}/${v.year}';
+    }
+    if (v is BoolCellValue) return v.value.toString();
+    return v.toString().trim();
+  }
+
   List<Map<String, String>> _parseExcel(Uint8List bytes) {
     final excel = Excel.decodeBytes(bytes);
     final sheet = excel.tables.values.first;
@@ -143,10 +160,10 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     for (var i = 1; i < sheet.rows.length; i++) {
       final row = sheet.rows[i];
       // Skip completely empty rows
-      if (row.every((c) => c?.value == null || c!.value.toString().trim().isEmpty)) continue;
+      if (row.every((c) => _cellStr(c).isEmpty)) continue;
       final record = <String, String>{};
       for (var j = 0; j < _columns.length && j < row.length; j++) {
-        record[_columns[j]] = row[j]?.value?.toString().trim() ?? '';
+        record[_columns[j]] = _cellStr(row[j]);
       }
       rows.add(record);
     }
@@ -366,7 +383,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         OutlinedButton.icon(
           onPressed: _downloadTemplate,
           icon: const Icon(Icons.download_outlined),
-          label: const Text('Download Sample Template (.xlsx)'),
+          label: const Text('Download Sample Template (.csv)'),
           style: OutlinedButton.styleFrom(
               minimumSize: const Size.fromHeight(48)),
         ),
