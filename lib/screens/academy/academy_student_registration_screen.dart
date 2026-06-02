@@ -302,6 +302,10 @@ class _AcademyStudentRegistrationScreenState
     _stallCheckTimer = null;
     _progressTicker?.cancel();
     _progressTicker  = null;
+    // Must clear this before disposing — if a frame callback is mid-flight
+    // the finally block will still reset it, but clearing here prevents any
+    // new stream on the next _initCamera() from being silently blocked.
+    _processingFrame = false;
     _camCtrl?.dispose();
     _camCtrl      = null;
     _camReady     = false;
@@ -311,11 +315,35 @@ class _AcademyStudentRegistrationScreenState
   }
 
   Future<void> _retryCapture() async {
-    setState(() { _scanStalled = false; _faceDetected = false; });
+    // 1 — Immediately clear stuck flags so UI is responsive
+    _processingFrame = false;
     _stallCheckTimer?.cancel();
     _stallCheckTimer = null;
-    _disposeCamera();
-    await Future.delayed(const Duration(milliseconds: 400));
+    _progressTicker?.cancel();
+    _progressTicker  = null;
+    _noProgressSince = null;
+
+    setState(() {
+      _scanStalled   = false;
+      _faceDetected  = false;
+      _qualityScore  = 0;
+      _qualityHint   = 'Restarting scanner...';
+      _overlayState  = FaceOverlayState.idle;
+      _holdProgress  = 0;
+      _autoCapturing = false;
+      _camReady      = false;
+    });
+
+    // 2 — Await disposal so the OS fully releases camera hardware before
+    //     we try to reopen it. Ignoring the old controller reference
+    //     prevents any late callbacks from touching a half-disposed object.
+    final oldCtrl = _camCtrl;
+    _camCtrl = null;
+    try { await oldCtrl?.dispose(); } catch (_) {}
+
+    // 3 — Give the camera HAL time to release (some Android devices need this)
+    await Future.delayed(const Duration(milliseconds: 700));
+
     if (mounted) await _initCamera();
   }
 
@@ -426,8 +454,14 @@ class _AcademyStudentRegistrationScreenState
         } else if (quality < 0.55) {
           _cancelHold();
         }
-      } catch (_) {}
-      _processingFrame = false;
+      } catch (_) {
+        // Swallow frame errors — the stream continues on the next frame.
+      } finally {
+        // CRITICAL: always reset so the next frame can be processed.
+        // Without finally, any early `return` above leaves _processingFrame
+        // permanently true, silently blocking all subsequent frames.
+        _processingFrame = false;
+      }
     });
   }
 
@@ -661,6 +695,7 @@ class _AcademyStudentRegistrationScreenState
             },
             onSubmit: _submit,
             onReset: () {
+              _processingFrame = false; // clear any stuck frame before new stream
               setState(() {
                 _faceImages.clear();
                 _captureCount = 0;
@@ -668,6 +703,8 @@ class _AcademyStudentRegistrationScreenState
                 _overlayState = FaceOverlayState.idle;
                 _scanStalled  = false;
                 _faceDetected = false;
+                _qualityScore = 0;
+                _qualityHint  = '';
               });
               _startStream();
             },
