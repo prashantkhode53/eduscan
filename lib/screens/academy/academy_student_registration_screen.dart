@@ -517,27 +517,43 @@ class _AcademyStudentRegistrationScreenState
           ),
         ],
         ),
-        // Non-blocking "saving details" hint while Phase 1 runs in the
-        // background. IgnorePointer keeps the camera fully interactive.
-        if (_savingDetails)
+        // Persistent, visible status banner on the Face Capture step: shows
+        // "Saving details..." while Phase 1 runs in the background, then a
+        // clear "Details saved" confirmation. IgnorePointer keeps the camera
+        // fully interactive underneath.
+        if (_step == 3 && (_savingDetails || _studentId != null))
           Positioned(
-            top: 8, left: 0, right: 0,
+            top: 10, left: 0, right: 0,
             child: IgnorePointer(
               child: Center(
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
                   decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.6),
-                    borderRadius: BorderRadius.circular(16),
+                    color: _savingDetails
+                        ? Colors.black.withValues(alpha: 0.65)
+                        : Colors.green.shade700,
+                    borderRadius: BorderRadius.circular(18),
                   ),
-                  child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                    SizedBox(
-                        width: 12, height: 12,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white)),
-                    SizedBox(width: 8),
-                    Text('Saving details...',
-                        style: TextStyle(color: Colors.white, fontSize: 12)),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    if (_savingDetails)
+                      const SizedBox(
+                          width: 13, height: 13,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white))
+                    else
+                      const Icon(Icons.check_circle,
+                          color: Colors.white, size: 15),
+                    const SizedBox(width: 8),
+                    Text(
+                      _savingDetails
+                          ? 'Saving details...'
+                          : 'Details saved - now capture the face',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600),
+                    ),
                   ]),
                 ),
               ),
