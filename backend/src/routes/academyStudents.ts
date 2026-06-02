@@ -3,15 +3,17 @@ import { academyAuthMiddleware, requireRole } from '../middleware/academyAuth';
 import {
   registerStudent, listStudents, getStudent, getStats,
   updateStudent, updateStudentFace, deleteStudent, checkDuplicate,
+  bulkUploadStudents,
 } from '../controllers/academy/studentController';
 
 const router = Router();
 router.use(academyAuthMiddleware);
 
 router.get  ('/stats',            getStats);
-// check-duplicate MUST be registered before /:id to avoid Express treating
-// "check-duplicate" as an id param value.
+// Static sub-paths MUST be registered before /:id to avoid Express treating
+// the literal string as an id param value.
 router.get  ('/check-duplicate',  requireRole('admin', 'teacher'), checkDuplicate);
+router.post ('/bulk-upload',      requireRole('admin', 'teacher'), bulkUploadStudents);
 router.get  ('/',                 listStudents);
 router.post ('/',                 requireRole('admin', 'teacher'), registerStudent);
 router.get  ('/:id',              getStudent);

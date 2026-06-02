@@ -6,6 +6,7 @@ import '../services/academy_api_service.dart';
 import 'academy/course_master_screen.dart';
 import 'academy/academy_student_list_screen.dart';
 import 'academy/academy_student_registration_screen.dart';
+import 'academy/bulk_upload_screen.dart';
 import 'academy/fees_screen.dart';
 import 'academy/academy_face_scan_screen.dart';
 import 'academy/qr_code_screen.dart';
@@ -89,6 +90,85 @@ class _HomeTabState extends State<_HomeTab> {
 
   String _stat(String key) =>
       _loadingStats ? '…' : (_stats[key]?.toString() ?? '0');
+
+  /// Shows a bottom sheet with two registration options.
+  /// Returns true if a student was successfully registered (to refresh stats).
+  Future<bool?> _showRegisterOptions(BuildContext ctx) async {
+    return showModalBottomSheet<bool>(
+      context: ctx,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 36, height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text('Register Student',
+                  style: Theme.of(ctx).textTheme.titleLarge
+                      ?.copyWith(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 4),
+              Text('Choose how you want to add students.',
+                  style: TextStyle(
+                      fontSize: 13,
+                      color: Theme.of(ctx)
+                          .colorScheme
+                          .onSurface
+                          .withValues(alpha: 0.6))),
+              const SizedBox(height: 20),
+
+              // Option 1 — Bulk upload
+              _OptionTile(
+                icon: Icons.upload_file_outlined,
+                color: Colors.teal,
+                title: 'Upload Excel',
+                subtitle: 'Register up to 1,000 students at once via .xlsx or .csv',
+                onTap: () async {
+                  Navigator.pop(ctx);
+                  final ok = await Navigator.push<bool>(
+                    ctx,
+                    MaterialPageRoute(
+                        builder: (_) => const BulkUploadScreen()),
+                  );
+                  if (ctx.mounted) Navigator.pop(ctx, ok == true);
+                },
+              ),
+              const SizedBox(height: 12),
+
+              // Option 2 — Single registration (existing flow)
+              _OptionTile(
+                icon: Icons.person_add_outlined,
+                color: Colors.blue,
+                title: 'Single Student Registration',
+                subtitle: 'Personal Info → Parent Info → Courses → Face Capture',
+                onTap: () async {
+                  Navigator.pop(ctx);
+                  final ok = await Navigator.push<bool>(
+                    ctx,
+                    MaterialPageRoute(
+                        builder: (_) =>
+                            const AcademyStudentRegistrationScreen()),
+                  );
+                  if (ctx.mounted) Navigator.pop(ctx, ok == true);
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -185,12 +265,7 @@ class _HomeTabState extends State<_HomeTab> {
                   label: 'Register Student',
                   color: Colors.blue,
                   onTap: () async {
-                    final ok = await Navigator.push<bool>(
-                      context,
-                      MaterialPageRoute(
-                          builder: (_) =>
-                              const AcademyStudentRegistrationScreen()),
-                    );
+                    final ok = await _showRegisterOptions(context);
                     if (ok == true) _loadStats();
                   },
                 ),
@@ -468,6 +543,67 @@ class _StatCard extends StatelessWidget {
                         .colorScheme
                         .onSurface
                         .withValues(alpha: 0.6))),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _OptionTile extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  const _OptionTile({
+    required this.icon,
+    required this.color,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withValues(alpha: 0.35)),
+          color: color.withValues(alpha: 0.05),
+        ),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 22,
+              backgroundColor: color.withValues(alpha: 0.15),
+              child: Icon(icon, color: color, size: 22),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: const TextStyle(
+                          fontWeight: FontWeight.bold, fontSize: 14)),
+                  const SizedBox(height: 2),
+                  Text(subtitle,
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: theme.colorScheme.onSurface
+                              .withValues(alpha: 0.6))),
+                ],
+              ),
+            ),
+            Icon(Icons.chevron_right,
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.35)),
           ],
         ),
       ),

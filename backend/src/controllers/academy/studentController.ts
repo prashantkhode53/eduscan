@@ -207,6 +207,172 @@ export async function registerStudent(
   } catch (err) { next(err); }
 }
 
+// ── POST /api/academy/students/bulk-upload ────────────────────────────────────
+// Accepts a pre-parsed array of student objects from the Flutter client
+// (Flutter does Excel/CSV parsing and client-side validation; the server
+// does a final validation pass plus DB-duplicate detection and bulk insert).
+
+interface BulkStudent {
+  first_name: string; last_name: string; gender?: string; dob: string;
+  mobile: string; email?: string; parent_name?: string;
+  parent_mobile?: string; address?: string;
+}
+
+function normalizeDob(raw: string): string | null {
+  const t = raw.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(t)) {
+    const [d, m, y] = t.split('/');
+    return `${y}-${m}-${d}`;
+  }
+  return null;
+}
+
+export async function bulkUploadStudents(
+  req: Request, res: Response, next: NextFunction
+): Promise<void> {
+  try {
+    const { academySlug } = req.academyUser!;
+    const { students } = req.body as { students: BulkStudent[] };
+
+    if (!Array.isArray(students) || !students.length) {
+      return next(new AppError('No student records provided', 400));
+    }
+    if (students.length > 1000) {
+      return next(new AppError('Maximum 1000 students per upload', 400));
+    }
+
+    // Fetch all active students once for in-memory duplicate detection.
+    const existing = await academyQuery<{
+      id: string; first_name: string; last_name: string; dob: string;
+    }>(
+      academySlug,
+      `SELECT id, first_name, last_name, TO_CHAR(dob, 'YYYY-MM-DD') AS dob
+       FROM students WHERE status = 'active'`,
+      []
+    );
+    const existingKeys = new Map<string, string>(); // key → student_id
+    for (const s of existing) {
+      const k = `${s.first_name.trim().toLowerCase()}|${s.last_name.trim().toLowerCase()}|${s.dob}`;
+      existingKeys.set(k, s.id);
+    }
+
+    // Current max ID sequence for bulk ID generation.
+    const year = new Date().getFullYear();
+    const prefix = `ACF-${year}-`;
+    const maxRow = await academyQueryOne<{ max_seq: string | null }>(
+      academySlug,
+      `SELECT MAX(CAST(SUBSTRING(id FROM LENGTH($1) + 1) AS INTEGER)) AS max_seq
+       FROM students WHERE id LIKE $2`,
+      [prefix, `${prefix}%`]
+    );
+    let seq = (parseInt(maxRow?.max_seq ?? '0') || 0) + 1;
+
+    const results = {
+      total:     students.length,
+      imported:  0,
+      duplicates: 0,
+      failed:    0,
+      errors:    [] as { row: number; name: string; reason: string }[],
+      duplicate_details: [] as { row: number; existing_id: string; name: string }[],
+    };
+
+    type InsertRow = [string, string, string, string, string | null, string,
+                     string | null, string | null, string | null, string | null];
+    const toInsert: InsertRow[] = [];
+    const seenKeys = new Set<string>();
+
+    for (let i = 0; i < students.length; i++) {
+      const s = students[i];
+      const rowNum = i + 2; // spreadsheet row (1-indexed + header)
+      const fn  = s.first_name?.trim() ?? '';
+      const ln  = s.last_name?.trim()  ?? '';
+      const name = `${fn} ${ln}`.trim();
+
+      // ── Validation ──────────────────────────────────────────────────────────
+      const errs: string[] = [];
+      if (!fn)           errs.push('First Name required');
+      else if (fn.length > 50) errs.push('First Name exceeds 50 chars');
+      if (!ln)           errs.push('Last Name required');
+      else if (ln.length > 50) errs.push('Last Name exceeds 50 chars');
+
+      const mob = s.mobile?.trim() ?? '';
+      if (!mob || !/^\d{10}$/.test(mob)) errs.push('Mobile must be 10 digits');
+
+      const dobNorm = normalizeDob(s.dob ?? '');
+      if (!dobNorm) errs.push('DOB must be DD/MM/YYYY');
+
+      const email = s.email?.trim() ?? '';
+      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errs.push('Invalid email');
+
+      const gender = s.gender?.trim().toLowerCase() ?? '';
+      if (gender && !['male', 'female', 'other'].includes(gender)) {
+        errs.push('Gender: Male/Female/Other');
+      }
+
+      if (!s.parent_name?.trim()) errs.push('Parent/Guardian Name required');
+      const pMob = s.parent_mobile?.trim() ?? '';
+      if (!pMob || !/^\d{10}$/.test(pMob)) errs.push('Parent Mobile must be 10 digits');
+
+      if (errs.length) {
+        results.failed++;
+        results.errors.push({ row: rowNum, name, reason: errs.join('; ') });
+        continue;
+      }
+
+      // ── Intra-file duplicate ─────────────────────────────────────────────────
+      const key = `${fn.toLowerCase()}|${ln.toLowerCase()}|${dobNorm}`;
+      if (seenKeys.has(key)) {
+        results.duplicates++;
+        results.duplicate_details.push({ row: rowNum, existing_id: '(same file)', name });
+        continue;
+      }
+      seenKeys.add(key);
+
+      // ── DB duplicate ─────────────────────────────────────────────────────────
+      const existingId = existingKeys.get(key);
+      if (existingId) {
+        results.duplicates++;
+        results.duplicate_details.push({ row: rowNum, existing_id: existingId, name });
+        continue;
+      }
+
+      const studentId = `${prefix}${(seq++).toString().padStart(5, '0')}`;
+      toInsert.push([
+        studentId, fn, ln, dobNorm!,
+        gender || null, mob,
+        email || null,
+        s.parent_name?.trim() || null,
+        pMob || null,
+        s.address?.trim() || null,
+      ]);
+    }
+
+    // ── Bulk insert in one transaction ─────────────────────────────────────────
+    if (toInsert.length) {
+      await academyTransaction(academySlug, async (client) => {
+        for (const params of toInsert) {
+          const r = await client.query(
+            `INSERT INTO students
+               (id, first_name, last_name, dob, gender, mobile, email,
+                parent_name, parent_mobile, address, status)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'active')
+             ON CONFLICT (id) DO NOTHING`,
+            params
+          );
+          if ((r.rowCount ?? 0) > 0) results.imported++;
+          else {
+            results.failed++;
+            results.errors.push({ row: -1, name: `${params[1]} ${params[2]}`, reason: 'ID conflict' });
+          }
+        }
+      });
+    }
+
+    res.json({ success: true, data: results });
+  } catch (err) { next(err); }
+}
+
 // ── GET /api/academy/students/check-duplicate ────────────────────────────────
 // Checks whether a fully-registered student with the same first_name +
 // last_name + dob already exists in this academy's schema. Only considers

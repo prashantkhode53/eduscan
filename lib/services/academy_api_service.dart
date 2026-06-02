@@ -150,6 +150,20 @@ class AcademyApiService {
   /// Check whether a fully-registered student with the same first name, last name,
   /// and date of birth already exists in this academy's schema.
   /// Returns the matched student map, or null if no duplicate found.
+  /// Bulk-upload pre-parsed student records. The server validates, deduplicates
+  /// against the DB, and creates student profiles. Returns detailed results.
+  static Future<Map<String, dynamic>> bulkUploadStudents(
+      List<Map<String, dynamic>> students) async {
+    final res = await http
+        .post(
+          Uri.parse('${ApiEndpoints.academyStudents}/bulk-upload'),
+          headers: await _headers(),
+          body: jsonEncode({'students': students}),
+        )
+        .timeout(const Duration(seconds: 120));
+    return _parse(res) as Map<String, dynamic>;
+  }
+
   static Future<Map<String, dynamic>?> checkStudentDuplicate({
     required String firstName,
     required String lastName,
