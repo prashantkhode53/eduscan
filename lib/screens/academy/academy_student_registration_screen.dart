@@ -59,7 +59,8 @@ class _AcademyStudentRegistrationScreenState
   Timer? _progressTicker;
 
   // â”€â”€ Submit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  bool _submitting = false;
+  bool _submitting        = false;
+  bool _checkingDuplicate = false;
 
   // Two-phase save: the student's details (Personal/Parent/Courses) are
   // persisted BEFORE the face scan so they're never lost if the scan fails.
@@ -107,8 +108,39 @@ class _AcademyStudentRegistrationScreenState
   // â”€â”€ Navigation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   Future<void> _goNext() async {
-    if (_step == 0 && !(_s1Key.currentState?.validate() ?? false)) return;
-    // Step 1 (Parent & Address) has no required fields â€” validate if state exists,
+    // Guard against double-tap while the duplicate check is in flight.
+    if (_checkingDuplicate) return;
+
+    if (_step == 0) {
+      if (!(_s1Key.currentState?.validate() ?? false)) return;
+
+      // Duplicate-name check — only when DOB is provided. Name alone is not
+      // unique enough to block. Network errors are swallowed so a backend
+      // outage never prevents a legitimate registration.
+      final dob = _dobCtrl.text.trim();
+      if (dob.isNotEmpty) {
+        setState(() => _checkingDuplicate = true);
+        try {
+          final dup = await AcademyApiService.checkStudentDuplicate(
+            firstName: _firstNameCtrl.text.trim(),
+            lastName:  _lastNameCtrl.text.trim(),
+            dob:       dob,
+          );
+          if (!mounted) return;
+          if (dup != null) {
+            setState(() => _checkingDuplicate = false);
+            final proceed = await _showStudentDuplicateDialog(dup);
+            if (!proceed) return; // user chose not to continue
+          }
+        } catch (_) {
+          // Non-fatal — proceed silently on any error.
+        } finally {
+          if (mounted) setState(() => _checkingDuplicate = false);
+        }
+      }
+    }
+
+    // Step 1 (Parent & Address) has no required fields — validate if state exists,
     // but never block navigation if form hasn't rendered yet.
     if (_step == 1) {
       final s2Valid = _s2Key.currentState?.validate();
@@ -455,6 +487,17 @@ class _AcademyStudentRegistrationScreenState
     );
   }
 
+  /// Shows the “student already exists” dialog and returns true if the admin
+  /// chose to continue anyway, false if they cancelled.
+  Future<bool> _showStudentDuplicateDialog(Map<String, dynamic> dup) async {
+    return await showDialog<bool>(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => _StudentDuplicateDialog(student: dup),
+        ) ??
+        false;
+  }
+
   // â”€â”€ Build â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   @override
@@ -487,6 +530,7 @@ class _AcademyStudentRegistrationScreenState
             gender: _gender,
             onGenderChanged: (v) => setState(() => _gender = v),
             onNext: _goNext,
+            checkingDuplicate: _checkingDuplicate,
           ),
           _Step2(
             formKey: _s2Key,
@@ -601,6 +645,7 @@ class _Step1 extends StatelessWidget {
   final String? gender;
   final ValueChanged<String?> onGenderChanged;
   final VoidCallback onNext;
+  final bool checkingDuplicate;
 
   const _Step1({
     required this.formKey, required this.firstNameCtrl,
@@ -608,6 +653,7 @@ class _Step1 extends StatelessWidget {
     required this.mobileCtrl, required this.emailCtrl,
     required this.gender, required this.onGenderChanged,
     required this.onNext,
+    this.checkingDuplicate = false,
   });
 
   @override
@@ -668,9 +714,14 @@ class _Step1 extends StatelessWidget {
             _tf(emailCtrl, 'Email (optional)', type: TextInputType.emailAddress),
             const SizedBox(height: 24),
             FilledButton(
-              onPressed: onNext,
+              onPressed: checkingDuplicate ? null : onNext,
               style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-              child: const Text('Next'),
+              child: checkingDuplicate
+                  ? const SizedBox(
+                      width: 20, height: 20,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white))
+                  : const Text('Next'),
             ),
           ],
         ),
@@ -1084,6 +1135,173 @@ class _FaceDuplicateDialog extends StatelessWidget {
         children: [
           Icon(icon,
               size: 15,
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.55)),
+          const SizedBox(width: 8),
+          Text('$label: ',
+              style: TextStyle(
+                  fontSize: 12,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.65))),
+          Expanded(
+            child: Text(value,
+                style: const TextStyle(
+                    fontSize: 12, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      );
+}
+
+// ── Student Duplicate Dialog ──────────────────────────────────────────────────
+
+class _StudentDuplicateDialog extends StatelessWidget {
+  final Map<String, dynamic> student;
+  const _StudentDuplicateDialog({required this.student});
+
+  String _fmtDate(dynamic raw) {
+    final s = raw?.toString() ?? '';
+    final clean = s.contains('T') ? s.split('T')[0] : s;
+    if (clean.isEmpty) return '';
+    try {
+      final d = DateTime.parse(clean);
+      const months = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      return '${d.day.toString().padLeft(2, '0')} ${months[d.month]} ${d.year}';
+    } catch (_) {
+      return clean;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme   = Theme.of(context);
+    final id      = student['id']   as String? ?? '—';
+    final name    = student['name'] as String? ?? '';
+    final dob     = _fmtDate(student['dob']);
+    final regDate = _fmtDate(student['registered_at']);
+    final rawCourses = student['courses'];
+    final courses = rawCourses is List
+        ? rawCourses.map((e) => e.toString()).toList()
+        : <String>[];
+
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      titlePadding: EdgeInsets.zero,
+      title: Container(
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+        decoration: BoxDecoration(
+          color: Colors.orange.shade50,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+        ),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 22,
+              backgroundColor: Colors.orange.shade100,
+              child: Icon(Icons.person_search_outlined,
+                  color: Colors.orange.shade800, size: 24),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Student Already Exists',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.orange.shade900)),
+                  Text('Same name & date of birth found',
+                      style: TextStyle(
+                          fontSize: 12, color: Colors.orange.shade700)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'A registered student with the same First Name, Last Name, and '
+            'Date of Birth already exists in this academy.',
+            style: TextStyle(
+                fontSize: 13,
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.75)),
+          ),
+          const SizedBox(height: 16),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceContainerLow,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: theme.colorScheme.outlineVariant),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _dupRow(theme, Icons.badge_outlined, 'Student ID', id),
+                if (name.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  _dupRow(theme, Icons.person_outline, 'Name', name),
+                ],
+                if (dob.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  _dupRow(theme, Icons.cake_outlined, 'Date of Birth', dob),
+                ],
+                if (courses.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  _dupRow(theme, Icons.menu_book_outlined, 'Course(s)',
+                      courses.join(', ')),
+                ],
+                if (regDate.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  _dupRow(theme, Icons.calendar_today_outlined,
+                      'Registered on', regDate),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Icon(Icons.warning_amber_rounded,
+                  size: 14, color: Colors.orange.shade700),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'Proceeding will create a second record for the same person.',
+                  style: TextStyle(
+                      fontSize: 11, color: Colors.orange.shade800),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+      actionsPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
+        ),
+        OutlinedButton.icon(
+          onPressed: () => Navigator.pop(context, true),
+          icon: const Icon(Icons.arrow_forward, size: 18),
+          label: const Text('Continue Anyway'),
+          style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.orange.shade800,
+              side: BorderSide(color: Colors.orange.shade400)),
+        ),
+      ],
+    );
+  }
+
+  Widget _dupRow(ThemeData theme, IconData icon, String label, String value) =>
+      Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 15,
               color: theme.colorScheme.onSurface.withValues(alpha: 0.55)),
           const SizedBox(width: 8),
           Text('$label: ',

@@ -207,6 +207,68 @@ export async function registerStudent(
   } catch (err) { next(err); }
 }
 
+// ── GET /api/academy/students/check-duplicate ────────────────────────────────
+// Checks whether a fully-registered student with the same first_name +
+// last_name + dob already exists in this academy's schema. Only considers
+// students with a face_embedding (i.e. completed registrations) so that
+// orphaned Phase-1 records from abandoned flows don't produce false positives.
+
+export async function checkDuplicate(
+  req: Request, res: Response, next: NextFunction
+): Promise<void> {
+  try {
+    const { academySlug } = req.academyUser!;
+    const { first_name, last_name, dob } =
+      req.query as Record<string, string | undefined>;
+
+    if (!first_name?.trim() || !last_name?.trim() || !dob?.trim()) {
+      return next(new AppError('first_name, last_name, and dob are required', 400));
+    }
+
+    const student = await academyQueryOne<{
+      id: string; first_name: string; last_name: string; dob: string;
+      created_at: string; course_names: string[];
+    }>(
+      academySlug,
+      `SELECT s.id, s.first_name, s.last_name, s.dob, s.created_at,
+              COALESCE(
+                json_agg(c.name ORDER BY c.name)
+                FILTER (WHERE c.id IS NOT NULL), '[]'
+              ) AS course_names
+       FROM students s
+       LEFT JOIN student_courses sc
+         ON sc.student_id = s.id AND sc.status = 'active'
+       LEFT JOIN courses c ON c.id = sc.course_id
+       WHERE LOWER(TRIM(s.first_name)) = LOWER(TRIM($1))
+         AND LOWER(TRIM(s.last_name))  = LOWER(TRIM($2))
+         AND s.dob                     = $3::date
+         AND s.status                  = 'active'
+         AND s.face_embedding IS NOT NULL
+       GROUP BY s.id
+       LIMIT 1`,
+      [first_name.trim(), last_name.trim(), dob.trim()]
+    );
+
+    if (!student) {
+      return void res.json({ success: true, data: { exists: false } });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        exists: true,
+        student: {
+          id:            student.id,
+          name:          `${student.first_name} ${student.last_name}`.trim(),
+          dob:           student.dob,
+          registered_at: student.created_at,
+          courses:       student.course_names,
+        },
+      },
+    });
+  } catch (err) { next(err); }
+}
+
 // ── GET /api/academy/students ─────────────────────────────────────────────────
 
 export async function listStudents(

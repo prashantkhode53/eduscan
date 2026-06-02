@@ -147,6 +147,30 @@ class AcademyApiService {
     return _parse(res) as Map<String, dynamic>;
   }
 
+  /// Check whether a fully-registered student with the same first name, last name,
+  /// and date of birth already exists in this academy's schema.
+  /// Returns the matched student map, or null if no duplicate found.
+  static Future<Map<String, dynamic>?> checkStudentDuplicate({
+    required String firstName,
+    required String lastName,
+    required String dob,
+  }) async {
+    final uri = Uri.parse('${ApiEndpoints.academyStudents}/check-duplicate')
+        .replace(queryParameters: {
+      'first_name': firstName.trim(),
+      'last_name':  lastName.trim(),
+      'dob':        dob.trim(),
+    });
+    final res = await http
+        .get(uri, headers: await _headers())
+        .timeout(_timeout);
+    final data = _parse(res) as Map<String, dynamic>;
+    if (data['exists'] == true) {
+      return data['student'] as Map<String, dynamic>?;
+    }
+    return null;
+  }
+
   static Future<Map<String, dynamic>> getStudentById(String id) async {
     final res = await http
         .get(Uri.parse('${ApiEndpoints.academyStudents}/$id'),
