@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../services/api_service.dart';
 import '../services/storage_service.dart';
 
@@ -172,13 +173,32 @@ class _RegisterAcademyScreenState extends State<RegisterAcademyScreen> {
   }
 
   List<Widget> _academyFields(ThemeData theme) => [
-        _field(
+        // Academy Name: slug-style — spaces auto-convert to underscores,
+        // disallowed chars are silently blocked, max 17 characters.
+        TextFormField(
           controller: _academyNameCtrl,
-          label: 'Academy Name',
-          hint: 'e.g. Sunshine Tuition Classes',
-          icon: Icons.business_outlined,
-          validator: (v) =>
-              v == null || v.trim().length < 3 ? 'Minimum 3 characters' : null,
+          maxLength: 17,
+          maxLengthEnforcement: MaxLengthEnforcement.enforced,
+          inputFormatters: [_AcademyNameFormatter()],
+          decoration: const InputDecoration(
+            labelText: 'Academy Name',
+            hintText: 'Eg. Demo_Academy',
+            prefixIcon: Icon(Icons.business_outlined),
+            border: OutlineInputBorder(),
+            helperText: 'Spaces convert to underscores. Letters, numbers, _ only.',
+            helperMaxLines: 2,
+            counterStyle: TextStyle(fontSize: 11),
+          ),
+          validator: (v) {
+            final val = v?.trim() ?? '';
+            if (val.length < 3) return 'Minimum 3 characters required';
+            if (val.length > 17) return 'Academy Name cannot exceed 17 characters';
+            if (val.endsWith('_')) return 'Name cannot end with an underscore';
+            if (!RegExp(r'^[a-zA-Z0-9_]+$').hasMatch(val)) {
+              return 'Only letters, numbers, and underscores are allowed';
+            }
+            return null;
+          },
         ),
         const SizedBox(height: 16),
         _field(
@@ -284,6 +304,33 @@ class _RegisterAcademyScreenState extends State<RegisterAcademyScreen> {
         border: const OutlineInputBorder(),
       ),
       validator: validator,
+    );
+  }
+}
+
+// Real-time formatter for the Academy Name field:
+// • spaces → underscores
+// • disallowed chars (not [a-zA-Z0-9_]) silently removed
+// • consecutive underscores collapsed to one
+// • leading underscores stripped (name cannot start with _)
+// • hard cap at 17 characters
+class _AcademyNameFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    String text = newValue.text
+        .replaceAll(' ', '_')
+        .replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '')
+        .replaceAll(RegExp(r'_+'), '_')
+        .replaceAll(RegExp(r'^_+'), '');
+
+    if (text.length > 17) text = text.substring(0, 17);
+
+    return TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
     );
   }
 }
