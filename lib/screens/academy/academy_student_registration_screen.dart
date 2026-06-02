@@ -577,7 +577,15 @@ class _AcademyStudentRegistrationScreenState
     final theme = Theme.of(context);
     final steps = ['Personal Info', 'Parent & Address', 'Courses', 'Face Capture'];
 
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      // Route the system back button through _goBack() so camera disposal
+      // and step navigation always happen — same as the AppBar back button.
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        _goBack();
+      },
+      child: Scaffold(
       appBar: AppBar(
         leading: IconButton(
             icon: const Icon(Icons.arrow_back), onPressed: _goBack),
@@ -709,7 +717,8 @@ class _AcademyStudentRegistrationScreenState
             ),
           ),
       ]),
-    );
+      ), // Scaffold
+    ); // PopScope
   }
 }
 

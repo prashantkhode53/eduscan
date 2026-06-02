@@ -248,12 +248,24 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen> {
       '${dt.minute.toString().padLeft(2, '0')}:'
       '${dt.second.toString().padLeft(2, '0')}';
 
+  void _stopCamera() {
+    _debounceTimer?.cancel();
+    _debounceTimer = null;
+    _overlayTimer?.cancel();
+    _overlayTimer = null;
+    if (_streamRunning && _cameraCtrl != null &&
+        _cameraCtrl!.value.isInitialized) {
+      try { _cameraCtrl!.stopImageStream(); } catch (_) {}
+    }
+    _streamRunning = false;
+    _cameraCtrl?.dispose();
+    _cameraCtrl = null;
+  }
+
   @override
   void dispose() {
-    _debounceTimer?.cancel();
-    _overlayTimer?.cancel();
     _clockTimer?.cancel();
-    _cameraCtrl?.dispose();
+    _stopCamera();
     super.dispose();
   }
 
@@ -261,7 +273,14 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen> {
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
 
-    return Theme(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        _stopCamera();
+        Navigator.of(context).pop();
+      },
+      child: Theme(
       data: ThemeData.dark().copyWith(
         colorScheme: ColorScheme.fromSeed(
           seedColor: const Color(0xFF1A56DB),
@@ -409,7 +428,8 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen> {
           ),
         ),
       ),
-    );
+      ), // Theme
+    ); // PopScope
   }
 
   Widget _buildResultCard() {

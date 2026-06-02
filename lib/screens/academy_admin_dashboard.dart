@@ -34,27 +34,62 @@ class _AcademyAdminDashboardState extends State<AcademyAdminDashboard> {
     final auth = context.watch<AuthProvider>();
     final user = auth.academyUser!;
 
-    return Scaffold(
-      body: IndexedStack(
-        index: _currentIndex,
-        children: [
-          _HomeTab(user: user),
-          const AcademyStudentListScreen(),
-          const CourseMasterScreen(),
-          const FeesScreen(),
-          _SettingsTab(user: user),
-        ],
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _currentIndex,
-        onDestinationSelected: (i) => setState(() => _currentIndex = i),
-        destinations: _navItems
-            .map((n) => NavigationDestination(
-                  icon: Icon(n.icon),
-                  selectedIcon: Icon(n.activeIcon),
-                  label: n.label,
-                ))
-            .toList(),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) return;
+        // Back on a non-home tab → silently return to Home.
+        if (_currentIndex != 0) {
+          setState(() => _currentIndex = 0);
+          return;
+        }
+        // Back on Home tab → confirm before leaving.
+        if (!context.mounted) return;
+        final exit = await showDialog<bool>(
+          context: context,
+          builder: (_) => AlertDialog(
+            title: const Text('Exit App'),
+            content: const Text('Are you sure you want to exit EduScan?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Exit'),
+              ),
+            ],
+          ),
+        );
+        if (exit == true && context.mounted) {
+          Navigator.of(context)
+              .pushNamedAndRemoveUntil('/login', (_) => false);
+        }
+      },
+      child: Scaffold(
+        body: IndexedStack(
+          index: _currentIndex,
+          children: [
+            _HomeTab(user: user),
+            const AcademyStudentListScreen(),
+            const CourseMasterScreen(),
+            const FeesScreen(),
+            _SettingsTab(user: user),
+          ],
+        ),
+        bottomNavigationBar: NavigationBar(
+          selectedIndex: _currentIndex,
+          onDestinationSelected: (i) => setState(() => _currentIndex = i),
+          destinations: _navItems
+              .map((n) => NavigationDestination(
+                    icon: Icon(n.icon),
+                    selectedIcon: Icon(n.activeIcon),
+                    label: n.label,
+                  ))
+              .toList(),
+        ),
       ),
     );
   }
