@@ -46,6 +46,18 @@ export async function reconcileAcademySchemas(): Promise<void> {
           ADD COLUMN IF NOT EXISTS parent_fcm_token TEXT,
           ADD COLUMN IF NOT EXISTS updated_at       TIMESTAMPTZ DEFAULT NOW()
       `);
+      // Idempotent: create qr_codes table for academies created before this feature.
+      await academyExec(slug, `
+        CREATE TABLE IF NOT EXISTS qr_codes (
+          id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          name        VARCHAR(100) NOT NULL,
+          description TEXT,
+          image_data  TEXT NOT NULL,
+          is_active   BOOLEAN DEFAULT FALSE,
+          created_at  TIMESTAMPTZ DEFAULT NOW(),
+          updated_at  TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
       ok++;
     } catch (err) {
       console.error(`[Reconcile] schema "${slug}" failed:`, err);
@@ -233,6 +245,19 @@ export async function runAcademyMigrations(
         data_json   JSONB,
         is_read     BOOLEAN DEFAULT FALSE,
         created_at  TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    // ── QR Codes ─────────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS qr_codes (
+        id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        name        VARCHAR(100) NOT NULL,
+        description TEXT,
+        image_data  TEXT NOT NULL,
+        is_active   BOOLEAN DEFAULT FALSE,
+        created_at  TIMESTAMPTZ DEFAULT NOW(),
+        updated_at  TIMESTAMPTZ DEFAULT NOW()
       )
     `);
 

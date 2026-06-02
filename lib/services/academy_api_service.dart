@@ -223,4 +223,54 @@ class AcademyApiService {
         .timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
   }
+
+  // ── QR Codes ──────────────────────────────────────────────────────────────
+
+  static Future<List<Map<String, dynamic>>> listQrCodes() async {
+    final res = await http
+        .get(Uri.parse(ApiEndpoints.academyQrCodes), headers: await _headers())
+        .timeout(_timeout);
+    final data = _parse(res);
+    return (data as List).cast<Map<String, dynamic>>();
+  }
+
+  static Future<Map<String, dynamic>?> getActiveQrCode() async {
+    final res = await http
+        .get(Uri.parse('${ApiEndpoints.academyQrCodes}/active'), headers: await _headers())
+        .timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>?;
+  }
+
+  static Future<Map<String, dynamic>> createQrCode(Map<String, dynamic> body) async {
+    final res = await http
+        .post(Uri.parse(ApiEndpoints.academyQrCodes),
+            headers: await _headers(), body: jsonEncode(body))
+        .timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
+  static Future<Map<String, dynamic>> updateQrCode(
+      String id, Map<String, dynamic> body) async {
+    final res = await http
+        .put(Uri.parse('${ApiEndpoints.academyQrCodes}/$id'),
+            headers: await _headers(), body: jsonEncode(body))
+        .timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
+  static Future<void> activateQrCode(String id) async {
+    final res = await http
+        .patch(Uri.parse('${ApiEndpoints.academyQrCodes}/$id/activate'),
+            headers: await _headers())
+        .timeout(_timeout);
+    _parse(res);
+  }
+
+  static Future<void> deleteQrCode(String id) async {
+    final res = await http
+        .delete(Uri.parse('${ApiEndpoints.academyQrCodes}/$id'),
+            headers: await _headers())
+        .timeout(_timeout);
+    _parse(res);
+  }
 }
