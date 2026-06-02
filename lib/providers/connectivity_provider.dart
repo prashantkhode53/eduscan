@@ -16,8 +16,7 @@ class ConnectivityProvider extends ChangeNotifier {
 
   Future<void> _init() async {
     final result = await Connectivity().checkConnectivity();
-    _isOnline  = _hasConnection(result);
-    _wasOnline = _isOnline;
+    _isOnline = _hasConnection(result);
     notifyListeners();
 
     _subscription = Connectivity().onConnectivityChanged.listen((result) {
