@@ -62,6 +62,12 @@ class _AcademyStudentRegistrationScreenState
   bool _submitting        = false;
   bool _checkingDuplicate = false;
 
+  // Stall detection: if the scanner makes no progress for >12s, show retry UI.
+  bool      _scanStalled    = false;
+  bool      _faceDetected   = false; // true whenever a face is in frame
+  DateTime? _noProgressSince;
+  Timer?    _stallCheckTimer;
+
   // Two-phase save: the student's details (Personal/Parent/Courses) are
   // persisted BEFORE the face scan so they're never lost if the scan fails.
   // _studentId holds the created record; the face is attached afterwards.
@@ -292,45 +298,102 @@ class _AcademyStudentRegistrationScreenState
   }
 
   void _disposeCamera() {
+    _stallCheckTimer?.cancel();
+    _stallCheckTimer = null;
     _progressTicker?.cancel();
-    _progressTicker = null;
+    _progressTicker  = null;
     _camCtrl?.dispose();
-    _camCtrl   = null;
-    _camReady  = false;
-    _autoCapturing = false;
+    _camCtrl      = null;
+    _camReady     = false;
+    _autoCapturing  = false;
+    _faceDetected   = false;
+    _scanStalled    = false;
   }
 
-  // Quality score â€” mirrors SuperAdmin implementation (size + angles + eye openness).
+  Future<void> _retryCapture() async {
+    setState(() { _scanStalled = false; _faceDetected = false; });
+    _stallCheckTimer?.cancel();
+    _stallCheckTimer = null;
+    _disposeCamera();
+    await Future.delayed(const Duration(milliseconds: 400));
+    if (mounted) await _initCamera();
+  }
+
+  // Quality score — relaxed thresholds so natural phone-holding angles and
+  // glasses wearers are not hard-blocked. Returns a minimum of 0.15 whenever
+  // a face is in frame so that “Capture Now” is always available as a manual
+  // override (auto-capture still requires ≥ 0.55).
   double _computeQuality(dynamic face) {
     final yaw   = (face.headEulerAngleY as double? ?? 0).abs();
     final roll  = (face.headEulerAngleZ as double? ?? 0).abs();
     final pitch = (face.headEulerAngleX as double? ?? 0).abs();
 
-    if (yaw > 25) { _qualityHint = 'Look straight ahead'; return 0.0; }
-    if (roll > 20) { _qualityHint = 'Hold your head level'; return 0.0; }
-    if (pitch > 20) { _qualityHint = 'Look directly at camera'; return 0.0; }
+    // Relaxed angle limits: 35/28/25 (was 25/20/20). When exceeded the face
+    // is too skewed for a good embedding but the user may still manual-capture.
+    if (yaw > 35) {
+      _qualityHint = 'Look straight ahead';
+      return 0.15;
+    }
+    if (roll > 25) {
+      _qualityHint = 'Hold your head level';
+      return 0.15;
+    }
+    if (pitch > 28) {
+      _qualityHint = 'Hold the phone at eye level';
+      return 0.15;
+    }
 
-    final sizeScore = (((face.boundingBox.width as num).toDouble() - 80) / 120).clamp(0.0, 1.0);
-    if (sizeScore < 0.05) { _qualityHint = 'Move closer to camera'; return 0.0; }
+    final sizeScore =
+        (((face.boundingBox.width as num).toDouble() - 80) / 120).clamp(0.0, 1.0);
+    if (sizeScore < 0.05) {
+      _qualityHint = 'Move closer to camera';
+      return 0.15;
+    }
 
-    final eyeScore = ((face.leftEyeOpenProbability  as double? ?? 1.0) +
-                      (face.rightEyeOpenProbability as double? ?? 1.0)) / 2.0;
+    final leftEye  = face.leftEyeOpenProbability  as double? ?? 1.0;
+    final rightEye = face.rightEyeOpenProbability as double? ?? 1.0;
+    final eyeScore = (leftEye + rightEye) / 2.0;
 
     final score = (sizeScore * 0.35 +
-        (1 - yaw / 25) * 0.25 +
-        (1 - roll / 20) * 0.15 +
-        (1 - pitch / 20) * 0.15 +
-        eyeScore * 0.10)
+            (1 - (yaw / 35).clamp(0.0, 1.0)) * 0.25 +
+            (1 - (roll / 25).clamp(0.0, 1.0)) * 0.15 +
+            (1 - (pitch / 28).clamp(0.0, 1.0)) * 0.15 +
+            eyeScore * 0.10)
         .clamp(0.0, 1.0);
 
-    _qualityHint = score < 0.55
-        ? (sizeScore < 0.3 ? 'Move closer to camera' : 'Face the camera directly')
-        : '';
-    return score;
+    if (score < 0.55) {
+      if (sizeScore < 0.3) {
+        _qualityHint = 'Move closer to camera';
+      } else if (eyeScore < 0.5) {
+        _qualityHint = 'Keep eyes open — reduce glare on glasses';
+      } else if (pitch > 15) {
+        _qualityHint = 'Hold the phone at eye level';
+      } else {
+        _qualityHint = 'Face the camera directly';
+      }
+    } else {
+      _qualityHint = '';
+    }
+
+    // Never drop below 0.15 when a face is present — keeps Capture Now active.
+    return score.clamp(0.15, 1.0);
   }
 
   void _startStream() {
     if (_camCtrl == null || !_camCtrl!.value.isInitialized) return;
+
+    // Stall detection: 2-second tick. If quality hasn't been good for 12s,
+    // surface the Refresh & Retry banner so the user always has an action.
+    _noProgressSince = DateTime.now();
+    _scanStalled     = false;
+    _stallCheckTimer?.cancel();
+    _stallCheckTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (!mounted || _done) return;
+      final elapsed = DateTime.now().difference(_noProgressSince!);
+      final stalled = elapsed > const Duration(seconds: 12);
+      if (stalled != _scanStalled) setState(() => _scanStalled = stalled);
+    });
+
     _camCtrl!.startImageStream((image) async {
       if (_processingFrame || _done) return;
       _processingFrame = true;
@@ -345,6 +408,7 @@ class _AcademyStudentRegistrationScreenState
             _overlayState = FaceOverlayState.idle;
             _qualityScore = 0;
             _qualityHint  = '';
+            _faceDetected = false;
           });
           _cancelHold();
           return;
@@ -353,7 +417,9 @@ class _AcademyStudentRegistrationScreenState
         final quality = _computeQuality(faces.first);
         setState(() {
           _qualityScore = quality;
-          _overlayState = quality >= 0.55 ? FaceOverlayState.detected : FaceOverlayState.idle;
+          _faceDetected = true;
+          _overlayState =
+              quality >= 0.55 ? FaceOverlayState.detected : FaceOverlayState.idle;
         });
         if (quality >= 0.55 && !_autoCapturing) {
           _startHold();
@@ -367,6 +433,9 @@ class _AcademyStudentRegistrationScreenState
 
   void _startHold() {
     if (_autoCapturing) return;
+    // Good-quality frame — reset stall clock and dismiss any stall warning.
+    _noProgressSince = DateTime.now();
+    if (_scanStalled && mounted) setState(() => _scanStalled = false);
     _autoCapturing = true;
     _holdProgress  = 0.0;
     const holdMs   = 1500;
@@ -396,6 +465,9 @@ class _AcademyStudentRegistrationScreenState
       _faceImages.add(base64Encode(bytes));
       _captureCount++;
       _holdProgress = 0.0;
+      // Each successful capture resets the stall clock.
+      _noProgressSince = DateTime.now();
+      if (_scanStalled && mounted) setState(() => _scanStalled = false);
       if (_captureCount >= _requiredSamples) {
         _done          = true;
         _autoCapturing = false;
@@ -558,19 +630,22 @@ class _AcademyStudentRegistrationScreenState
             onRetry: _loadCourses,
           ),
           _Step4(
-            camCtrl:        _camCtrl,
-            camReady:       _camReady,
-            camError:       _camError,
-            onRetryCamera:  _initCamera,
-            overlayState:   _overlayState,
-            holdProgress:   _holdProgress,
-            qualityScore:   _qualityScore,
-            qualityHint:    _qualityHint,
-            captureCount:   _captureCount,
+            camCtrl:         _camCtrl,
+            camReady:        _camReady,
+            camError:        _camError,
+            onRetryCamera:   _initCamera,
+            overlayState:    _overlayState,
+            holdProgress:    _holdProgress,
+            qualityScore:    _qualityScore,
+            qualityHint:     _qualityHint,
+            captureCount:    _captureCount,
             requiredSamples: _requiredSamples,
-            done:       _done,
-            submitting: _submitting,
-            autoCapturing: _autoCapturing,
+            done:            _done,
+            submitting:      _submitting,
+            autoCapturing:   _autoCapturing,
+            faceDetected:    _faceDetected,
+            scanStalled:     _scanStalled,
+            onRetryCapture:  _retryCapture,
             onCaptureNow: () {
               _cancelHold();
               _autoCapturing = true;
@@ -583,6 +658,8 @@ class _AcademyStudentRegistrationScreenState
                 _captureCount = 0;
                 _done         = false;
                 _overlayState = FaceOverlayState.idle;
+                _scanStalled  = false;
+                _faceDetected = false;
               });
               _startStream();
             },
@@ -804,8 +881,10 @@ class _Step2 extends StatelessWidget {
 class _Step4 extends StatelessWidget {
   final CameraController? camCtrl;
   final bool camReady, done, submitting, autoCapturing;
+  final bool faceDetected, scanStalled;
   final String? camError;
   final VoidCallback onRetryCamera;
+  final VoidCallback onRetryCapture;
   final FaceOverlayState overlayState;
   final double holdProgress, qualityScore;
   final String qualityHint;
@@ -826,6 +905,9 @@ class _Step4 extends StatelessWidget {
     required this.done,
     required this.submitting,
     required this.autoCapturing,
+    required this.faceDetected,
+    required this.scanStalled,
+    required this.onRetryCapture,
     required this.onCaptureNow,
     required this.onSubmit,
     required this.onReset,
@@ -910,8 +992,8 @@ class _Step4 extends StatelessWidget {
           ),
           const SizedBox(height: 8),
 
-          // Quality bar
-          if (qualityScore > 0)
+          // Quality bar (shown when face is in frame)
+          if (faceDetected && !done)
             Row(children: [
               const Text('Quality: ', style: TextStyle(fontSize: 12)),
               Expanded(
@@ -926,6 +1008,38 @@ class _Step4 extends StatelessWidget {
                   style: const TextStyle(fontSize: 12)),
             ]),
           const SizedBox(height: 8),
+
+          // Stall warning — shown after 12 s with no good-quality frame
+          if (scanStalled && !done) ...[
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.amber.shade50,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.amber.shade300),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.warning_amber_rounded,
+                      color: Colors.amber.shade800, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      faceDetected
+                          ? 'Auto-capture is taking longer than usual. '
+                            'Improve lighting or remove glasses glare, '
+                            'then tap Capture Now or Refresh & Retry.'
+                          : 'Face not detected. Ensure your face is clearly '
+                            'visible, then tap Refresh & Retry Scan.',
+                      style: TextStyle(
+                          fontSize: 12, color: Colors.amber.shade900),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+          ],
 
           // Capture progress dots
           Row(
@@ -965,14 +1079,28 @@ class _Step4 extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             TextButton(onPressed: onReset, child: const Text('Retake Photos')),
-          ] else
+          ] else ...[
+            // Capture Now — enabled whenever a face is in frame (faceDetected),
+            // even if quality is too low for auto-capture. This lets the admin
+            // manually override for glasses / glare / lighting scenarios.
             OutlinedButton.icon(
-              onPressed: (!autoCapturing && qualityScore > 0) ? onCaptureNow : null,
+              onPressed: (!autoCapturing && faceDetected) ? onCaptureNow : null,
               icon: const Icon(Icons.camera_alt_outlined),
               label: Text(autoCapturing ? 'Capturing...' : 'Capture Now'),
               style: OutlinedButton.styleFrom(
                   minimumSize: const Size.fromHeight(48)),
             ),
+            // Refresh & Retry — always available (not just on stall) so users
+            // can recover from a frozen stream or persistent glare at any time.
+            const SizedBox(height: 8),
+            TextButton.icon(
+              onPressed: onRetryCapture,
+              icon: const Icon(Icons.refresh, size: 18),
+              label: const Text('Refresh & Retry Scan'),
+              style: TextButton.styleFrom(
+                  minimumSize: const Size.fromHeight(40)),
+            ),
+          ],
         ],
       ),
     );
