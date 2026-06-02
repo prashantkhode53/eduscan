@@ -6,12 +6,23 @@ import { batchEmbed, matchFace, cacheUpsert, cacheDelete } from '../../utils/ins
 // ── ID generation ─────────────────────────────────────────────────────────────
 
 async function generateStudentId(slug: string): Promise<string> {
-  const row = await academyQueryOne<{ count: string }>(
-    slug, `SELECT COUNT(*) FROM students`
+  const year   = new Date().getFullYear();
+  const prefix = `ACF-${year}-`;
+  // Use MAX over the numeric suffix of existing IDs, not COUNT. COUNT causes
+  // primary-key collisions when there are gaps (e.g. orphaned face-less
+  // students from abandoned two-phase registrations).
+  const row = await academyQueryOne<{ max_seq: string | null }>(
+    slug,
+    `SELECT MAX(
+       CAST(SUBSTRING(id FROM LENGTH($1) + 1) AS INTEGER)
+     ) AS max_seq
+     FROM students
+     WHERE id LIKE $2`,
+    [prefix, `${prefix}%`]
   );
-  const seq  = (parseInt(row?.count ?? '0') + 1).toString().padStart(5, '0');
-  const year = new Date().getFullYear();
-  return `ACF-${year}-${seq}`;
+  const seq = ((parseInt(row?.max_seq ?? '0') || 0) + 1)
+    .toString().padStart(5, '0');
+  return `${prefix}${seq}`;
 }
 
 // ── POST /api/academy/students ────────────────────────────────────────────────
@@ -41,6 +52,17 @@ export async function registerStudent(
     if (!courses?.length) {
       return next(new AppError('At least one course must be selected', 400));
     }
+
+    // Remove any orphaned face-less students for this mobile number created by
+    // previous abandoned two-phase registrations. They have no face_embedding,
+    // so they cannot be recognised — removing them before inserting the new
+    // record prevents duplicate-mobile confusion and cleans up the DB.
+    await academyExec(
+      academySlug,
+      `DELETE FROM students
+       WHERE mobile = $1 AND face_embedding IS NULL`,
+      [mobile]
+    );
 
     // Face is OPTIONAL here. The registration UI saves the student's details
     // first (so they're never lost if the scan or InsightFace service fails)

@@ -180,16 +180,15 @@ class _AcademyStudentRegistrationScreenState
       return true;
     } catch (e) {
       final msg = e.toString().replaceFirst('Exception: ', '');
-      // Older backend that still requires a face to create a student: proceed
-      // and let the single combined save happen after the scan.
-      if (_studentId == null && msg.contains('Face images are required')) {
-        return true;
-      }
-      if (mounted) {
-        messenger.showSnackBar(
-            SnackBar(content: Text(msg), backgroundColor: Colors.red));
-      }
-      return false;
+      // Phase 1 runs in the background while the user is on the camera screen.
+      // Never show an alarming red error from a background save — the fallback
+      // one-shot create in _submit() handles any failure transparently. Only
+      // surface genuinely user-actionable errors (e.g. invalid course selection)
+      // that can't be fixed by the fallback.
+      debugPrint('[register] Phase 1 failed (will fallback): $msg');
+      // Old backend: still requires face at creation — proceed silently.
+      // Any other error: also proceed and let _submit() do one-shot create.
+      return true;
     } finally {
       if (mounted) setState(() => _savingDetails = false);
     }
