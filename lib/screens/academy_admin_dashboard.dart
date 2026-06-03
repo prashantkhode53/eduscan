@@ -126,10 +126,10 @@ class _HomeTabState extends State<_HomeTab> {
   String _stat(String key) =>
       _loadingStats ? '…' : (_stats[key]?.toString() ?? '0');
 
-  /// Shows a bottom sheet with two registration options.
-  /// Returns true if a student was successfully registered (to refresh stats).
-  Future<bool?> _showRegisterOptions(BuildContext ctx) async {
-    return showModalBottomSheet<bool>(
+  /// Shows a bottom sheet with two registration options and reloads stats
+  /// if a student was successfully registered.
+  void _showRegisterOptions(BuildContext ctx) {
+    showModalBottomSheet<void>(
       context: ctx,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
@@ -176,7 +176,7 @@ class _HomeTabState extends State<_HomeTab> {
                     MaterialPageRoute(
                         builder: (_) => const BulkUploadScreen()),
                   );
-                  if (ctx.mounted) Navigator.pop(ctx, ok == true);
+                  if (ok == true && ctx.mounted) _loadStats();
                 },
               ),
               const SizedBox(height: 12),
@@ -195,7 +195,7 @@ class _HomeTabState extends State<_HomeTab> {
                         builder: (_) =>
                             const AcademyStudentRegistrationScreen()),
                   );
-                  if (ctx.mounted) Navigator.pop(ctx, ok == true);
+                  if (ok == true && ctx.mounted) _loadStats();
                 },
               ),
             ],
@@ -299,10 +299,7 @@ class _HomeTabState extends State<_HomeTab> {
                   icon: Icons.how_to_reg_outlined,
                   label: 'Register Student',
                   color: Colors.blue,
-                  onTap: () async {
-                    final ok = await _showRegisterOptions(context);
-                    if (ok == true) _loadStats();
-                  },
+                  onTap: () => _showRegisterOptions(context),
                 ),
                 _QuickAction(
                   icon: Icons.face_outlined,
