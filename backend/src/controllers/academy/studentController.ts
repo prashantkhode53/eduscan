@@ -216,6 +216,7 @@ interface BulkStudent {
   first_name: string; last_name: string; gender?: string; dob: string;
   mobile: string; email?: string; parent_name?: string;
   parent_mobile?: string; address?: string;
+  courses?: string; // comma-separated course names from the upload file
 }
 
 function normalizeDob(raw: string): string | null {
@@ -257,6 +258,25 @@ export async function bulkUploadStudents(
       existingKeys.set(k, s.id);
     }
 
+    // Load courses for the current academic year (fall back to all active courses
+    // if no current year is set) for case-insensitive name → id lookup.
+    const currentYear = await academyQueryOne<{ id: string }>(
+      academySlug,
+      `SELECT id FROM academic_years WHERE is_current_year = TRUE LIMIT 1`
+    );
+    const courseRows = await academyQuery<{ id: string; name: string; default_fee: number }>(
+      academySlug,
+      currentYear
+        ? `SELECT id, name, default_fee FROM courses WHERE is_active = TRUE AND academic_year_id = $1`
+        : `SELECT id, name, default_fee FROM courses WHERE is_active = TRUE`,
+      currentYear ? [currentYear.id] : []
+    );
+    // Map: lower-case course name → { id, default_fee }
+    const courseMap = new Map<string, { id: string; default_fee: number }>();
+    for (const c of courseRows) {
+      courseMap.set(c.name.trim().toLowerCase(), { id: c.id, default_fee: Number(c.default_fee) });
+    }
+
     // Current max ID sequence for bulk ID generation.
     const year = new Date().getFullYear();
     const prefix = `ACF-${year}-`;
@@ -269,18 +289,27 @@ export async function bulkUploadStudents(
     let seq = (parseInt(maxRow?.max_seq ?? '0') || 0) + 1;
 
     const results = {
-      total:     students.length,
-      imported:  0,
-      duplicates: 0,
-      failed:    0,
-      errors:    [] as { row: number; name: string; reason: string }[],
-      duplicate_details: [] as { row: number; existing_id: string; name: string }[],
+      total:              students.length,
+      imported:           0,
+      duplicates:         0,
+      failed:             0,
+      course_assignments: 0,
+      ignored_courses:    [] as string[],
+      errors:             [] as { row: number; name: string; reason: string }[],
+      duplicate_details:  [] as { row: number; existing_id: string; name: string }[],
     };
 
-    type InsertRow = [string, string, string, string, string | null, string,
-                     string | null, string | null, string | null, string | null];
-    const toInsert: InsertRow[] = [];
+    // Each entry carries the INSERT params plus the parsed course names from the row.
+    interface StudentInsert {
+      params: [string, string, string, string, string | null, string,
+               string | null, string | null, string | null, string | null];
+      courseNames: string[];
+    }
+    const toInsert: StudentInsert[] = [];
     const seenKeys = new Set<string>();
+
+    // Track unmatched course names across all rows (de-duplicated).
+    const ignoredCourseSet = new Set<string>();
 
     for (let i = 0; i < students.length; i++) {
       const s = students[i];
@@ -337,38 +366,76 @@ export async function bulkUploadStudents(
         continue;
       }
 
+      // ── Parse course names from the Courses column ────────────────────────────
+      const courseNames = (s.courses ?? '')
+        .split(',')
+        .map((c) => c.trim())
+        .filter((c) => c.length > 0)
+        .filter((c, idx, arr) => arr.indexOf(c) === idx); // deduplicate
+
+      // Pre-check: collect ignored course names now so the final report is complete
+      // even for rows whose DB insert later fails.
+      for (const cn of courseNames) {
+        if (!courseMap.has(cn.toLowerCase())) {
+          ignoredCourseSet.add(cn);
+        }
+      }
+
       const studentId = `${prefix}${(seq++).toString().padStart(5, '0')}`;
-      toInsert.push([
-        studentId, fn, ln, dobNorm!,
-        gender || null, mob,
-        email || null,
-        s.parent_name?.trim() || null,
-        pMob || null,
-        s.address?.trim() || null,
-      ]);
+      toInsert.push({
+        params: [
+          studentId, fn, ln, dobNorm!,
+          gender || null, mob,
+          email || null,
+          s.parent_name?.trim() || null,
+          pMob || null,
+          s.address?.trim() || null,
+        ],
+        courseNames,
+      });
     }
 
     // ── Bulk insert in one transaction ─────────────────────────────────────────
     if (toInsert.length) {
       await academyTransaction(academySlug, async (client) => {
-        for (const params of toInsert) {
+        for (const row of toInsert) {
           const r = await client.query(
             `INSERT INTO students
                (id, first_name, last_name, dob, gender, mobile, email,
                 parent_name, parent_mobile, address, status)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'active')
              ON CONFLICT (id) DO NOTHING`,
-            params
+            row.params
           );
-          if ((r.rowCount ?? 0) > 0) results.imported++;
-          else {
+          if ((r.rowCount ?? 0) > 0) {
+            results.imported++;
+            // Create course enrollments for matched courses.
+            for (const cn of row.courseNames) {
+              const course = courseMap.get(cn.toLowerCase());
+              if (course) {
+                await client.query(
+                  `INSERT INTO student_courses
+                     (student_id, course_id, fee_amount, start_date, status)
+                   VALUES ($1, $2, $3, CURRENT_DATE, 'active')
+                   ON CONFLICT (student_id, course_id) DO NOTHING`,
+                  [row.params[0], course.id, course.default_fee]
+                );
+                results.course_assignments++;
+              }
+            }
+          } else {
             results.failed++;
-            results.errors.push({ row: -1, name: `${params[1]} ${params[2]}`, reason: 'ID conflict' });
+            results.errors.push({
+              row: -1,
+              name: `${row.params[1]} ${row.params[2]}`,
+              reason: 'ID conflict',
+            });
           }
         }
       });
     }
 
+    results.ignored_courses = [...ignoredCourseSet];
     res.json({ success: true, data: results });
   } catch (err) { next(err); }
 }

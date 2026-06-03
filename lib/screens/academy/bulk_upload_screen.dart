@@ -34,7 +34,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   static const _columns = [
     'first_name', 'last_name', 'gender', 'dob',
-    'mobile', 'email', 'parent_name', 'parent_mobile', 'address',
+    'mobile', 'email', 'parent_name', 'parent_mobile', 'address', 'courses',
   ];
 
   // ── Template ──────────────────────────────────────────────────────────────
@@ -47,11 +47,12 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       const lines = [
         'First Name*,Last Name*,Gender (Male/Female/Other),'
             'Date Of Birth* (DD/MM/YYYY),Mobile* (10 digits),'
-            'Email,Parent/Guardian Name*,Parent Mobile* (10 digits),Address',
+            'Email,Parent/Guardian Name*,Parent Mobile* (10 digits),Address,'
+            'Courses (comma-separated)',
         'Priya,Sharma,Female,15/08/2005,9876543210,'
-            'priya@example.com,Meena Sharma,9123456789,Pune',
+            'priya@example.com,Meena Sharma,9123456789,Pune,NEET',
         'Rahul,Kumar,Male,20/03/2007,8765432109,'
-            ',Suresh Kumar,7654321098,Mumbai',
+            ',Suresh Kumar,7654321098,Mumbai,"NEET,JEE"',
       ];
       final content = lines.join('\n');
       final dir  = await getApplicationDocumentsDirectory();
@@ -395,7 +396,8 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         const SizedBox(height: 10),
         Text(
           'Supported formats: .xlsx  ·  .csv\n'
-          'Required columns: First Name, Last Name, DOB, Mobile, Parent Name, Parent Mobile\n'
+          'Required: First Name, Last Name, DOB, Mobile, Parent Name, Parent Mobile\n'
+          'Optional: Courses (comma-separated names, e.g. "NEET,JEE")\n'
           'Maximum: 1,000 students per upload.',
           style: TextStyle(
               fontSize: 13,
@@ -648,14 +650,16 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   }
 
   Widget _buildDone() {
-    final r         = _serverResult!;
-    final imported  = r['imported']   as int? ?? 0;
-    final dups      = r['duplicates'] as int? ?? 0;
-    final failed    = r['failed']     as int? ?? 0;
-    final total     = r['total']      as int? ?? 0;
-    final errors    = (r['errors']    as List? ?? []).cast<Map<String, dynamic>>();
-    final dupDetails = (r['duplicate_details'] as List? ?? [])
-        .cast<Map<String, dynamic>>();
+    final r                = _serverResult!;
+    final imported         = r['imported']           as int? ?? 0;
+    final dups             = r['duplicates']         as int? ?? 0;
+    final failed           = r['failed']             as int? ?? 0;
+    final total            = r['total']              as int? ?? 0;
+    final courseAssignments = r['course_assignments'] as int? ?? 0;
+    final ignoredCourses   = (r['ignored_courses']   as List? ?? [])
+        .cast<String>();
+    final errors     = (r['errors']           as List? ?? []).cast<Map<String, dynamic>>();
+    final dupDetails = (r['duplicate_details'] as List? ?? []).cast<Map<String, dynamic>>();
 
     return ListView(
       padding: EdgeInsets.fromLTRB(20, 20, 20,
@@ -679,8 +683,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
               const SizedBox(height: 12),
               Text(
                 imported > 0 ? 'Import Completed' : 'Import Finished',
-                style: const TextStyle(
-                    fontSize: 20, fontWeight: FontWeight.bold),
+                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 4),
               Text(
@@ -697,36 +700,72 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         ),
         const SizedBox(height: 24),
 
-        // Result cards
+        // Student import stat cards
         Row(children: [
-          Expanded(
-            child: _ResultCard(
-              icon: Icons.check_circle_outline,
-              label: 'Imported',
-              value: '$imported',
-              color: Colors.green,
-            ),
-          ),
+          Expanded(child: _ResultCard(
+            icon: Icons.check_circle_outline,
+            label: 'Imported',
+            value: '$imported',
+            color: Colors.green,
+          )),
           const SizedBox(width: 12),
-          Expanded(
-            child: _ResultCard(
-              icon: Icons.skip_next_outlined,
-              label: 'Skipped',
-              value: '$dups',
-              color: Colors.orange,
-            ),
-          ),
+          Expanded(child: _ResultCard(
+            icon: Icons.skip_next_outlined,
+            label: 'Skipped',
+            value: '$dups',
+            color: Colors.orange,
+          )),
           const SizedBox(width: 12),
-          Expanded(
-            child: _ResultCard(
-              icon: Icons.cancel_outlined,
-              label: 'Failed',
-              value: '$failed',
-              color: Colors.red,
-            ),
-          ),
+          Expanded(child: _ResultCard(
+            icon: Icons.cancel_outlined,
+            label: 'Failed',
+            value: '$failed',
+            color: Colors.red,
+          )),
         ]),
-        const SizedBox(height: 20),
+        const SizedBox(height: 12),
+
+        // Course assignment stat cards
+        Row(children: [
+          Expanded(child: _ResultCard(
+            icon: Icons.menu_book_outlined,
+            label: 'Enrollments',
+            value: '$courseAssignments',
+            color: Colors.blue,
+          )),
+          const SizedBox(width: 12),
+          Expanded(child: _ResultCard(
+            icon: Icons.block_outlined,
+            label: 'Ignored Courses',
+            value: '${ignoredCourses.length}',
+            color: Colors.grey,
+          )),
+          const SizedBox(width: 12),
+          const Expanded(child: SizedBox()), // spacer to keep alignment
+        ]),
+        const SizedBox(height: 12),
+
+        // Ignored course names (if any)
+        if (ignoredCourses.isNotEmpty) ...[
+          const Text('Ignored Course Names',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14,
+                  color: Colors.grey)),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6, runSpacing: 4,
+            children: ignoredCourses
+                .map((c) => Chip(
+                      label: Text(c, style: const TextStyle(fontSize: 11)),
+                      backgroundColor: Colors.grey.shade100,
+                      padding: EdgeInsets.zero,
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ))
+                .toList(),
+          ),
+          const SizedBox(height: 16),
+        ],
+
+        const SizedBox(height: 8),
 
         // Duplicate details
         if (dupDetails.isNotEmpty) ...[
