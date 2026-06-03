@@ -85,7 +85,12 @@ class _AcademyStudentRegistrationScreenState
     if (!mounted) return;
     setState(() { _loadingCourses = true; _courseError = null; });
     try {
-      final data = await AcademyApiService.getCourses();
+      // Load only courses belonging to the current academic year so students
+      // cannot be enrolled in archived-year courses during registration.
+      // Falls back to all active courses if no current year is configured.
+      final currentYear = await AcademyApiService.getCurrentAcademicYear();
+      final yearId = currentYear?['id'] as String?;
+      final data = await AcademyApiService.getCourses(academicYearId: yearId);
       if (!mounted) return;
       setState(() {
         _availableCourses = data.cast<Map<String, dynamic>>();

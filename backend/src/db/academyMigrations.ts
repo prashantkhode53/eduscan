@@ -58,6 +58,24 @@ export async function reconcileAcademySchemas(): Promise<void> {
           updated_at  TIMESTAMPTZ DEFAULT NOW()
         )
       `);
+      // Idempotent: create academic_years table + add FK column to courses.
+      await academyExec(slug, `
+        CREATE TABLE IF NOT EXISTS academic_years (
+          id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          academic_year_name  VARCHAR(20) NOT NULL,
+          start_date          DATE NOT NULL,
+          end_date            DATE NOT NULL,
+          status              VARCHAR(10) DEFAULT 'active'
+                                CHECK (status IN ('active','inactive')),
+          is_current_year     BOOLEAN DEFAULT FALSE,
+          created_at          TIMESTAMPTZ DEFAULT NOW(),
+          updated_at          TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+      await academyExec(slug, `
+        ALTER TABLE IF EXISTS courses
+          ADD COLUMN IF NOT EXISTS academic_year_id UUID REFERENCES academic_years(id) ON DELETE SET NULL
+      `);
       ok++;
     } catch (err) {
       console.error(`[Reconcile] schema "${slug}" failed:`, err);
@@ -144,20 +162,36 @@ export async function runAcademyMigrations(
         ADD COLUMN IF NOT EXISTS parent_fcm_token TEXT
     `);
 
+    // ── Academic Years ────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS academic_years (
+        id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        academic_year_name  VARCHAR(20) NOT NULL,
+        start_date          DATE NOT NULL,
+        end_date            DATE NOT NULL,
+        status              VARCHAR(10) DEFAULT 'active'
+                              CHECK (status IN ('active','inactive')),
+        is_current_year     BOOLEAN DEFAULT FALSE,
+        created_at          TIMESTAMPTZ DEFAULT NOW(),
+        updated_at          TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
     // ── Courses ───────────────────────────────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS courses (
-        id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        name            VARCHAR(100) NOT NULL,
-        description     TEXT,
-        subject         VARCHAR(50),
-        duration_months INT,
-        default_fee     DECIMAL(10,2) DEFAULT 0,
-        schedule        VARCHAR(20) DEFAULT 'monthly'
-                          CHECK (schedule IN ('monthly','quarterly','onetime')),
-        is_active       BOOLEAN DEFAULT TRUE,
-        created_at      TIMESTAMPTZ DEFAULT NOW(),
-        updated_at      TIMESTAMPTZ DEFAULT NOW()
+        id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        academic_year_id UUID REFERENCES academic_years(id) ON DELETE SET NULL,
+        name             VARCHAR(100) NOT NULL,
+        description      TEXT,
+        subject          VARCHAR(50),
+        duration_months  INT,
+        default_fee      DECIMAL(10,2) DEFAULT 0,
+        schedule         VARCHAR(20) DEFAULT 'monthly'
+                           CHECK (schedule IN ('monthly','quarterly','onetime')),
+        is_active        BOOLEAN DEFAULT TRUE,
+        created_at       TIMESTAMPTZ DEFAULT NOW(),
+        updated_at       TIMESTAMPTZ DEFAULT NOW()
       )
     `);
 

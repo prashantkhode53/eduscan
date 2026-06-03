@@ -77,11 +77,61 @@ class AcademyApiService {
     return _parse(res) as Map<String, dynamic>;
   }
 
+  // ── Academic Years ────────────────────────────────────────────────────────
+
+  static Future<List<Map<String, dynamic>>> getAcademicYears() async {
+    final res = await http
+        .get(Uri.parse(ApiEndpoints.academyAcademicYears), headers: await _headers())
+        .timeout(_timeout);
+    final data = _parse(res);
+    return (data as List).cast<Map<String, dynamic>>();
+  }
+
+  static Future<Map<String, dynamic>?> getCurrentAcademicYear() async {
+    final res = await http
+        .get(Uri.parse('${ApiEndpoints.academyAcademicYears}/current'),
+            headers: await _headers())
+        .timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>?;
+  }
+
+  static Future<Map<String, dynamic>> createAcademicYear(
+      Map<String, dynamic> body) async {
+    final res = await http
+        .post(Uri.parse(ApiEndpoints.academyAcademicYears),
+            headers: await _headers(), body: jsonEncode(body))
+        .timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
+  static Future<Map<String, dynamic>> updateAcademicYear(
+      String id, Map<String, dynamic> body) async {
+    final res = await http
+        .put(Uri.parse('${ApiEndpoints.academyAcademicYears}/$id'),
+            headers: await _headers(), body: jsonEncode(body))
+        .timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
+  static Future<void> deleteAcademicYear(String id) async {
+    final res = await http
+        .delete(Uri.parse('${ApiEndpoints.academyAcademicYears}/$id'),
+            headers: await _headers())
+        .timeout(_timeout);
+    _parse(res);
+  }
+
   // ── Courses ───────────────────────────────────────────────────────────────
 
-  static Future<List<dynamic>> getCourses() async {
+  static Future<List<dynamic>> getCourses({String? academicYearId}) async {
+    final params = <String, String>{
+      if (academicYearId != null) 'academic_year_id': academicYearId,
+    };
+    final uri = params.isEmpty
+        ? Uri.parse(ApiEndpoints.academyCourses)
+        : Uri.parse(ApiEndpoints.academyCourses).replace(queryParameters: params);
     final res = await http
-        .get(Uri.parse(ApiEndpoints.academyCourses), headers: await _headers())
+        .get(uri, headers: await _headers())
         .timeout(_timeout);
     return _parse(res) as List<dynamic>;
   }

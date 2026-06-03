@@ -10,6 +10,7 @@ import 'academy/bulk_upload_screen.dart';
 import 'academy/fees_screen.dart';
 import 'academy/academy_face_scan_screen.dart';
 import 'academy/qr_code_screen.dart';
+import 'academy/academic_year_master_screen.dart';
 
 class AcademyAdminDashboard extends StatefulWidget {
   const AcademyAdminDashboard({super.key});
@@ -450,6 +451,25 @@ class _SettingsTab extends StatelessWidget {
                   ),
                 ],
               ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Card(
+            child: Column(
+              children: [
+                ListTile(
+                  leading: Icon(Icons.calendar_today_outlined,
+                      color: theme.colorScheme.primary),
+                  title: const Text('Academic Year Master'),
+                  subtitle: const Text('Manage academic years'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const AcademicYearMasterScreen()),
+                  ),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 16),

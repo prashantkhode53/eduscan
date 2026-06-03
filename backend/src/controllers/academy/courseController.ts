@@ -4,6 +4,8 @@ import { AppError } from '../../middleware/errorHandler';
 
 interface CourseRow {
   id: string;
+  academic_year_id: string | null;
+  academic_year_name: string | null;
   name: string;
   description: string | null;
   subject: string | null;
@@ -22,15 +24,21 @@ export async function listCourses(
 ): Promise<void> {
   try {
     const { academySlug } = req.academyUser!;
+    const { academic_year_id } = req.query as Record<string, string>;
+
     const courses = await academyQuery<CourseRow>(
       academySlug,
       `SELECT c.*,
+              ay.academic_year_name,
               COUNT(sc.id) FILTER (WHERE sc.status = 'active') AS student_count
        FROM courses c
+       LEFT JOIN academic_years ay ON ay.id = c.academic_year_id
        LEFT JOIN student_courses sc ON sc.course_id = c.id
        WHERE c.is_active = TRUE
-       GROUP BY c.id
-       ORDER BY c.name`
+         AND ($1::uuid IS NULL OR c.academic_year_id = $1::uuid)
+       GROUP BY c.id, ay.academic_year_name
+       ORDER BY c.name`,
+      [academic_year_id || null]
     );
     res.json({ success: true, data: courses });
   } catch (err) { next(err); }
@@ -43,21 +51,24 @@ export async function createCourse(
 ): Promise<void> {
   try {
     const { academySlug } = req.academyUser!;
-    const { name, description, subject, duration_months, default_fee, schedule } =
-      req.body as {
-        name: string; description?: string; subject?: string;
-        duration_months?: number; default_fee?: number;
-        schedule?: 'monthly' | 'quarterly' | 'onetime';
-      };
+    const {
+      academic_year_id, name, description, subject,
+      duration_months, default_fee, schedule,
+    } = req.body as {
+      academic_year_id?: string; name: string; description?: string;
+      subject?: string; duration_months?: number; default_fee?: number;
+      schedule?: 'monthly' | 'quarterly' | 'onetime';
+    };
 
     if (!name?.trim()) return next(new AppError('Course name is required', 400));
 
     const course = await academyQueryOne<CourseRow>(
       academySlug,
-      `INSERT INTO courses (name, description, subject, duration_months, default_fee, schedule)
-       VALUES ($1,$2,$3,$4,$5,$6)
+      `INSERT INTO courses (academic_year_id, name, description, subject, duration_months, default_fee, schedule)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
        RETURNING *`,
       [
+        academic_year_id ?? null,
         name.trim(),
         description ?? null,
         subject ?? null,
@@ -78,23 +89,31 @@ export async function updateCourse(
   try {
     const { academySlug } = req.academyUser!;
     const { id } = req.params;
-    const { name, description, subject, duration_months, default_fee, schedule } =
-      req.body as Partial<CourseRow>;
+    const {
+      academic_year_id, name, description, subject,
+      duration_months, default_fee, schedule,
+    } = req.body as Partial<CourseRow> & { academic_year_id?: string | null };
 
     const course = await academyQueryOne<CourseRow>(
       academySlug,
       `UPDATE courses
-       SET name             = COALESCE($1, name),
-           description      = COALESCE($2, description),
-           subject          = COALESCE($3, subject),
-           duration_months  = COALESCE($4, duration_months),
-           default_fee      = COALESCE($5, default_fee),
-           schedule         = COALESCE($6, schedule),
+       SET academic_year_id = CASE WHEN $1::boolean THEN $2::uuid ELSE academic_year_id END,
+           name             = COALESCE($3, name),
+           description      = COALESCE($4, description),
+           subject          = COALESCE($5, subject),
+           duration_months  = COALESCE($6, duration_months),
+           default_fee      = COALESCE($7, default_fee),
+           schedule         = COALESCE($8, schedule),
            updated_at       = NOW()
-       WHERE id = $7 AND is_active = TRUE
+       WHERE id = $9 AND is_active = TRUE
        RETURNING *`,
-      [name ?? null, description ?? null, subject ?? null,
-       duration_months ?? null, default_fee ?? null, schedule ?? null, id]
+      [
+        'academic_year_id' in req.body,  // $1: whether to update the field
+        academic_year_id ?? null,         // $2: new value (or null to clear)
+        name ?? null, description ?? null, subject ?? null,
+        duration_months ?? null, default_fee ?? null, schedule ?? null,
+        id,
+      ]
     );
     if (!course) return next(new AppError('Course not found', 404));
     res.json({ success: true, data: course, message: 'Course updated' });
@@ -110,7 +129,6 @@ export async function deleteCourse(
     const { academySlug } = req.academyUser!;
     const { id } = req.params;
 
-    // Check no active enrollments
     const active = await academyQueryOne<{ count: string }>(
       academySlug,
       `SELECT COUNT(*) FROM student_courses WHERE course_id=$1 AND status='active'`,
