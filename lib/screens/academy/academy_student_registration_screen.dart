@@ -2,6 +2,8 @@
 import 'dart:convert';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../../providers/academic_year_provider.dart';
 import '../../services/academy_api_service.dart';
 import '../../services/face_service.dart';
 import '../../widgets/face_overlay_painter.dart';
@@ -85,11 +87,9 @@ class _AcademyStudentRegistrationScreenState
     if (!mounted) return;
     setState(() { _loadingCourses = true; _courseError = null; });
     try {
-      // Load only courses belonging to the current academic year so students
-      // cannot be enrolled in archived-year courses during registration.
-      // Falls back to all active courses if no current year is configured.
-      final currentYear = await AcademyApiService.getCurrentAcademicYear();
-      final yearId = currentYear?['id'] as String?;
+      // Use the globally selected academic year from the Dashboard header.
+      // Falls back to all active courses if no year is selected yet.
+      final yearId = context.read<AcademicYearProvider>().selectedId;
       final data = await AcademyApiService.getCourses(academicYearId: yearId);
       if (!mounted) return;
       setState(() {

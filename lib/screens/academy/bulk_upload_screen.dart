@@ -5,6 +5,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:provider/provider.dart';
+import '../../providers/academic_year_provider.dart';
 import '../../services/academy_api_service.dart';
 
 enum _Step { initial, parsing, preview, uploading, done }
@@ -306,7 +308,9 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
     setState(() => _step = _Step.uploading);
     try {
-      final result = await AcademyApiService.bulkUploadStudents(validRows);
+      final yearId = context.read<AcademicYearProvider>().selectedId;
+      final result = await AcademyApiService.bulkUploadStudents(
+          validRows, academicYearId: yearId);
       setState(() { _serverResult = result; _step = _Step.done; });
     } catch (e) {
       if (mounted) {

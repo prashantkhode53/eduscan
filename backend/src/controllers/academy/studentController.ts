@@ -234,7 +234,8 @@ export async function bulkUploadStudents(
 ): Promise<void> {
   try {
     const { academySlug } = req.academyUser!;
-    const { students } = req.body as { students: BulkStudent[] };
+    const { students, academic_year_id: requestedYearId } =
+      req.body as { students: BulkStudent[]; academic_year_id?: string };
 
     if (!Array.isArray(students) || !students.length) {
       return next(new AppError('No student records provided', 400));
@@ -258,18 +259,22 @@ export async function bulkUploadStudents(
       existingKeys.set(k, s.id);
     }
 
-    // Load courses for the current academic year (fall back to all active courses
-    // if no current year is set) for case-insensitive name → id lookup.
-    const currentYear = await academyQueryOne<{ id: string }>(
-      academySlug,
-      `SELECT id FROM academic_years WHERE is_current_year = TRUE LIMIT 1`
-    );
+    // Resolve which academic year's courses to match against.
+    // Priority: year supplied in request body → current year → all active courses.
+    let resolvedYearId: string | null = requestedYearId ?? null;
+    if (!resolvedYearId) {
+      const currentYear = await academyQueryOne<{ id: string }>(
+        academySlug,
+        `SELECT id FROM academic_years WHERE is_current_year = TRUE LIMIT 1`
+      );
+      resolvedYearId = currentYear?.id ?? null;
+    }
     const courseRows = await academyQuery<{ id: string; name: string; default_fee: number }>(
       academySlug,
-      currentYear
+      resolvedYearId
         ? `SELECT id, name, default_fee FROM courses WHERE is_active = TRUE AND academic_year_id = $1`
         : `SELECT id, name, default_fee FROM courses WHERE is_active = TRUE`,
-      currentYear ? [currentYear.id] : []
+      resolvedYearId ? [resolvedYearId] : []
     );
     // Map: lower-case course name → { id, default_fee }
     const courseMap = new Map<string, { id: string; default_fee: number }>();
@@ -617,33 +622,70 @@ export async function getStats(
   try {
     const { academySlug } = req.academyUser!;
     const today = new Date().toISOString().split('T')[0];
+    const { academic_year_id } = req.query as Record<string, string>;
+    const yearId = academic_year_id || null;
 
     const [students, courses, presentToday, feesDue] = await Promise.all([
-      academyQueryOne<{ count: string }>(
-        academySlug, `SELECT COUNT(*) FROM students WHERE status='active'`
-      ),
-      academyQueryOne<{ count: string }>(
-        academySlug, `SELECT COUNT(*) FROM courses WHERE is_active=TRUE`
-      ),
-      academyQueryOne<{ count: string }>(
-        academySlug,
-        `SELECT COUNT(*) FROM attendance WHERE date=$1 AND status IN ('present','late')`,
-        [today]
-      ),
-      academyQueryOne<{ count: string }>(
-        academySlug,
-        `SELECT COUNT(*) FROM fee_records WHERE status IN ('pending','overdue') AND due_date<=$1`,
-        [today]
-      ),
+      yearId
+        ? academyQueryOne<{ count: string }>(
+            academySlug,
+            `SELECT COUNT(DISTINCT sc.student_id) AS count
+             FROM student_courses sc
+             JOIN courses c ON c.id = sc.course_id
+             JOIN students s ON s.id = sc.student_id
+             WHERE c.academic_year_id = $1 AND sc.status = 'active' AND s.status = 'active'`,
+            [yearId]
+          )
+        : academyQueryOne<{ count: string }>(
+            academySlug, `SELECT COUNT(*) AS count FROM students WHERE status='active'`
+          ),
+      yearId
+        ? academyQueryOne<{ count: string }>(
+            academySlug,
+            `SELECT COUNT(*) AS count FROM courses WHERE academic_year_id = $1 AND is_active = TRUE`,
+            [yearId]
+          )
+        : academyQueryOne<{ count: string }>(
+            academySlug, `SELECT COUNT(*) AS count FROM courses WHERE is_active=TRUE`
+          ),
+      yearId
+        ? academyQueryOne<{ count: string }>(
+            academySlug,
+            `SELECT COUNT(DISTINCT a.student_id) AS count
+             FROM attendance a
+             JOIN student_courses sc ON sc.student_id = a.student_id AND sc.status = 'active'
+             JOIN courses c          ON c.id = sc.course_id
+             WHERE a.date = $1 AND a.status IN ('present','late') AND c.academic_year_id = $2`,
+            [today, yearId]
+          )
+        : academyQueryOne<{ count: string }>(
+            academySlug,
+            `SELECT COUNT(*) AS count FROM attendance WHERE date=$1 AND status IN ('present','late')`,
+            [today]
+          ),
+      yearId
+        ? academyQueryOne<{ count: string }>(
+            academySlug,
+            `SELECT COUNT(*) AS count
+             FROM fee_records fr
+             JOIN courses c ON c.id = fr.course_id
+             WHERE fr.status IN ('pending','overdue') AND fr.due_date <= $1 AND c.academic_year_id = $2`,
+            [today, yearId]
+          )
+        : academyQueryOne<{ count: string }>(
+            academySlug,
+            `SELECT COUNT(*) AS count FROM fee_records WHERE status IN ('pending','overdue') AND due_date<=$1`,
+            [today]
+          ),
     ]);
 
     res.json({
       success: true,
       data: {
-        total_students:  parseInt(students?.count  ?? '0'),
-        total_courses:   parseInt(courses?.count   ?? '0'),
+        total_students:  parseInt(students?.count    ?? '0'),
+        total_courses:   parseInt(courses?.count     ?? '0'),
         present_today:   parseInt(presentToday?.count ?? '0'),
-        fees_due:        parseInt(feesDue?.count   ?? '0'),
+        fees_due:        parseInt(feesDue?.count     ?? '0'),
       },
     });
   } catch (err) { next(err); }

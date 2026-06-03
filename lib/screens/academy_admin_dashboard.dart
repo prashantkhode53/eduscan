@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show SystemNavigator;
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
+import '../providers/academic_year_provider.dart';
 import '../models/academy_user.dart';
 import '../services/academy_api_service.dart';
 import 'academy/course_master_screen.dart';
@@ -115,19 +116,110 @@ class _HomeTabState extends State<_HomeTab> {
   @override
   void initState() {
     super.initState();
-    _loadStats();
+    Future.microtask(() async {
+      final yp = context.read<AcademicYearProvider>();
+      await yp.init();
+      yp.addListener(_onYearChanged);
+      _loadStats();
+    });
   }
 
+  @override
+  void dispose() {
+    context.read<AcademicYearProvider>().removeListener(_onYearChanged);
+    super.dispose();
+  }
+
+  void _onYearChanged() => _loadStats();
+
   Future<void> _loadStats() async {
+    if (!mounted) return;
     setState(() => _loadingStats = true);
     try {
-      _stats = await AcademyApiService.getStats();
+      final yearId = context.read<AcademicYearProvider>().selectedId;
+      _stats = await AcademyApiService.getStats(academicYearId: yearId);
     } catch (_) {}
-    setState(() => _loadingStats = false);
+    if (mounted) setState(() => _loadingStats = false);
   }
 
   String _stat(String key) =>
       _loadingStats ? '…' : (_stats[key]?.toString() ?? '0');
+
+  void _showYearPicker() {
+    final yearProvider = context.read<AcademicYearProvider>();
+    final theme        = Theme.of(context);
+    showModalBottomSheet<void>(
+      context: context,
+      useSafeArea: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(height: 12),
+          Container(
+            width: 40, height: 4,
+            decoration: BoxDecoration(
+                color: Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(2)),
+          ),
+          const SizedBox(height: 8),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text('Select Academic Year',
+                  style: theme.textTheme.titleSmall
+                      ?.copyWith(fontWeight: FontWeight.bold)),
+            ),
+          ),
+          const Divider(height: 1),
+          if (yearProvider.years.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(24),
+              child: Text('No academic years configured.',
+                  style: TextStyle(color: Colors.grey)),
+            )
+          else
+            ...yearProvider.years.map((y) {
+              final id       = y['id']                 as String;
+              final name     = y['academic_year_name'] as String? ?? '';
+              final isCurr   = y['is_current_year']   == true;
+              final selected = yearProvider.selectedId == id;
+              return ListTile(
+                leading: Icon(
+                  isCurr ? Icons.star_rounded : Icons.calendar_today_outlined,
+                  color: isCurr ? Colors.amber : theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                  size: 20,
+                ),
+                title: Text(name,
+                    style: TextStyle(
+                        fontWeight: selected ? FontWeight.bold : FontWeight.normal)),
+                trailing: selected
+                    ? Icon(Icons.check_circle, color: theme.colorScheme.primary, size: 20)
+                    : null,
+                onTap: () {
+                  yearProvider.select(id, name);
+                  Navigator.pop(ctx);
+                },
+              );
+            }),
+          const Divider(height: 1),
+          ListTile(
+            leading: const Icon(Icons.settings_outlined, size: 20),
+            title: const Text('Manage Academic Years'),
+            onTap: () {
+              Navigator.pop(ctx);
+              Navigator.push(context, MaterialPageRoute(
+                builder: (_) => const AcademicYearMasterScreen(),
+              )).then((_) => yearProvider.init(force: true));
+            },
+          ),
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
 
   /// Shows a bottom sheet with two registration options and reloads stats
   /// if a student was successfully registered.
@@ -210,14 +302,51 @@ class _HomeTabState extends State<_HomeTab> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final user  = widget.user;
+    final theme      = Theme.of(context);
+    final user       = widget.user;
+    final yearProvider = context.watch<AcademicYearProvider>();
 
     return Scaffold(
       appBar: AppBar(
         title: Text(user.academyName,
             style: const TextStyle(fontWeight: FontWeight.bold)),
         actions: [
+          // ── Academic Year selector ─────────────────────────────────────
+          GestureDetector(
+            onTap: _showYearPicker,
+            child: Container(
+              margin: const EdgeInsets.symmetric(vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.primary.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                    color: theme.colorScheme.primary.withValues(alpha: 0.3)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (yearProvider.loading)
+                    const SizedBox(
+                        width: 12, height: 12,
+                        child: CircularProgressIndicator(strokeWidth: 1.5))
+                  else
+                    Text(
+                      yearProvider.selectedName.isNotEmpty
+                          ? yearProvider.selectedName
+                          : 'Select Year',
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: theme.colorScheme.primary),
+                    ),
+                  Icon(Icons.arrow_drop_down,
+                      size: 16, color: theme.colorScheme.primary),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
           IconButton(
               icon: const Icon(Icons.refresh),
               onPressed: _loadStats),
@@ -457,25 +586,6 @@ class _SettingsTab extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           Card(
-            child: Column(
-              children: [
-                ListTile(
-                  leading: Icon(Icons.calendar_today_outlined,
-                      color: theme.colorScheme.primary),
-                  title: const Text('Academic Year Master'),
-                  subtitle: const Text('Manage academic years'),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                        builder: (_) => const AcademicYearMasterScreen()),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-          Card(
             child: ListTile(
               leading: const Icon(Icons.logout, color: Colors.red),
               title: const Text('Log Out',
@@ -485,7 +595,7 @@ class _SettingsTab extends StatelessWidget {
                   context: context,
                   builder: (_) => AlertDialog(
                     title: const Text('Log Out'),
-                    content: const Text('Are you sure?'),
+                    content: const Text('Are you sure you want to logout from EduScan?'),
                     actions: [
                       TextButton(
                           onPressed: () => Navigator.pop(context, false),
@@ -494,11 +604,12 @@ class _SettingsTab extends StatelessWidget {
                           style: FilledButton.styleFrom(
                               backgroundColor: Colors.red),
                           onPressed: () => Navigator.pop(context, true),
-                          child: const Text('Log Out')),
+                          child: const Text('Logout')),
                     ],
                   ),
                 );
                 if (confirm == true && context.mounted) {
+                  context.read<AcademicYearProvider>().reset();
                   await context.read<AuthProvider>().logout();
                   Navigator.of(context)
                       .pushNamedAndRemoveUntil('/login', (_) => false);

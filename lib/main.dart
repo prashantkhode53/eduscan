@@ -9,6 +9,7 @@ import 'providers/student_provider.dart';
 import 'providers/attendance_provider.dart';
 import 'providers/connectivity_provider.dart';
 import 'providers/parent_auth_provider.dart';
+import 'providers/academic_year_provider.dart';
 import 'services/fcm_service.dart';
 
 /// Navigator key exposed so FcmService can push routes from notification taps.
@@ -34,6 +35,7 @@ void main() async {
           ChangeNotifierProvider(create: (_) => StudentProvider()),
           ChangeNotifierProvider(create: (_) => AttendanceProvider()),
           ChangeNotifierProvider(create: (_) => ParentAuthProvider()),
+          ChangeNotifierProvider(create: (_) => AcademicYearProvider()),
         ],
         child: EduScanApp(navigatorKey: navigatorKey),
       ),

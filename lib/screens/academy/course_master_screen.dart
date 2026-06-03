@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../../providers/academic_year_provider.dart';
 import '../../services/academy_api_service.dart';
 
 class CourseMasterScreen extends StatefulWidget {
@@ -17,6 +19,8 @@ class _CourseMasterScreenState extends State<CourseMasterScreen> {
   @override
   void initState() {
     super.initState();
+    // Default filter to the globally selected academic year.
+    _filterYearId = context.read<AcademicYearProvider>().selectedId;
     _loadAll();
   }
 

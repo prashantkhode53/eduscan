@@ -69,10 +69,16 @@ class AcademyApiService {
 
   // ── Stats ─────────────────────────────────────────────────────────────────
 
-  static Future<Map<String, dynamic>> getStats() async {
+  static Future<Map<String, dynamic>> getStats({String? academicYearId}) async {
+    final params = <String, String>{
+      if (academicYearId != null) 'academic_year_id': academicYearId,
+    };
+    final uri = params.isEmpty
+        ? Uri.parse('${ApiEndpoints.academyStudents}/stats')
+        : Uri.parse('${ApiEndpoints.academyStudents}/stats')
+            .replace(queryParameters: params);
     final res = await http
-        .get(Uri.parse(ApiEndpoints.academyStudents + '/stats'),
-            headers: await _headers())
+        .get(uri, headers: await _headers())
         .timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
   }
@@ -203,12 +209,15 @@ class AcademyApiService {
   /// Bulk-upload pre-parsed student records. The server validates, deduplicates
   /// against the DB, and creates student profiles. Returns detailed results.
   static Future<Map<String, dynamic>> bulkUploadStudents(
-      List<Map<String, dynamic>> students) async {
+      List<Map<String, dynamic>> students, {String? academicYearId}) async {
     final res = await http
         .post(
           Uri.parse('${ApiEndpoints.academyStudents}/bulk-upload'),
           headers: await _headers(),
-          body: jsonEncode({'students': students}),
+          body: jsonEncode({
+            'students': students,
+            if (academicYearId != null) 'academic_year_id': academicYearId,
+          }),
         )
         .timeout(const Duration(seconds: 120));
     return _parse(res) as Map<String, dynamic>;
