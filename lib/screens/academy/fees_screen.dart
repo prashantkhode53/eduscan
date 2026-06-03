@@ -1,5 +1,3 @@
-import 'dart:convert';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import '../../services/academy_api_service.dart';
 import 'student_fees_detail_tab.dart';
@@ -525,9 +523,6 @@ class _FeeCollectionSheetState extends State<FeeCollectionSheet> {
   String _paymentMode = 'cash';
   bool _saving = false;
 
-  Map<String, dynamic>? _activeQr;
-  bool _showQr = false;
-
   @override
   void initState() {
     super.initState();
@@ -535,23 +530,6 @@ class _FeeCollectionSheetState extends State<FeeCollectionSheet> {
     final paid  = double.tryParse(widget.record['amount_paid']?.toString() ?? '0') ?? 0.0;
     final balance = (due - paid).clamp(0.0, double.infinity);
     _amountCtrl.text = balance.toStringAsFixed(0);
-    _loadActiveQr();
-  }
-
-  Future<void> _loadActiveQr() async {
-    try {
-      final qr = await AcademyApiService.getActiveQrCode();
-      if (mounted && qr != null) setState(() => _activeQr = qr);
-    } catch (_) {}
-  }
-
-  Uint8List? _qrBytes() {
-    final data = _activeQr?['image_data'] as String? ?? '';
-    if (data.isEmpty) return null;
-    try {
-      final b64 = data.contains(',') ? data.split(',').last : data;
-      return base64Decode(b64);
-    } catch (_) { return null; }
   }
 
   @override
@@ -601,9 +579,11 @@ class _FeeCollectionSheetState extends State<FeeCollectionSheet> {
     final paid    = double.tryParse(widget.record['amount_paid']?.toString() ?? '0') ?? 0.0;
     final balance = (due - paid).clamp(0.0, double.infinity);
 
+    final mq = MediaQuery.of(context);
     return SingleChildScrollView(
       padding: EdgeInsets.fromLTRB(
-          24, 24, 24, MediaQuery.of(context).viewInsets.bottom + 24),
+          24, 24, 24,
+          mq.viewInsets.bottom + mq.padding.bottom + 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -681,53 +661,7 @@ class _FeeCollectionSheetState extends State<FeeCollectionSheet> {
             decoration: const InputDecoration(
                 labelText: 'Remarks (optional)', border: OutlineInputBorder()),
           ),
-          const SizedBox(height: 16),
-
-          // Active QR code (shown when available)
-          if (_activeQr != null) ...[
-            InkWell(
-              onTap: () => setState(() => _showQr = !_showQr),
-              borderRadius: BorderRadius.circular(10),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
-                ),
-                child: Row(children: [
-                  Icon(Icons.qr_code_2, color: Theme.of(context).colorScheme.primary),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(_activeQr!['name'] as String? ?? 'Pay via QR',
-                        style: const TextStyle(fontWeight: FontWeight.w600)),
-                  ),
-                  Icon(_showQr ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down),
-                ]),
-              ),
-            ),
-            if (_showQr) ...[
-              const SizedBox(height: 10),
-              Builder(builder: (_) {
-                final bytes = _qrBytes();
-                return bytes != null
-                    ? ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: Image.memory(bytes, height: 200, fit: BoxFit.contain))
-                    : const SizedBox.shrink();
-              }),
-              if ((_activeQr!['description'] as String?)?.isNotEmpty ?? false)
-                Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Text(
-                    _activeQr!['description'] as String,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 12,
-                        color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6)),
-                  ),
-                ),
-            ],
-            const SizedBox(height: 12),
-          ],
+          const SizedBox(height: 20),
 
           FilledButton.icon(
             onPressed: _saving ? null : _collect,
