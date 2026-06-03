@@ -58,10 +58,12 @@ class _AcademyStudentEditScreenState
   CameraController? _camCtrl;
   CameraDescription? _frontCam;
   bool _camReady        = false;
-  String? _camError;    // non-null => init failed; show error + Retry
+  String? _camError;
   bool _processingFrame = false;
   bool _autoCapturing   = false;
   bool _faceDone        = false;
+  bool _faceDetected    = false;
+  bool _scanStalled     = false;
   double _holdProgress  = 0.0;
   double _qualityScore  = 0.0;
   String _qualityHint   = '';
@@ -70,6 +72,8 @@ class _AcademyStudentEditScreenState
   static const int _requiredSamples = 5;
   int _captureCount = 0;
   Timer? _progressTicker;
+  Timer? _stallTimer;
+  DateTime? _noProgressSince;
 
   // ── Submit ─────────────────────────────────────────────────────────────────
   bool _submitting = false;
@@ -166,6 +170,7 @@ class _AcademyStudentEditScreenState
     _dobCtrl.dispose();
     _parentNameCtrl.dispose(); _parentMobCtrl.dispose();
     _addressCtrl.dispose();
+    _stallTimer?.cancel();
     _progressTicker?.cancel();
     _camCtrl?.dispose();
     super.dispose();
@@ -265,6 +270,8 @@ class _AcademyStudentEditScreenState
   }
 
   void _disposeCamera() {
+    _stallTimer?.cancel();
+    _stallTimer      = null;
     _progressTicker?.cancel();
     _progressTicker  = null;
     _camCtrl?.dispose();
@@ -306,6 +313,16 @@ class _AcademyStudentEditScreenState
   }
 
   void _startStream() {
+    _noProgressSince = null;
+    _stallTimer?.cancel();
+    _stallTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (!mounted || _faceDone) return;
+      final np = _noProgressSince;
+      if (np != null && DateTime.now().difference(np).inSeconds >= 12) {
+        if (!_scanStalled && mounted) setState(() => _scanStalled = true);
+      }
+    });
+
     if (_camCtrl == null || !_camCtrl!.value.isInitialized) return;
     _camCtrl!.startImageStream((image) async {
       if (_processingFrame || _faceDone) return;
@@ -315,9 +332,16 @@ class _AcademyStudentEditScreenState
         if (inputImage == null) return;
         final faces = await FaceService.detectFaces(inputImage);
         if (!mounted) return;
+        _noProgressSince = null;
 
         if (faces.isEmpty) {
-          setState(() { _overlayState = FaceOverlayState.idle; _qualityScore = 0; _qualityHint = ''; });
+          setState(() {
+            _overlayState = FaceOverlayState.idle;
+            _qualityScore = 0;
+            _qualityHint  = '';
+            _faceDetected = false;
+            _scanStalled  = false;
+          });
           _cancelHold();
           return;
         }
@@ -325,16 +349,48 @@ class _AcademyStudentEditScreenState
         final quality = _computeQuality(faces.first);
         setState(() {
           _qualityScore = quality;
-          _overlayState = quality >= 0.55 ? FaceOverlayState.detected : FaceOverlayState.idle;
+          _faceDetected = quality >= 0.55;
+          _scanStalled  = false;
+          _overlayState = quality >= 0.55
+              ? FaceOverlayState.detected
+              : FaceOverlayState.idle;
         });
         if (quality >= 0.55 && !_autoCapturing) {
           _startHold();
         } else if (quality < 0.55) {
           _cancelHold();
         }
-      } catch (_) {}
-      _processingFrame = false;
+      } catch (_) {
+        _noProgressSince ??= DateTime.now();
+      } finally {
+        _processingFrame = false;
+      }
     });
+  }
+
+  Future<void> _retryCapture() async {
+    if (!mounted) return;
+    _processingFrame = false;
+    setState(() {
+      _faceDetected = false;
+      _scanStalled  = false;
+      _overlayState = FaceOverlayState.idle;
+      _qualityScore = 0;
+      _holdProgress = 0;
+      _qualityHint  = 'Restarting scanner…';
+    });
+    _stallTimer?.cancel();
+    _stallTimer = null;
+    _progressTicker?.cancel();
+    _progressTicker = null;
+    _autoCapturing  = false;
+
+    try { await _camCtrl?.stopImageStream(); } catch (_) {}
+    await Future.delayed(const Duration(milliseconds: 700));
+    if (!mounted) return;
+
+    setState(() => _qualityHint = '');
+    await _initCamera();
   }
 
   void _startHold() {
@@ -524,6 +580,8 @@ class _AcademyStudentEditScreenState
                 _faceImages.clear();
                 _captureCount = 0;
                 _faceDone     = false;
+                _faceDetected = false;
+                _scanStalled  = false;
                 _overlayState = FaceOverlayState.idle;
                 _qualityScore = 0;
                 _holdProgress = 0;
@@ -542,6 +600,8 @@ class _AcademyStudentEditScreenState
             captureCount:   _captureCount,
             requiredSamples: _requiredSamples,
             done:          _faceDone,
+            faceDetected:  _faceDetected,
+            scanStalled:   _scanStalled,
             submitting:    _submitting,
             autoCapturing: _autoCapturing,
             onCaptureNow: () {
@@ -550,11 +610,15 @@ class _AcademyStudentEditScreenState
               _doCapture();
             },
             onSubmitWithFace: () => _submit(withNewFace: true),
+            onRetryCapture: _retryCapture,
             onReset: () {
+              _processingFrame = false;
               setState(() {
                 _faceImages.clear();
                 _captureCount = 0;
                 _faceDone     = false;
+                _faceDetected = false;
+                _scanStalled  = false;
                 _overlayState = FaceOverlayState.idle;
               });
               _startStream();
@@ -710,7 +774,7 @@ class _FaceStep extends StatelessWidget {
   final VoidCallback? onKeepFace;
 
   final CameraController? camCtrl;
-  final bool camReady, done, submitting, autoCapturing;
+  final bool camReady, done, faceDetected, scanStalled, submitting, autoCapturing;
   final String? camError;
   final VoidCallback onRetryCamera;
   final FaceOverlayState overlayState;
@@ -718,6 +782,7 @@ class _FaceStep extends StatelessWidget {
   final String qualityHint;
   final int captureCount, requiredSamples;
   final VoidCallback onCaptureNow, onSubmitWithFace, onReset;
+  final Future<void> Function() onRetryCapture;
 
   const _FaceStep({
     required this.hasFaceData,
@@ -735,10 +800,13 @@ class _FaceStep extends StatelessWidget {
     required this.captureCount,
     required this.requiredSamples,
     required this.done,
+    required this.faceDetected,
+    required this.scanStalled,
     required this.submitting,
     required this.autoCapturing,
     required this.onCaptureNow,
     required this.onSubmitWithFace,
+    required this.onRetryCapture,
     required this.onReset,
   });
 
@@ -909,6 +977,24 @@ class _FaceStep extends StatelessWidget {
             }),
           ),
           const SizedBox(height: 16),
+          if (scanStalled && !done)
+            Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.amber.shade100,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.amber.shade400),
+              ),
+              child: Row(children: [
+                Icon(Icons.warning_amber_rounded, color: Colors.amber.shade800, size: 18),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text('Face detection stalled. Tap Refresh & Retry.',
+                      style: TextStyle(fontSize: 12)),
+                ),
+              ]),
+            ),
           if (done) ...[
             FilledButton.icon(
               onPressed: submitting ? null : onSubmitWithFace,
@@ -922,14 +1008,21 @@ class _FaceStep extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             TextButton(onPressed: onReset, child: const Text('Retake Photos')),
-          ] else
+          ] else ...[
             OutlinedButton.icon(
-              onPressed: (!autoCapturing && qualityScore > 0) ? onCaptureNow : null,
+              onPressed: (!autoCapturing && faceDetected) ? onCaptureNow : null,
               icon: const Icon(Icons.camera_alt_outlined),
               label: Text(autoCapturing ? 'Capturing…' : 'Capture Now'),
               style: OutlinedButton.styleFrom(
                   minimumSize: const Size.fromHeight(48)),
             ),
+            const SizedBox(height: 8),
+            TextButton.icon(
+              onPressed: onRetryCapture,
+              icon: const Icon(Icons.refresh, size: 18),
+              label: const Text('Refresh & Retry Scan'),
+            ),
+          ],
         ],
       ),
     );
