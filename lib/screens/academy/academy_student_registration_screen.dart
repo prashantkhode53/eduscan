@@ -332,16 +332,22 @@ class _AcademyStudentRegistrationScreenState
       _holdProgress  = 0;
       _autoCapturing = false;
       _camReady      = false;
+      // Reset scan progress so the restart is a clean slate
+      _done          = false;
+      _captureCount  = 0;
     });
+    _faceImages.clear();
 
-    // 2 — Await disposal so the OS fully releases camera hardware before
-    //     we try to reopen it. Ignoring the old controller reference
-    //     prevents any late callbacks from touching a half-disposed object.
+    // 2 — Stop the image stream explicitly BEFORE dispose. Without this,
+    //     some Android HALs leave the stream open internally, causing the
+    //     new controller's startImageStream to accept the call but never
+    //     deliver frames — making the camera look alive but detection dead.
     final oldCtrl = _camCtrl;
     _camCtrl = null;
+    try { await oldCtrl?.stopImageStream(); } catch (_) {}
     try { await oldCtrl?.dispose(); } catch (_) {}
 
-    // 3 — Give the camera HAL time to release (some Android devices need this)
+    // 3 — Give the camera HAL time to fully release the sensor
     await Future.delayed(const Duration(milliseconds: 700));
 
     if (mounted) await _initCamera();

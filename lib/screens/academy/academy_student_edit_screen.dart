@@ -371,6 +371,13 @@ class _AcademyStudentEditScreenState
   Future<void> _retryCapture() async {
     if (!mounted) return;
     _processingFrame = false;
+    _stallTimer?.cancel();
+    _stallTimer = null;
+    _progressTicker?.cancel();
+    _progressTicker  = null;
+    _autoCapturing   = false;
+    _noProgressSince = null;
+
     setState(() {
       _faceDetected = false;
       _scanStalled  = false;
@@ -378,14 +385,18 @@ class _AcademyStudentEditScreenState
       _qualityScore = 0;
       _holdProgress = 0;
       _qualityHint  = 'Restarting scanner…';
+      _camReady     = false;
+      _faceDone     = false;
+      _captureCount = 0;
     });
-    _stallTimer?.cancel();
-    _stallTimer = null;
-    _progressTicker?.cancel();
-    _progressTicker = null;
-    _autoCapturing  = false;
+    _faceImages.clear();
 
-    try { await _camCtrl?.stopImageStream(); } catch (_) {}
+    // Stop stream THEN dispose so the HAL cleanly releases before reinit.
+    final oldCtrl = _camCtrl;
+    _camCtrl = null;
+    try { await oldCtrl?.stopImageStream(); } catch (_) {}
+    try { await oldCtrl?.dispose(); } catch (_) {}
+
     await Future.delayed(const Duration(milliseconds: 700));
     if (!mounted) return;
 
