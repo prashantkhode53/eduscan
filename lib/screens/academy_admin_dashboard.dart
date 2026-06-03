@@ -479,6 +479,20 @@ class _HomeTabState extends State<_HomeTab> {
                         builder: (_) => const QrCodeScreen()),
                   ),
                 ),
+                _QuickAction(
+                  icon: Icons.calendar_today_outlined,
+                  label: 'Academic Year',
+                  color: Colors.indigo,
+                  onTap: () async {
+                    final yp = context.read<AcademicYearProvider>();
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const AcademicYearMasterScreen()),
+                    );
+                    await yp.init(force: true);
+                  },
+                ),
               ],
             ),
             const SizedBox(height: 24),
