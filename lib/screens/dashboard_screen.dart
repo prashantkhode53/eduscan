@@ -236,7 +236,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               title: Text(
                                   '${r['first_name']} ${r['last_name']}'),
                               subtitle: Text(
-                                  'Class ${r['class_grade']}-${r['division']}  •  ${r['time_in'] ?? ''}'),
+                                  'Class ${r['class_grade']}-${r['division']}  •  ${_fmt12(r['time_in'] as String?)}'),
                               trailing: Container(
                                 padding: const EdgeInsets.symmetric(
                                     horizontal: 8, vertical: 4),
@@ -339,6 +339,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
       borderData: FlBorderData(show: false),
       maxY: 100,
     );
+  }
+
+  String _fmt12(String? t) {
+    if (t == null || t.isEmpty) return '';
+    final parts = t.split(':');
+    if (parts.length < 2) return t;
+    final h    = int.tryParse(parts[0]) ?? 0;
+    final m    = parts[1];
+    final ampm = h >= 12 ? 'PM' : 'AM';
+    final h12  = h % 12 == 0 ? 12 : h % 12;
+    return '${h12.toString().padLeft(2, '0')}:$m $ampm';
   }
 
   String _greeting() {

@@ -4,6 +4,15 @@ import { batchEmbed } from '../../utils/insightface';
 import { cosineSimilarity } from '../../utils/faceMatch';
 import { sendFcm } from '../../utils/fcm';
 
+// Converts "HH:MM:SS" → "hh:mm AM/PM" for human-readable notifications.
+function to12Hour(timeStr: string): string {
+  const [hStr, mStr = '00'] = timeStr.split(':');
+  const h    = parseInt(hStr, 10);
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const h12  = h % 12 === 0 ? 12 : h % 12;
+  return `${h12.toString().padStart(2, '0')}:${mStr} ${ampm}`;
+}
+
 interface StudentRow {
   id: string;
   first_name: string;
@@ -221,7 +230,7 @@ export async function scanAcademy(
         void sendFcm({
           token: student.parent_fcm_token,
           title: `${student.first_name} checked in ✅`,
-          body:  `${req.academyUser!.academyName} • ${timeStr.substring(0, 5)}`,
+          body:  `${req.academyUser!.academyName} • ${to12Hour(timeStr)}`,
           data:  { type: 'attendance', action: 'checkin', studentId: student.id, time: timeStr },
         });
       }
@@ -276,7 +285,7 @@ export async function scanAcademy(
       void sendFcm({
         token: student.parent_fcm_token,
         title: `${student.first_name} checked out 🏠`,
-        body:  `${req.academyUser!.academyName} • ${timeStr.substring(0, 5)} (${dur})`,
+        body:  `${req.academyUser!.academyName} • ${to12Hour(timeStr)} (${dur})`,
         data:  { type: 'attendance', action: 'checkout', studentId: student.id, time: timeStr },
       });
     }

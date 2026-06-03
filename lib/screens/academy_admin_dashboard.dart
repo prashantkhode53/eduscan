@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show SystemNavigator;
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../models/academy_user.dart';
@@ -65,8 +66,9 @@ class _AcademyAdminDashboardState extends State<AcademyAdminDashboard> {
           ),
         );
         if (exit == true && context.mounted) {
-          Navigator.of(context)
-              .pushNamedAndRemoveUntil('/login', (_) => false);
+          // Close the app without clearing the session — token stays in
+          // SharedPreferences so the next launch skips the login screen.
+          SystemNavigator.pop();
         }
       },
       child: Scaffold(
