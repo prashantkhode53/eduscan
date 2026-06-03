@@ -8,6 +8,7 @@ import '../services/api_service.dart';
 import '../widgets/offline_banner.dart';
 import '../widgets/stat_card.dart';
 import '../constants/app_colors.dart';
+import 'manage_academies_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -133,6 +134,53 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           color: Colors.orange,
                         ),
                       ],
+                    ),
+                    const SizedBox(height: 20),
+                    // ── Manage Academies shortcut ──────────────────────
+                    InkWell(
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const ManageAcademiesScreen()),
+                      ),
+                      borderRadius: BorderRadius.circular(12),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 14),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [
+                              theme.colorScheme.primary,
+                              theme.colorScheme.primary.withValues(alpha: 0.75),
+                            ],
+                          ),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Row(children: [
+                          const Icon(Icons.school_outlined,
+                              color: Colors.white, size: 28),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text('Manage Academies',
+                                    style: TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 15)),
+                                Text('View, export, activate or delete academies',
+                                    style: TextStyle(
+                                        color: Colors.white
+                                            .withValues(alpha: 0.8),
+                                        fontSize: 12)),
+                              ],
+                            ),
+                          ),
+                          const Icon(Icons.chevron_right,
+                              color: Colors.white, size: 22),
+                        ]),
+                      ),
                     ),
                     const SizedBox(height: 20),
                     Text('Weekly Attendance',

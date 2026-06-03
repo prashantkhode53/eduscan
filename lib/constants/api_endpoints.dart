@@ -16,6 +16,9 @@ class ApiEndpoints {
   static const String academyQrCodes        = '$baseUrl/api/academy/qr-codes';
   static const String academyAcademicYears  = '$baseUrl/api/academy/academic-years';
 
+  // Super Admin
+  static const String superAdminAcademies  = '$baseUrl/api/super-admin/academies';
+
   // Parent — 2-step face-verified login + protected routes
   static const String parentCheckCredentials = '$baseUrl/api/academy/parent/check-credentials';
   static const String parentVerifyFace       = '$baseUrl/api/academy/parent/verify-face';

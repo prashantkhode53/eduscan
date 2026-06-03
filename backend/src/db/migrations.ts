@@ -123,6 +123,20 @@ export async function runMigrations(): Promise<void> {
     await client.query(`CREATE INDEX IF NOT EXISTS idx_academies_slug   ON academies(slug)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_academies_email  ON academies(admin_email)`);
 
+    // Super admin audit log — tracks all critical actions (activate, deactivate, delete, export)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS super_admin_audit_log (
+        id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        admin_id    UUID REFERENCES admins(id) ON DELETE SET NULL,
+        action      VARCHAR(50) NOT NULL,
+        target_slug VARCHAR(100),
+        details     TEXT,
+        created_at  TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_audit_admin ON super_admin_audit_log(admin_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_audit_slug  ON super_admin_audit_log(target_slug)`);
+
     await client.query(`CREATE INDEX IF NOT EXISTS idx_attendance_date       ON attendance(date)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_attendance_student    ON attendance(student_id)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_attendance_date_class ON attendance(date, student_id)`);
