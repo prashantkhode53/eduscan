@@ -194,9 +194,10 @@ class _AcademyStudentListScreenState extends State<AcademyStudentListScreen> {
       builder: (_) => AlertDialog(
         title: const Text('Delete Student'),
         content: Text(
-          'Permanently delete $name ($id)?\n\n'
-          'This also removes their face data, course enrolments, attendance '
-          'and fee records. This action cannot be undone.',
+          'Delete $name ($id)?\n\n'
+          'The student will be hidden from all screens and removed from face '
+          'recognition. Their ID, attendance, fee, and course records are '
+          'preserved permanently and the Student ID will never be reused.',
         ),
         actions: [
           TextButton(

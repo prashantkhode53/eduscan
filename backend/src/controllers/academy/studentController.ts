@@ -830,9 +830,10 @@ export async function updateStudentFace(
 }
 
 // ── DELETE /api/academy/students/:id ──────────────────────────────────────────
-// Permanently removes a student. student_courses, fee_records and attendance
-// rows are removed automatically via ON DELETE CASCADE, and the student's face
-// embedding is purged from the InsightFace cache so they can't be matched again.
+// Soft-deletes a student by setting status='deleted'. The record and its
+// Student ID remain permanently reserved — the ID generator uses MAX() across
+// ALL statuses so deleted IDs are never recycled. The student's face embedding
+// is purged from the InsightFace cache so they can't be matched for attendance.
 
 export async function deleteStudent(
   req: Request, res: Response, next: NextFunction
@@ -841,12 +842,17 @@ export async function deleteStudent(
     const { academySlug } = req.academyUser!;
     const { id } = req.params;
 
-    const student = await academyQueryOne<{ id: string }>(
-      academySlug, `SELECT id FROM students WHERE id = $1`, [id]
+    const student = await academyQueryOne<{ id: string; status: string }>(
+      academySlug, `SELECT id, status FROM students WHERE id = $1`, [id]
     );
     if (!student) return next(new AppError('Student not found', 404));
+    if (student.status === 'deleted') return next(new AppError('Student already deleted', 409));
 
-    await academyExec(academySlug, `DELETE FROM students WHERE id = $1`, [id]);
+    await academyExec(
+      academySlug,
+      `UPDATE students SET status = 'deleted', updated_at = NOW() WHERE id = $1`,
+      [id]
+    );
 
     // Best-effort cache purge — the DB is the source of truth, so a cache
     // failure (e.g. InsightFace service down) must not fail the delete; the
