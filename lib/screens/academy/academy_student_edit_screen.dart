@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show FilteringTextInputFormatter, TextInputFormatter;
 import '../../services/academy_api_service.dart';
 import '../../services/face_service.dart';
 import '../../widgets/face_overlay_painter.dart';
@@ -689,7 +690,10 @@ class _AcademyStudentEditScreenState
 
             _tf(_mobileCtrl, 'Mobile *',
                 type: TextInputType.phone,
-                v: (v) => v!.trim().length < 10 ? 'Enter valid mobile number' : null),
+                maxLength: 10,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                v: (v) => v == null || v.trim().length != 10
+                    ? 'Enter 10-digit mobile number' : null),
             const SizedBox(height: 12),
 
             _tf(_emailCtrl, 'Email (optional)', type: TextInputType.emailAddress),
@@ -738,7 +742,13 @@ class _AcademyStudentEditScreenState
             _tf(_parentNameCtrl, 'Parent / Guardian Name'),
             const SizedBox(height: 12),
 
-            _tf(_parentMobCtrl, 'Parent Mobile', type: TextInputType.phone),
+            _tf(_parentMobCtrl, 'Parent Mobile',
+                type: TextInputType.phone,
+                maxLength: 10,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                v: (v) => v != null && v.trim().isNotEmpty &&
+                        v.trim().length != 10
+                    ? 'Enter 10-digit mobile number' : null),
             const SizedBox(height: 12),
 
             TextFormField(
@@ -766,10 +776,14 @@ class _AcademyStudentEditScreenState
     String label, {
     TextInputType type = TextInputType.text,
     String? Function(String?)? v,
+    int? maxLength,
+    List<TextInputFormatter>? inputFormatters,
   }) =>
       TextFormField(
         controller: ctrl,
         keyboardType: type,
+        maxLength: maxLength,
+        inputFormatters: inputFormatters,
         decoration: InputDecoration(
             labelText: label, border: const OutlineInputBorder()),
         validator: v,

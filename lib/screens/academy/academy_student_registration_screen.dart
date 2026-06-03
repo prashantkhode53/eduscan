@@ -2,6 +2,7 @@
 import 'dart:convert';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show FilteringTextInputFormatter, TextInputFormatter;
 import 'package:provider/provider.dart';
 import '../../providers/academic_year_provider.dart';
 import '../../services/academy_api_service.dart';
@@ -843,7 +844,10 @@ class _Step1 extends StatelessWidget {
             const SizedBox(height: 12),
             _tf(mobileCtrl, 'Mobile *',
                 type: TextInputType.phone,
-                v: (v) => v!.trim().length < 10 ? 'Enter valid number' : null),
+                maxLength: 10,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                v: (v) => v == null || v.trim().length != 10
+                    ? 'Enter 10-digit mobile number' : null),
             const SizedBox(height: 12),
             _tf(emailCtrl, 'Email (optional)', type: TextInputType.emailAddress),
             const SizedBox(height: 24),
@@ -865,10 +869,14 @@ class _Step1 extends StatelessWidget {
 
   Widget _tf(TextEditingController ctrl, String label,
       {TextInputType type = TextInputType.text,
-      String? Function(String?)? v}) =>
+      String? Function(String?)? v,
+      int? maxLength,
+      List<TextInputFormatter>? inputFormatters}) =>
       TextFormField(
         controller: ctrl,
         keyboardType: type,
+        maxLength: maxLength,
+        inputFormatters: inputFormatters,
         decoration: InputDecoration(
             labelText: label, border: const OutlineInputBorder()),
         validator: v,
@@ -908,9 +916,15 @@ class _Step2 extends StatelessWidget {
             TextFormField(
               controller: parentMobCtrl,
               keyboardType: TextInputType.phone,
+              maxLength: 10,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
               decoration: const InputDecoration(
                   labelText: 'Parent Mobile',
                   border: OutlineInputBorder()),
+              validator: (v) => v != null && v.trim().isNotEmpty &&
+                      v.trim().length != 10
+                  ? 'Enter 10-digit mobile number'
+                  : null,
             ),
             const SizedBox(height: 12),
             TextFormField(
