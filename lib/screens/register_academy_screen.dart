@@ -207,8 +207,11 @@ class _RegisterAcademyScreenState extends State<RegisterAcademyScreen> {
           hint: '9876543210',
           icon: Icons.phone_outlined,
           keyboardType: TextInputType.phone,
-          validator: (v) =>
-              v == null || v.trim().length < 10 ? 'Enter valid phone number' : null,
+          maxLength: 10,
+          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+          validator: (v) => v == null || v.trim().length != 10
+              ? 'Enter a valid 10-digit phone number'
+              : null,
         ),
         const SizedBox(height: 16),
         _field(
@@ -291,17 +294,22 @@ class _RegisterAcademyScreenState extends State<RegisterAcademyScreen> {
     required IconData icon,
     TextInputType keyboardType = TextInputType.text,
     int maxLines = 1,
+    int? maxLength,
+    List<TextInputFormatter>? inputFormatters,
     String? Function(String?)? validator,
   }) {
     return TextFormField(
       controller: controller,
       keyboardType: keyboardType,
       maxLines: maxLines,
+      maxLength: maxLength,
+      inputFormatters: inputFormatters,
       decoration: InputDecoration(
         labelText: label,
         hintText: hint,
         prefixIcon: Icon(icon),
         border: const OutlineInputBorder(),
+        counterText: maxLength != null ? '' : null,
       ),
       validator: validator,
     );
