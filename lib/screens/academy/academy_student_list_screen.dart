@@ -4,7 +4,11 @@ import 'academy_student_registration_screen.dart';
 import 'academy_student_edit_screen.dart';
 
 class AcademyStudentListScreen extends StatefulWidget {
-  const AcademyStudentListScreen({super.key});
+  /// Incremented by the Home tab whenever a student is registered via the
+  /// quick-action path, triggering an automatic list reload.
+  final ValueNotifier<int>? reloadTrigger;
+
+  const AcademyStudentListScreen({super.key, this.reloadTrigger});
 
   @override
   State<AcademyStudentListScreen> createState() =>
@@ -26,10 +30,12 @@ class _AcademyStudentListScreenState extends State<AcademyStudentListScreen> {
     super.initState();
     _load();
     _loadCourses();
+    widget.reloadTrigger?.addListener(_load);
   }
 
   @override
   void dispose() {
+    widget.reloadTrigger?.removeListener(_load);
     _searchCtrl.dispose();
     super.dispose();
   }

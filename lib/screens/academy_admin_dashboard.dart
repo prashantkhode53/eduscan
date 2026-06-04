@@ -23,6 +23,13 @@ class AcademyAdminDashboard extends StatefulWidget {
 
 class _AcademyAdminDashboardState extends State<AcademyAdminDashboard> {
   int _currentIndex = 0;
+  final _studentReloadTrigger = ValueNotifier<int>(0);
+
+  @override
+  void dispose() {
+    _studentReloadTrigger.dispose();
+    super.dispose();
+  }
 
   final List<_NavItem> _navItems = const [
     _NavItem(icon: Icons.dashboard_outlined,    activeIcon: Icons.dashboard,    label: 'Home'),
@@ -76,8 +83,8 @@ class _AcademyAdminDashboardState extends State<AcademyAdminDashboard> {
         body: IndexedStack(
           index: _currentIndex,
           children: [
-            _HomeTab(user: user),
-            const AcademyStudentListScreen(),
+            _HomeTab(user: user, studentReloadTrigger: _studentReloadTrigger),
+            AcademyStudentListScreen(reloadTrigger: _studentReloadTrigger),
             const CourseMasterScreen(),
             const FeesScreen(),
             _SettingsTab(user: user),
@@ -103,7 +110,8 @@ class _AcademyAdminDashboardState extends State<AcademyAdminDashboard> {
 
 class _HomeTab extends StatefulWidget {
   final AcademyUser user;
-  const _HomeTab({required this.user});
+  final ValueNotifier<int> studentReloadTrigger;
+  const _HomeTab({required this.user, required this.studentReloadTrigger});
 
   @override
   State<_HomeTab> createState() => _HomeTabState();
@@ -271,7 +279,10 @@ class _HomeTabState extends State<_HomeTab> {
                     MaterialPageRoute(
                         builder: (_) => const BulkUploadScreen()),
                   );
-                  if (ok == true && ctx.mounted) _loadStats();
+                  if (ok == true && ctx.mounted) {
+                    _loadStats();
+                    widget.studentReloadTrigger.value++;
+                  }
                 },
               ),
               const SizedBox(height: 12),
@@ -290,7 +301,10 @@ class _HomeTabState extends State<_HomeTab> {
                         builder: (_) =>
                             const AcademyStudentRegistrationScreen()),
                   );
-                  if (ok == true && ctx.mounted) _loadStats();
+                  if (ok == true && ctx.mounted) {
+                    _loadStats();
+                    widget.studentReloadTrigger.value++;
+                  }
                 },
               ),
             ],

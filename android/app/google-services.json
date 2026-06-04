@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "78930780875",
+    "project_id": "eduscan-messaging-app",
+    "storage_bucket": "eduscan-messaging-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:78930780875:android:20081129fade7d8919714e",
+        "android_client_info": {
+          "package_name": "com.eduscan.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBAtq5UU8RbArx57aYQLbdzU6UxzoRrQJE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

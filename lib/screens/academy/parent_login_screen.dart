@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show FilteringTextInputFormatter;
 import 'package:provider/provider.dart';
 import '../../providers/parent_auth_provider.dart';
 import '../../services/face_service.dart';
@@ -409,6 +410,9 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
             // Parent Mobile
             TextFormField(
               controller: _mobileCtrl,
+              keyboardType: TextInputType.phone,
+              maxLength: 10,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
               decoration: const InputDecoration(
                 labelText: 'Parent Mobile Number',
                 hintText:  '10-digit mobile number',
@@ -416,13 +420,11 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
                 helperText: 'The number registered with the academy',
                 border: OutlineInputBorder(),
               ),
-              keyboardType: TextInputType.phone,
               textInputAction: TextInputAction.done,
               onFieldSubmitted: (_) => _goToFaceScan(),
-              validator: (v) =>
-                  v == null || v.trim().replaceAll(RegExp(r'\D'), '').length < 10
-                      ? 'Enter a valid 10-digit mobile number'
-                      : null,
+              validator: (v) => v == null || v.trim().length != 10
+                  ? 'Enter a valid 10-digit mobile number'
+                  : null,
             ),
             const SizedBox(height: 32),
 
