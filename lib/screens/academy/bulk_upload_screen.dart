@@ -68,15 +68,8 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
       if (!mounted) return;
 
-      // Helper: safe course at index i (empty string if none).
-      String c(int i) => names.length > i ? names[i] : '';
-
-      // Multi-course cell: quote so commas inside don't break CSV parsing.
-      String multi(int a, int b) {
-        final ca = c(a), cb = c(b);
-        if (ca.isNotEmpty && cb.isNotEmpty) return '"$ca,$cb"';
-        return ca.isNotEmpty ? ca : cb;
-      }
+      // First course name for the single sample row (empty if none).
+      final firstCourse = names.isNotEmpty ? names.first : '';
 
       final lines = [
         // Header — column order must match _columns list.
@@ -84,15 +77,9 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
             'Date Of Birth* (DD/MM/YYYY),Mobile* (10 digits),'
             'Email,Parent/Guardian Name*,Parent Mobile* (10 digits),Address,'
             'Courses (comma-separated)',
-        // 4 sample rows with real course names.
+        // Single sample row.
         'Rahul,Sharma,Male,15/05/2010,9876543210,'
-            'rahul@example.com,Ramesh Sharma,9876543211,Pune,${c(0)}',
-        'Priya,Patil,Female,20/08/2011,9876543212,'
-            ',Suresh Patil,9876543213,Mumbai,${c(1)}',
-        'Amit,Kumar,Male,12/01/2010,9876543214,'
-            ',Raj Kumar,9876543215,,${multi(0, 1)}',
-        'Rohan,Patel,Male,10/09/2011,9876543216,'
-            ',Manoj Patel,9876543217,,${multi(2, 3)}',
+            'rahul@example.com,Ramesh Sharma,9876543211,Pune,$firstCourse',
       ];
 
       final content = lines.join('\n');

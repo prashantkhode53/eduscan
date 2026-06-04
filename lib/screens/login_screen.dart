@@ -171,11 +171,14 @@ class _LoginScreenState extends State<LoginScreen> {
                     // Academy Code
                     TextFormField(
                       controller: _slugCtrl,
+                      inputFormatters: [_AcademyCodeFormatter()],
                       decoration: const InputDecoration(
                         labelText: 'Academy Code',
                         hintText: 'e.g. sunshine_tuition',
                         prefixIcon: Icon(Icons.business_outlined),
-                        helperText: 'Provided by your academy admin',
+                        helperText:
+                            'Spaces convert to underscores. Letters, numbers, _ only.',
+                        helperMaxLines: 2,
                         border: OutlineInputBorder(),
                       ),
                       textInputAction: TextInputAction.next,
@@ -697,6 +700,33 @@ class _ForgotPasswordSheetState extends State<_ForgotPasswordSheet> {
           ],
         ],
       ),
+    );
+  }
+}
+
+// Formatter for the Academy Code field on the login screen.
+// Mirrors the _AcademyNameFormatter used during academy registration:
+// • spaces → underscores
+// • only letters, digits, and underscores are kept (all others removed)
+// • auto-lowercase so the displayed value matches what the backend stores
+// • consecutive underscores collapsed to a single underscore
+// • leading underscores stripped
+class _AcademyCodeFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    String text = newValue.text
+        .replaceAll(' ', '_')
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9_]'), '')
+        .replaceAll(RegExp(r'_+'), '_')
+        .replaceAll(RegExp(r'^_+'), '');
+
+    return TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
     );
   }
 }
