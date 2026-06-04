@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show FilteringTextInputFormatter;
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../../providers/parent_auth_provider.dart';
 import '../../services/face_service.dart';
@@ -383,6 +383,8 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
               ),
               textCapitalization: TextCapitalization.none,
               autocorrect: false,
+              keyboardType: TextInputType.text,
+              inputFormatters: [_AcademyCodeFormatter()],
               textInputAction: TextInputAction.next,
               validator: (v) =>
                   v == null || v.trim().isEmpty ? 'Academy code is required' : null,
@@ -673,6 +675,25 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Allows only a–z, A–Z, and underscore.
+/// Spaces are automatically converted to underscores; all other characters
+/// (digits, punctuation, etc.) are silently dropped.
+class _AcademyCodeFormatter extends TextInputFormatter {
+  static final _invalid = RegExp(r'[^a-zA-Z_]');
+
+  @override
+  TextEditingValue formatEditUpdate(
+      TextEditingValue oldValue, TextEditingValue newValue) {
+    final filtered = newValue.text
+        .replaceAll(' ', '_')
+        .replaceAll(_invalid, '');
+    return TextEditingValue(
+      text: filtered,
+      selection: TextSelection.collapsed(offset: filtered.length),
     );
   }
 }

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../constants/api_endpoints.dart';
 import 'storage_service.dart';
+import '../utils/network_aware_client.dart';
 
 class ApiService {
   // 30s for most API calls
@@ -10,6 +11,7 @@ class ApiService {
   static const Duration _registrationTimeout = Duration(seconds: 90);
   // 20s for real-time face scan — must feel responsive
   static const Duration _scanTimeout = Duration(seconds: 20);
+  static final _http = NetworkAwareClient();
 
   // ── Headers ───────────────────────────────────────────────────────────────
 
@@ -55,8 +57,7 @@ class ApiService {
 
   static Future<bool> checkHealth() async {
     try {
-      final res = await http
-          .get(Uri.parse(ApiEndpoints.health))
+      final res = await _http.get(Uri.parse(ApiEndpoints.health))
           .timeout(const Duration(seconds: 10));
       return res.statusCode == 200;
     } catch (_) {
@@ -74,8 +75,7 @@ class ApiService {
     required String password,
     String? address,
   }) async {
-    final res = await http
-        .post(
+    final res = await _http.post(
           Uri.parse(ApiEndpoints.academyRegister),
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({
@@ -96,8 +96,7 @@ class ApiService {
     required String password,
     required String academySlug,
   }) async {
-    final res = await http
-        .post(
+    final res = await _http.post(
           Uri.parse(ApiEndpoints.academyLogin),
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({
@@ -114,8 +113,7 @@ class ApiService {
 
   static Future<Map<String, dynamic>> login(
       String username, String password) async {
-    final res = await http
-        .post(
+    final res = await _http.post(
           Uri.parse(ApiEndpoints.login),
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({'username': username, 'password': password}),
@@ -125,8 +123,7 @@ class ApiService {
   }
 
   static Future<void> forgotPassword(String email) async {
-    final res = await http
-        .post(
+    final res = await _http.post(
           Uri.parse(ApiEndpoints.forgotPassword),
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({'email': email}),
@@ -136,8 +133,7 @@ class ApiService {
   }
 
   static Future<String> verifyOtp(String email, String otp) async {
-    final res = await http
-        .post(
+    final res = await _http.post(
           Uri.parse(ApiEndpoints.verifyOtp),
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({'email': email, 'otp': otp}),
@@ -149,8 +145,7 @@ class ApiService {
 
   static Future<void> resetPassword(
       String resetToken, String newPassword) async {
-    final res = await http
-        .post(
+    final res = await _http.post(
           Uri.parse(ApiEndpoints.resetPassword),
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode(
@@ -163,8 +158,7 @@ class ApiService {
   static Future<void> changePassword(
       String currentPassword, String newPassword) async {
     final headers = await _authHeaders();
-    final res = await http
-        .post(
+    final res = await _http.post(
           Uri.parse(ApiEndpoints.changePassword),
           headers: headers,
           body: jsonEncode({
@@ -198,22 +192,20 @@ class ApiService {
     final uri =
         Uri.parse(ApiEndpoints.students).replace(queryParameters: params);
     final res =
-        await http.get(uri, headers: headers).timeout(_timeout);
+        await _http.get(uri, headers: headers).timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
   }
 
   static Future<Map<String, dynamic>> getStudentById(String id) async {
     final headers = await _authHeaders();
-    final res = await http
-        .get(Uri.parse(ApiEndpoints.studentById(id)), headers: headers)
+    final res = await _http.get(Uri.parse(ApiEndpoints.studentById(id)), headers: headers)
         .timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
   }
 
   static Future<dynamic> createStudent(Map<String, dynamic> body) async {
     final headers = await _authHeaders();
-    final res = await http
-        .post(
+    final res = await _http.post(
           Uri.parse(ApiEndpoints.students),
           headers: headers,
           body: jsonEncode(body),
@@ -225,8 +217,7 @@ class ApiService {
   static Future<dynamic> updateStudent(
       String id, Map<String, dynamic> body) async {
     final headers = await _authHeaders();
-    final res = await http
-        .put(
+    final res = await _http.put(
           Uri.parse(ApiEndpoints.studentById(id)),
           headers: headers,
           body: jsonEncode(body),
@@ -238,8 +229,7 @@ class ApiService {
   static Future<dynamic> updateStudentFace(
       String id, List<String> faceImages) async {
     final headers = await _authHeaders();
-    final res = await http
-        .put(
+    final res = await _http.put(
           Uri.parse(ApiEndpoints.studentById(id)),
           headers: headers,
           body: jsonEncode({'face_images': faceImages}),
@@ -250,8 +240,7 @@ class ApiService {
 
   static Future<void> deleteStudent(String id) async {
     final headers = await _authHeaders();
-    final res = await http
-        .delete(Uri.parse(ApiEndpoints.studentById(id)), headers: headers)
+    final res = await _http.delete(Uri.parse(ApiEndpoints.studentById(id)), headers: headers)
         .timeout(_timeout);
     _parse(res);
   }
@@ -262,7 +251,7 @@ class ApiService {
     final uri = Uri.parse(ApiEndpoints.studentAttendance(id))
         .replace(queryParameters: {'page': page.toString(), 'limit': '30'});
     final res =
-        await http.get(uri, headers: headers).timeout(_timeout);
+        await _http.get(uri, headers: headers).timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
   }
 
@@ -292,15 +281,14 @@ class ApiService {
     final uri =
         Uri.parse(ApiEndpoints.attendance).replace(queryParameters: params);
     final res =
-        await http.get(uri, headers: headers).timeout(_timeout);
+        await _http.get(uri, headers: headers).timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
   }
 
   static Future<dynamic> updateAttendance(
       String id, Map<String, dynamic> body) async {
     final headers = await _authHeaders();
-    final res = await http
-        .put(
+    final res = await _http.put(
           Uri.parse(ApiEndpoints.attendanceById(id)),
           headers: headers,
           body: jsonEncode(body),
@@ -312,8 +300,7 @@ class ApiService {
   static Future<void> batchAttendance(
       List<Map<String, dynamic>> records) async {
     final headers = await _authHeaders();
-    final res = await http
-        .post(
+    final res = await _http.post(
           Uri.parse(ApiEndpoints.attendanceBatch),
           headers: headers,
           body: jsonEncode({'records': records}),
@@ -328,8 +315,7 @@ class ApiService {
     final body = <String, dynamic>{'date': date};
     if (classGrade != null) body['class_grade'] = classGrade;
     if (division != null) body['division'] = division;
-    final res = await http
-        .post(
+    final res = await _http.post(
           Uri.parse(ApiEndpoints.attendanceBulkAbsent),
           headers: headers,
           body: jsonEncode(body),
@@ -346,8 +332,7 @@ class ApiService {
     String mode,
   ) async {
     final headers = await _kioskHeaders();
-    final res = await http
-        .post(
+    final res = await _http.post(
           Uri.parse(ApiEndpoints.attendanceScan),
           headers: headers,
           body: jsonEncode({
@@ -364,32 +349,28 @@ class ApiService {
 
   static Future<Map<String, dynamic>> getDashboardStats() async {
     final headers = await _authHeaders();
-    final res = await http
-        .get(Uri.parse(ApiEndpoints.reportsSummary), headers: headers)
+    final res = await _http.get(Uri.parse(ApiEndpoints.reportsSummary), headers: headers)
         .timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
   }
 
   static Future<List<dynamic>> getWeeklyStats() async {
     final headers = await _authHeaders();
-    final res = await http
-        .get(Uri.parse(ApiEndpoints.reportsWeekly), headers: headers)
+    final res = await _http.get(Uri.parse(ApiEndpoints.reportsWeekly), headers: headers)
         .timeout(_timeout);
     return _parse(res) as List<dynamic>;
   }
 
   static Future<List<dynamic>> getRecentActivity() async {
     final headers = await _authHeaders();
-    final res = await http
-        .get(Uri.parse(ApiEndpoints.reportsRecentActivity), headers: headers)
+    final res = await _http.get(Uri.parse(ApiEndpoints.reportsRecentActivity), headers: headers)
         .timeout(_timeout);
     return _parse(res) as List<dynamic>;
   }
 
   static Future<List<dynamic>> getStudentReportSummary() async {
     final headers = await _authHeaders();
-    final res = await http
-        .get(Uri.parse(ApiEndpoints.reportsStudents), headers: headers)
+    final res = await _http.get(Uri.parse(ApiEndpoints.reportsStudents), headers: headers)
         .timeout(_timeout);
     return _parse(res) as List<dynamic>;
   }
@@ -398,16 +379,14 @@ class ApiService {
 
   static Future<Map<String, dynamic>> getSettings() async {
     final headers = await _authHeaders();
-    final res = await http
-        .get(Uri.parse(ApiEndpoints.settings), headers: headers)
+    final res = await _http.get(Uri.parse(ApiEndpoints.settings), headers: headers)
         .timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
   }
 
   static Future<void> updateSetting(String key, String value) async {
     final headers = await _authHeaders();
-    final res = await http
-        .put(
+    final res = await _http.put(
           Uri.parse(ApiEndpoints.settings),
           headers: headers,
           body: jsonEncode({'key': key, 'value': value}),
@@ -418,8 +397,7 @@ class ApiService {
 
   static Future<int> reloadFaceCache() async {
     final headers = await _authHeaders();
-    final res = await http
-        .post(Uri.parse('${ApiEndpoints.settings}/reload-face-cache'),
+    final res = await _http.post(Uri.parse('${ApiEndpoints.settings}/reload-face-cache'),
             headers: headers)
         .timeout(_timeout);
     final data = _parse(res) as Map<String, dynamic>;
@@ -428,8 +406,7 @@ class ApiService {
 
   static Future<String> regenKioskKey() async {
     final headers = await _authHeaders();
-    final res = await http
-        .post(Uri.parse(ApiEndpoints.regenKioskKey), headers: headers)
+    final res = await _http.post(Uri.parse(ApiEndpoints.regenKioskKey), headers: headers)
         .timeout(_timeout);
     final data = _parse(res) as Map<String, dynamic>;
     return data['kiosk_api_key'] as String;

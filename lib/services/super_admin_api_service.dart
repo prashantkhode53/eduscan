@@ -2,9 +2,11 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../constants/api_endpoints.dart';
 import 'storage_service.dart';
+import '../utils/network_aware_client.dart';
 
 class SuperAdminApiService {
   static const Duration _timeout = Duration(seconds: 30);
+  static final _http = NetworkAwareClient();
 
   static Future<Map<String, String>> _headers() async {
     final token = await StorageService.getToken();
@@ -36,14 +38,13 @@ class SuperAdminApiService {
     };
     final uri = Uri.parse(ApiEndpoints.superAdminAcademies)
         .replace(queryParameters: params);
-    final res = await http.get(uri, headers: await _headers()).timeout(_timeout);
+    final res = await _http.get(uri, headers: await _headers()).timeout(_timeout);
     final data = _parse(res);
     return (data as List).cast<Map<String, dynamic>>();
   }
 
   static Future<Map<String, dynamic>> getAcademyStats(String slug) async {
-    final res = await http
-        .get(Uri.parse('${ApiEndpoints.superAdminAcademies}/$slug/stats'),
+    final res = await _http.get(Uri.parse('${ApiEndpoints.superAdminAcademies}/$slug/stats'),
             headers: await _headers())
         .timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
@@ -64,29 +65,26 @@ class SuperAdminApiService {
     };
     final uri = Uri.parse('${ApiEndpoints.superAdminAcademies}/$slug/students')
         .replace(queryParameters: params);
-    final res = await http.get(uri, headers: await _headers()).timeout(_timeout);
+    final res = await _http.get(uri, headers: await _headers()).timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
   }
 
   static Future<Map<String, dynamic>> exportAcademyStudents(String slug) async {
-    final res = await http
-        .get(Uri.parse('${ApiEndpoints.superAdminAcademies}/$slug/export'),
+    final res = await _http.get(Uri.parse('${ApiEndpoints.superAdminAcademies}/$slug/export'),
             headers: await _headers())
         .timeout(const Duration(seconds: 60));
     return _parse(res) as Map<String, dynamic>;
   }
 
   static Future<void> deactivateAcademy(String slug) async {
-    final res = await http
-        .patch(Uri.parse('${ApiEndpoints.superAdminAcademies}/$slug/deactivate'),
+    final res = await _http.patch(Uri.parse('${ApiEndpoints.superAdminAcademies}/$slug/deactivate'),
             headers: await _headers())
         .timeout(_timeout);
     _parse(res);
   }
 
   static Future<void> activateAcademy(String slug) async {
-    final res = await http
-        .patch(Uri.parse('${ApiEndpoints.superAdminAcademies}/$slug/activate'),
+    final res = await _http.patch(Uri.parse('${ApiEndpoints.superAdminAcademies}/$slug/activate'),
             headers: await _headers())
         .timeout(_timeout);
     _parse(res);
@@ -94,8 +92,7 @@ class SuperAdminApiService {
 
   static Future<void> deleteAcademy(
       String slug, String password, String academyName) async {
-    final res = await http
-        .delete(
+    final res = await _http.delete(
           Uri.parse('${ApiEndpoints.superAdminAcademies}/$slug'),
           headers: await _headers(),
           body: jsonEncode({

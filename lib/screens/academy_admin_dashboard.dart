@@ -34,7 +34,6 @@ class _AcademyAdminDashboardState extends State<AcademyAdminDashboard> {
   final List<_NavItem> _navItems = const [
     _NavItem(icon: Icons.dashboard_outlined,    activeIcon: Icons.dashboard,    label: 'Home'),
     _NavItem(icon: Icons.people_outline,        activeIcon: Icons.people,       label: 'Students'),
-    _NavItem(icon: Icons.menu_book_outlined,    activeIcon: Icons.menu_book,    label: 'Courses'),
     _NavItem(icon: Icons.account_balance_wallet_outlined, activeIcon: Icons.account_balance_wallet, label: 'Fees'),
     _NavItem(icon: Icons.settings_outlined,     activeIcon: Icons.settings,     label: 'Settings'),
   ];
@@ -85,7 +84,6 @@ class _AcademyAdminDashboardState extends State<AcademyAdminDashboard> {
           children: [
             _HomeTab(user: user, studentReloadTrigger: _studentReloadTrigger),
             AcademyStudentListScreen(reloadTrigger: _studentReloadTrigger),
-            const CourseMasterScreen(),
             const FeesScreen(),
             _SettingsTab(user: user),
           ],

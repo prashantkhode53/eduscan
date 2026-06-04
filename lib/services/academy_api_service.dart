@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../constants/api_endpoints.dart';
 import 'storage_service.dart';
+import '../utils/network_aware_client.dart';
 
 /// Thrown when the backend returns a 409 FACE_DUPLICATE response.
 /// Carries the matched student's details so the UI can show a rich warning.
@@ -30,6 +31,7 @@ class FaceDuplicateException implements Exception {
 class AcademyApiService {
   static const Duration _timeout     = Duration(seconds: 30);
   static const Duration _regTimeout  = Duration(seconds: 90);
+  static final _http = NetworkAwareClient();
 
   static Future<Map<String, String>> _headers() async {
     final token = await StorageService.getToken();
@@ -77,8 +79,7 @@ class AcademyApiService {
         ? Uri.parse('${ApiEndpoints.academyStudents}/stats')
         : Uri.parse('${ApiEndpoints.academyStudents}/stats')
             .replace(queryParameters: params);
-    final res = await http
-        .get(uri, headers: await _headers())
+    final res = await _http.get(uri, headers: await _headers())
         .timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
   }
@@ -86,16 +87,14 @@ class AcademyApiService {
   // ── Academic Years ────────────────────────────────────────────────────────
 
   static Future<List<Map<String, dynamic>>> getAcademicYears() async {
-    final res = await http
-        .get(Uri.parse(ApiEndpoints.academyAcademicYears), headers: await _headers())
+    final res = await _http.get(Uri.parse(ApiEndpoints.academyAcademicYears), headers: await _headers())
         .timeout(_timeout);
     final data = _parse(res);
     return (data as List).cast<Map<String, dynamic>>();
   }
 
   static Future<Map<String, dynamic>?> getCurrentAcademicYear() async {
-    final res = await http
-        .get(Uri.parse('${ApiEndpoints.academyAcademicYears}/current'),
+    final res = await _http.get(Uri.parse('${ApiEndpoints.academyAcademicYears}/current'),
             headers: await _headers())
         .timeout(_timeout);
     return _parse(res) as Map<String, dynamic>?;
@@ -103,8 +102,7 @@ class AcademyApiService {
 
   static Future<Map<String, dynamic>> createAcademicYear(
       Map<String, dynamic> body) async {
-    final res = await http
-        .post(Uri.parse(ApiEndpoints.academyAcademicYears),
+    final res = await _http.post(Uri.parse(ApiEndpoints.academyAcademicYears),
             headers: await _headers(), body: jsonEncode(body))
         .timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
@@ -112,16 +110,14 @@ class AcademyApiService {
 
   static Future<Map<String, dynamic>> updateAcademicYear(
       String id, Map<String, dynamic> body) async {
-    final res = await http
-        .put(Uri.parse('${ApiEndpoints.academyAcademicYears}/$id'),
+    final res = await _http.put(Uri.parse('${ApiEndpoints.academyAcademicYears}/$id'),
             headers: await _headers(), body: jsonEncode(body))
         .timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
   }
 
   static Future<void> deleteAcademicYear(String id) async {
-    final res = await http
-        .delete(Uri.parse('${ApiEndpoints.academyAcademicYears}/$id'),
+    final res = await _http.delete(Uri.parse('${ApiEndpoints.academyAcademicYears}/$id'),
             headers: await _headers())
         .timeout(_timeout);
     _parse(res);
@@ -136,15 +132,13 @@ class AcademyApiService {
     final uri = params.isEmpty
         ? Uri.parse(ApiEndpoints.academyCourses)
         : Uri.parse(ApiEndpoints.academyCourses).replace(queryParameters: params);
-    final res = await http
-        .get(uri, headers: await _headers())
+    final res = await _http.get(uri, headers: await _headers())
         .timeout(_timeout);
     return _parse(res) as List<dynamic>;
   }
 
   static Future<Map<String, dynamic>> createCourse(Map<String, dynamic> body) async {
-    final res = await http
-        .post(Uri.parse(ApiEndpoints.academyCourses),
+    final res = await _http.post(Uri.parse(ApiEndpoints.academyCourses),
             headers: await _headers(), body: jsonEncode(body))
         .timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
@@ -152,16 +146,14 @@ class AcademyApiService {
 
   static Future<Map<String, dynamic>> updateCourse(
       String id, Map<String, dynamic> body) async {
-    final res = await http
-        .put(Uri.parse('${ApiEndpoints.academyCourses}/$id'),
+    final res = await _http.put(Uri.parse('${ApiEndpoints.academyCourses}/$id'),
             headers: await _headers(), body: jsonEncode(body))
         .timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
   }
 
   static Future<void> deleteCourse(String id) async {
-    final res = await http
-        .delete(Uri.parse('${ApiEndpoints.academyCourses}/$id'),
+    final res = await _http.delete(Uri.parse('${ApiEndpoints.academyCourses}/$id'),
             headers: await _headers())
         .timeout(_timeout);
     _parse(res);
@@ -185,8 +177,7 @@ class AcademyApiService {
     };
     final uri = Uri.parse(ApiEndpoints.academyStudents)
         .replace(queryParameters: params);
-    final res = await http
-        .get(uri, headers: await _headers())
+    final res = await _http.get(uri, headers: await _headers())
         .timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
   }
@@ -196,8 +187,7 @@ class AcademyApiService {
     // The long timeout only applies when a face is included (InsightFace
     // embedding is slow); a details-only "save before scan" is a quick DB write.
     final hasFace = (body['face_images'] as List?)?.isNotEmpty ?? false;
-    final res = await http
-        .post(Uri.parse(ApiEndpoints.academyStudents),
+    final res = await _http.post(Uri.parse(ApiEndpoints.academyStudents),
             headers: await _headers(), body: jsonEncode(body))
         .timeout(hasFace ? _regTimeout : _timeout);
     return _parse(res) as Map<String, dynamic>;
@@ -210,8 +200,7 @@ class AcademyApiService {
   /// against the DB, and creates student profiles. Returns detailed results.
   static Future<Map<String, dynamic>> bulkUploadStudents(
       List<Map<String, dynamic>> students, {String? academicYearId}) async {
-    final res = await http
-        .post(
+    final res = await _http.post(
           Uri.parse('${ApiEndpoints.academyStudents}/bulk-upload'),
           headers: await _headers(),
           body: jsonEncode({
@@ -234,8 +223,7 @@ class AcademyApiService {
       'last_name':  lastName.trim(),
       'dob':        dob.trim(),
     });
-    final res = await http
-        .get(uri, headers: await _headers())
+    final res = await _http.get(uri, headers: await _headers())
         .timeout(_timeout);
     final data = _parse(res) as Map<String, dynamic>;
     if (data['exists'] == true) {
@@ -245,8 +233,7 @@ class AcademyApiService {
   }
 
   static Future<Map<String, dynamic>> getStudentById(String id) async {
-    final res = await http
-        .get(Uri.parse('${ApiEndpoints.academyStudents}/$id'),
+    final res = await _http.get(Uri.parse('${ApiEndpoints.academyStudents}/$id'),
             headers: await _headers())
         .timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
@@ -254,8 +241,7 @@ class AcademyApiService {
 
   static Future<Map<String, dynamic>> scanFace(
       String imageBase64, String mode) async {
-    final res = await http
-        .post(
+    final res = await _http.post(
           Uri.parse(ApiEndpoints.academyAttendanceScan),
           headers: await _headers(),
           body: jsonEncode({'image_base64': imageBase64, 'mode': mode}),
@@ -266,16 +252,14 @@ class AcademyApiService {
 
   static Future<Map<String, dynamic>> updateStudent(
       String id, Map<String, dynamic> body) async {
-    final res = await http
-        .patch(Uri.parse('${ApiEndpoints.academyStudents}/$id'),
+    final res = await _http.patch(Uri.parse('${ApiEndpoints.academyStudents}/$id'),
             headers: await _headers(), body: jsonEncode(body))
         .timeout(_regTimeout);
     return _parse(res) as Map<String, dynamic>;
   }
 
   static Future<void> deleteStudent(String id) async {
-    final res = await http
-        .delete(Uri.parse('${ApiEndpoints.academyStudents}/$id'),
+    final res = await _http.delete(Uri.parse('${ApiEndpoints.academyStudents}/$id'),
             headers: await _headers())
         .timeout(_timeout);
     _parse(res);
@@ -284,8 +268,7 @@ class AcademyApiService {
   /// Phase 2 of registration / re-capture: attach or replace ONLY the face.
   static Future<void> updateStudentFace(
       String id, List<String> faceImages) async {
-    final res = await http
-        .patch(Uri.parse('${ApiEndpoints.academyStudents}/$id/face'),
+    final res = await _http.patch(Uri.parse('${ApiEndpoints.academyStudents}/$id/face'),
             headers: await _headers(),
             body: jsonEncode({'face_images': faceImages}))
         .timeout(_regTimeout);
@@ -312,7 +295,7 @@ class AcademyApiService {
     };
     final uri = Uri.parse(ApiEndpoints.academyFees)
         .replace(queryParameters: params);
-    final res = await http.get(uri, headers: await _headers()).timeout(_timeout);
+    final res = await _http.get(uri, headers: await _headers()).timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
   }
 
@@ -322,8 +305,7 @@ class AcademyApiService {
     String paymentMode = 'cash',
     String? remarks,
   }) async {
-    final res = await http
-        .post(
+    final res = await _http.post(
           Uri.parse('${ApiEndpoints.academyFees}/collect'),
           headers: await _headers(),
           body: jsonEncode({
@@ -338,8 +320,7 @@ class AcademyApiService {
   }
 
   static Future<Map<String, dynamic>> generateMonthlyFees({String? month}) async {
-    final res = await http
-        .post(
+    final res = await _http.post(
           Uri.parse('${ApiEndpoints.academyFees}/generate'),
           headers: await _headers(),
           body: jsonEncode({if (month != null) 'month': month}),
@@ -349,16 +330,14 @@ class AcademyApiService {
   }
 
   static Future<void> markOverdueFees() async {
-    final res = await http
-        .post(Uri.parse('${ApiEndpoints.academyFees}/mark-overdue'),
+    final res = await _http.post(Uri.parse('${ApiEndpoints.academyFees}/mark-overdue'),
             headers: await _headers())
         .timeout(_timeout);
     _parse(res);
   }
 
   static Future<Map<String, dynamic>> getStudentFees(String studentId) async {
-    final res = await http
-        .get(Uri.parse('${ApiEndpoints.academyFees}/student/$studentId'),
+    final res = await _http.get(Uri.parse('${ApiEndpoints.academyFees}/student/$studentId'),
             headers: await _headers())
         .timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
@@ -367,23 +346,20 @@ class AcademyApiService {
   // ── QR Codes ──────────────────────────────────────────────────────────────
 
   static Future<List<Map<String, dynamic>>> listQrCodes() async {
-    final res = await http
-        .get(Uri.parse(ApiEndpoints.academyQrCodes), headers: await _headers())
+    final res = await _http.get(Uri.parse(ApiEndpoints.academyQrCodes), headers: await _headers())
         .timeout(_timeout);
     final data = _parse(res);
     return (data as List).cast<Map<String, dynamic>>();
   }
 
   static Future<Map<String, dynamic>?> getActiveQrCode() async {
-    final res = await http
-        .get(Uri.parse('${ApiEndpoints.academyQrCodes}/active'), headers: await _headers())
+    final res = await _http.get(Uri.parse('${ApiEndpoints.academyQrCodes}/active'), headers: await _headers())
         .timeout(_timeout);
     return _parse(res) as Map<String, dynamic>?;
   }
 
   static Future<Map<String, dynamic>> createQrCode(Map<String, dynamic> body) async {
-    final res = await http
-        .post(Uri.parse(ApiEndpoints.academyQrCodes),
+    final res = await _http.post(Uri.parse(ApiEndpoints.academyQrCodes),
             headers: await _headers(), body: jsonEncode(body))
         .timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
@@ -391,24 +367,21 @@ class AcademyApiService {
 
   static Future<Map<String, dynamic>> updateQrCode(
       String id, Map<String, dynamic> body) async {
-    final res = await http
-        .put(Uri.parse('${ApiEndpoints.academyQrCodes}/$id'),
+    final res = await _http.put(Uri.parse('${ApiEndpoints.academyQrCodes}/$id'),
             headers: await _headers(), body: jsonEncode(body))
         .timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
   }
 
   static Future<void> activateQrCode(String id) async {
-    final res = await http
-        .patch(Uri.parse('${ApiEndpoints.academyQrCodes}/$id/activate'),
+    final res = await _http.patch(Uri.parse('${ApiEndpoints.academyQrCodes}/$id/activate'),
             headers: await _headers())
         .timeout(_timeout);
     _parse(res);
   }
 
   static Future<void> deleteQrCode(String id) async {
-    final res = await http
-        .delete(Uri.parse('${ApiEndpoints.academyQrCodes}/$id'),
+    final res = await _http.delete(Uri.parse('${ApiEndpoints.academyQrCodes}/$id'),
             headers: await _headers())
         .timeout(_timeout);
     _parse(res);

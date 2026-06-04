@@ -2,10 +2,12 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../constants/api_endpoints.dart';
 import 'storage_service.dart';
+import '../utils/network_aware_client.dart';
 
 class ParentApiService {
   static const Duration _timeout     = Duration(seconds: 20);
   static const Duration _faceTimeout = Duration(seconds: 35); // InsightFace cold start
+  static final _http = NetworkAwareClient();
 
   static Future<Map<String, String>> _authHeaders() async {
     final token = await StorageService.getParentToken();
@@ -35,8 +37,7 @@ class ParentApiService {
     required String studentId,
     required String mobile,
   }) async {
-    final res = await http
-        .post(
+    final res = await _http.post(
           Uri.parse(ApiEndpoints.parentCheckCredentials),
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({
@@ -56,8 +57,7 @@ class ParentApiService {
     required String sessionToken,
     required String faceImageBase64,
   }) async {
-    final res = await http
-        .post(
+    final res = await _http.post(
           Uri.parse(ApiEndpoints.parentVerifyFace),
           headers: _sessionHeaders(sessionToken),
           body: jsonEncode({'face_image': faceImageBase64}),
@@ -67,8 +67,7 @@ class ParentApiService {
   }
 
   static Future<void> saveFcmToken(String fcmToken) async {
-    final res = await http
-        .post(
+    final res = await _http.post(
           Uri.parse(ApiEndpoints.parentFcmToken),
           headers: await _authHeaders(),
           body: jsonEncode({'fcm_token': fcmToken}),
@@ -78,8 +77,7 @@ class ParentApiService {
   }
 
   static Future<Map<String, dynamic>> getProfile() async {
-    final res = await http
-        .get(Uri.parse(ApiEndpoints.parentProfile), headers: await _authHeaders())
+    final res = await _http.get(Uri.parse(ApiEndpoints.parentProfile), headers: await _authHeaders())
         .timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
   }
@@ -87,8 +85,7 @@ class ParentApiService {
   static Future<List<Map<String, dynamic>>> getAttendance({int days = 30}) async {
     final uri = Uri.parse(ApiEndpoints.parentAttendance)
         .replace(queryParameters: {'days': days.toString()});
-    final res = await http
-        .get(uri, headers: await _authHeaders())
+    final res = await _http.get(uri, headers: await _authHeaders())
         .timeout(_timeout);
     return (_parse(res) as List).cast<Map<String, dynamic>>();
   }
