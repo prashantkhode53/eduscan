@@ -476,7 +476,7 @@ class _HomeTabState extends State<_HomeTab> {
                 ),
                 _QuickAction(
                   icon: Icons.face_outlined,
-                  label: 'Face Scan',
+                  label: 'Face Scan Attendance',
                   color: Colors.green,
                   onTap: () => Navigator.push(
                     context,
