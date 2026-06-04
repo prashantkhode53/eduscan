@@ -427,6 +427,35 @@ class _HomeTabState extends State<_HomeTab> {
               mainAxisSpacing: 12,
               childAspectRatio: 1.6,
               children: [
+                // Row 1: setup workflow first
+                _QuickAction(
+                  icon: Icons.calendar_today_outlined,
+                  label: 'Academic Year',
+                  color: Colors.indigo,
+                  onTap: () async {
+                    final yp = context.read<AcademicYearProvider>();
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const AcademicYearMasterScreen()),
+                    );
+                    await yp.init(force: true);
+                  },
+                ),
+                _QuickAction(
+                  icon: Icons.menu_book_outlined,
+                  label: 'Manage Courses',
+                  color: Colors.orange,
+                  onTap: () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const CourseMasterScreen()),
+                    );
+                    _loadStats();
+                  },
+                ),
+                // Row 2: student operations
                 _QuickAction(
                   icon: Icons.how_to_reg_outlined,
                   label: 'Register Student',
@@ -443,19 +472,7 @@ class _HomeTabState extends State<_HomeTab> {
                         builder: (_) => const AcademyFaceScanScreen()),
                   ),
                 ),
-                _QuickAction(
-                  icon: Icons.menu_book_outlined,
-                  label: 'Manage Courses',
-                  color: Colors.orange,
-                  onTap: () async {
-                    await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (_) => const CourseMasterScreen()),
-                    );
-                    _loadStats();
-                  },
-                ),
+                // Row 3: financial & utilities
                 _QuickAction(
                   icon: Icons.payments_outlined,
                   label: 'Collect Fee',
@@ -478,20 +495,6 @@ class _HomeTabState extends State<_HomeTab> {
                     MaterialPageRoute(
                         builder: (_) => const QrCodeScreen()),
                   ),
-                ),
-                _QuickAction(
-                  icon: Icons.calendar_today_outlined,
-                  label: 'Academic Year',
-                  color: Colors.indigo,
-                  onTap: () async {
-                    final yp = context.read<AcademicYearProvider>();
-                    await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (_) => const AcademicYearMasterScreen()),
-                    );
-                    await yp.init(force: true);
-                  },
                 ),
               ],
             ),
