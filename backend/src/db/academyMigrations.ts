@@ -140,6 +140,12 @@ export async function reconcileAcademySchemas(): Promise<void> {
         CREATE INDEX IF NOT EXISTS idx_ss_subject  ON student_subjects(subject_id);
         CREATE INDEX IF NOT EXISTS idx_fr_subject  ON fee_records(subject_id)
       `);
+      // Unique partial index: prevents duplicate subject names (case-insensitive) per course
+      await academyExec(slug, `
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_subj_course_name
+        ON subjects(course_id, LOWER(name))
+        WHERE is_active = TRUE
+      `);
       // Receipt sequence + table for existing academies
       await academyExec(slug, `CREATE SEQUENCE IF NOT EXISTS fee_receipt_seq START 1 INCREMENT 1`);
       await academyExec(slug, `
@@ -466,6 +472,11 @@ export async function runAcademyMigrations(
     await client.query(`CREATE INDEX IF NOT EXISTS idx_ss_student   ON student_subjects(student_id)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_ss_subject   ON student_subjects(subject_id)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_fr_subject      ON fee_records(subject_id)`);
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_subj_course_name
+      ON subjects(course_id, LOWER(name))
+      WHERE is_active = TRUE
+    `);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_receipts_student ON fee_receipts(student_id)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_receipts_gendate ON fee_receipts(generated_at)`);
 

@@ -330,11 +330,18 @@ class _SubjectMasterSheetState extends State<_SubjectMasterSheet> {
   }
 
   Future<void> _showForm({Map<String, dynamic>? subject}) async {
+    // Build list of existing names (lowercase), excluding the subject being edited
+    final existingNames = _subjects
+        .where((s) => s['id'] != subject?['id'])
+        .map((s) => (s['name'] as String).toLowerCase())
+        .toList();
+
     final result = await showDialog<bool>(
       context: context,
       builder: (_) => _SubjectFormDialog(
-        courseId: widget.courseId,
-        subject:  subject,
+        courseId:      widget.courseId,
+        subject:       subject,
+        existingNames: existingNames,
       ),
     );
     if (result == true) _load();
@@ -488,8 +495,13 @@ class _SubjectMasterSheetState extends State<_SubjectMasterSheet> {
 class _SubjectFormDialog extends StatefulWidget {
   final String courseId;
   final Map<String, dynamic>? subject;
+  final List<String> existingNames; // lowercased, excluding the subject being edited
 
-  const _SubjectFormDialog({required this.courseId, this.subject});
+  const _SubjectFormDialog({
+    required this.courseId,
+    required this.existingNames,
+    this.subject,
+  });
 
   @override
   State<_SubjectFormDialog> createState() => _SubjectFormDialogState();
@@ -560,8 +572,14 @@ class _SubjectFormDialogState extends State<_SubjectFormDialog> {
                   labelText: 'Subject Name *',
                   border: OutlineInputBorder()),
               autofocus: true,
-              validator: (v) =>
-                  v == null || v.trim().isEmpty ? 'Required' : null,
+              textCapitalization: TextCapitalization.words,
+              validator: (v) {
+                if (v == null || v.trim().isEmpty) return 'Required';
+                if (widget.existingNames.contains(v.trim().toLowerCase())) {
+                  return 'A subject with this name already exists';
+                }
+                return null;
+              },
             ),
             const SizedBox(height: 12),
             TextFormField(

@@ -160,6 +160,13 @@ export async function createSubject(
     const { name, default_fee } = req.body as { name: string; default_fee?: number };
     if (!name?.trim()) return next(new AppError('Subject name is required', 400));
 
+    const dup = await academyQueryOne<{ id: string }>(
+      academySlug,
+      `SELECT id FROM subjects WHERE course_id = $1 AND LOWER(name) = LOWER($2) AND is_active = TRUE`,
+      [courseId, name.trim()]
+    );
+    if (dup) return next(new AppError(`Subject "${name.trim()}" already exists in this course`, 409));
+
     const subject = await academyQueryOne<SubjectRow>(
       academySlug,
       `INSERT INTO subjects (course_id, name, default_fee)
@@ -180,6 +187,19 @@ export async function updateSubject(
     const { academySlug } = req.academyUser!;
     const { subjectId } = req.params;
     const { name, default_fee } = req.body as { name?: string; default_fee?: number };
+
+    if (name?.trim()) {
+      const dup = await academyQueryOne<{ id: string }>(
+        academySlug,
+        `SELECT id FROM subjects
+         WHERE course_id = (SELECT course_id FROM subjects WHERE id = $1)
+           AND LOWER(name) = LOWER($2)
+           AND is_active   = TRUE
+           AND id         != $1`,
+        [subjectId, name.trim()]
+      );
+      if (dup) return next(new AppError(`Subject "${name.trim()}" already exists in this course`, 409));
+    }
 
     const subject = await academyQueryOne<SubjectRow>(
       academySlug,
