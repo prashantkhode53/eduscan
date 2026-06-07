@@ -528,7 +528,8 @@ class _SubjectFormDialogState extends State<_SubjectFormDialog> {
   final _formKey  = GlobalKey<FormState>();
   final _nameCtrl = TextEditingController();
   final _feeCtrl  = TextEditingController();
-  bool _saving    = false;
+  bool    _saving = false;
+  String? _error;
 
   bool get _isEdit => widget.subject != null;
 
@@ -550,7 +551,7 @@ class _SubjectFormDialogState extends State<_SubjectFormDialog> {
 
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
-    setState(() => _saving = true);
+    setState(() { _saving = true; _error = null; });
     try {
       final body = {
         'name':        _nameCtrl.text.trim(),
@@ -565,11 +566,10 @@ class _SubjectFormDialogState extends State<_SubjectFormDialog> {
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(e.toString().replaceFirst('Exception: ', '')),
-          backgroundColor: Colors.red,
-        ));
-        setState(() => _saving = false);
+        setState(() {
+          _saving = false;
+          _error  = e.toString().replaceFirst('Exception: ', '');
+        });
       }
     }
   }
@@ -609,6 +609,29 @@ class _SubjectFormDialogState extends State<_SubjectFormDialog> {
               validator: (v) =>
                   v == null || v.isEmpty ? 'Required' : null,
             ),
+            if (_error != null) ...[
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.red.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.red.shade200),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.error_outline,
+                        color: Colors.red.shade700, size: 16),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(_error!,
+                          style: TextStyle(
+                              fontSize: 12, color: Colors.red.shade700)),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ],
         ),
       ),
