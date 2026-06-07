@@ -248,10 +248,15 @@ class _CourseMasterScreenState extends State<CourseMasterScreen> {
                                 trailing: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    IconButton(
-                                        tooltip: 'Manage Subjects',
-                                        icon: const Icon(Icons.list_alt_outlined),
-                                        onPressed: () => _showSubjects(c)),
+                                    TextButton.icon(
+                                      onPressed: () => _showSubjects(c),
+                                      icon: const Icon(Icons.list_alt_outlined, size: 18),
+                                      label: const Text('Subjects', style: TextStyle(fontSize: 12)),
+                                      style: TextButton.styleFrom(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                                        visualDensity: VisualDensity.compact,
+                                      ),
+                                    ),
                                     IconButton(
                                         icon: const Icon(Icons.edit_outlined),
                                         onPressed: () =>
@@ -392,19 +397,9 @@ class _SubjectMasterSheetState extends State<_SubjectMasterSheet> {
           child: Row(
             children: [
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Subjects',
-                        style: theme.textTheme.titleLarge
-                            ?.copyWith(fontWeight: FontWeight.bold)),
-                    Text(widget.courseName,
-                        style: TextStyle(
-                            fontSize: 13,
-                            color: theme.colorScheme.onSurface
-                                .withValues(alpha: 0.6))),
-                  ],
-                ),
+                child: Text(widget.courseName,
+                    style: theme.textTheme.titleLarge
+                        ?.copyWith(fontWeight: FontWeight.bold)),
               ),
               FilledButton.icon(
                 onPressed: () => _showForm(),
