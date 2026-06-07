@@ -945,7 +945,26 @@ class _FeeCollectionSheetState extends State<FeeCollectionSheet> {
                   ],
                 ),
               ),
-              const SizedBox(height: 6),
+              const SizedBox(height: 8),
+              if (((widget.record['course_name'] as String?)?.isNotEmpty ?? false) ||
+                  ((widget.record['subject_name'] as String?)?.isNotEmpty ?? false))
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Text(
+                    [
+                      if ((widget.record['course_name'] as String?)?.isNotEmpty ?? false)
+                        widget.record['course_name'] as String,
+                      if ((widget.record['subject_name'] as String?)?.isNotEmpty ?? false)
+                        widget.record['subject_name'] as String,
+                    ].join(' · '),
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: theme.colorScheme.primary,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
               Text('A notification has been sent to the parent.',
                   style: TextStyle(
                       fontSize: 12,
@@ -996,12 +1015,39 @@ class _FeeCollectionSheetState extends State<FeeCollectionSheet> {
           Text('Collect Fee',
               style: theme.textTheme.titleLarge
                   ?.copyWith(fontWeight: FontWeight.bold)),
-          const SizedBox(height: 4),
-          Text(
-            '${widget.record['first_name']} ${widget.record['last_name']}  ·  '
-            '${widget.record['subject_name'] ?? widget.record['course_name'] ?? ''}',
-            style: TextStyle(
-                color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceContainerLow,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _FeeInfoRow(
+                  icon: Icons.person_outline,
+                  label: 'Student',
+                  value: '${widget.record['first_name'] ?? ''} ${widget.record['last_name'] ?? ''}'.trim(),
+                ),
+                if ((widget.record['course_name'] as String?)?.isNotEmpty ?? false) ...[
+                  const SizedBox(height: 6),
+                  _FeeInfoRow(
+                    icon: Icons.menu_book_outlined,
+                    label: 'Course',
+                    value: widget.record['course_name'] as String,
+                  ),
+                ],
+                if ((widget.record['subject_name'] as String?)?.isNotEmpty ?? false) ...[
+                  const SizedBox(height: 6),
+                  _FeeInfoRow(
+                    icon: Icons.science_outlined,
+                    label: 'Subject',
+                    value: widget.record['subject_name'] as String,
+                  ),
+                ],
+              ],
+            ),
           ),
           const SizedBox(height: 16),
 
@@ -1104,6 +1150,37 @@ class _Tab {
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
+
+class _FeeInfoRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  const _FeeInfoRow({required this.icon, required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(
+      children: [
+        Icon(icon, size: 15, color: theme.colorScheme.primary),
+        const SizedBox(width: 8),
+        Text(
+          '$label: ',
+          style: TextStyle(
+              fontSize: 12,
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
+        ),
+        Expanded(
+          child: Text(
+            value,
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    );
+  }
+}
 
 String _fmtDate(dynamic raw) {
   final s = raw?.toString() ?? '';

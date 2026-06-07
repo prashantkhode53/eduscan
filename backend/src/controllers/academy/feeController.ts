@@ -178,24 +178,32 @@ export async function collectFee(
     const student = await academyQueryOne<{
       first_name: string; last_name: string; parent_name: string | null;
       parent_fcm_token: string | null;
+      course_name: string | null; subject_name: string | null;
     }>(
       academySlug,
-      `SELECT first_name, last_name, parent_name, parent_fcm_token
-       FROM students WHERE id = $1`,
-      [updated.student_id]
+      `SELECT s.first_name, s.last_name, s.parent_name, s.parent_fcm_token,
+              c.name   AS course_name,
+              sub.name AS subject_name
+       FROM students s
+       LEFT JOIN courses  c   ON c.id   = $2::uuid
+       LEFT JOIN subjects sub ON sub.id = $3::uuid
+       WHERE s.id = $1`,
+      [updated.student_id, updated.course_id, updated.subject_id]
     );
 
     if (student?.parent_fcm_token) {
       const balanceLine = balance <= 0
         ? 'All fees are now cleared.'
         : `Remaining balance: ₹${Math.max(0, balance).toFixed(0)}`;
+      const subjectLine = [student.course_name, student.subject_name].filter(Boolean).join(' › ');
       const sent = await sendFcm({
         token: student.parent_fcm_token,
         title: 'Fee Payment Received',
         body:
-          `Dear ${student.parent_name ?? 'Parent'}, ₹${amount_paid} has been received for ` +
-          `${student.first_name} ${student.last_name}. ${balanceLine} ` +
-          `Receipt No: ${receiptNumber}. View receipt in the app.`,
+          `Dear ${student.parent_name ?? 'Parent'}, ₹${amount_paid} received for ` +
+          `${student.first_name} ${student.last_name}` +
+          (subjectLine ? ` (${subjectLine})` : '') +
+          `. ${balanceLine} Receipt No: ${receiptNumber}.`,
         data: {
           type:           'fee_receipt',
           receipt_id:     receiptId,
@@ -455,10 +463,17 @@ export async function resendReceipt(
     const receipt = await academyQueryOne<{
       id: string; receipt_number: string; amount_paid: number;
       student_id: string;
+      course_name: string | null; subject_name: string | null;
     }>(
       academySlug,
-      `SELECT r.id, r.receipt_number, r.amount_paid, r.student_id
-       FROM fee_receipts r WHERE r.id = $1`,
+      `SELECT r.id, r.receipt_number, r.amount_paid, r.student_id,
+              c.name   AS course_name,
+              sub.name AS subject_name
+       FROM fee_receipts r
+       LEFT JOIN fee_records fr ON fr.id  = r.fee_record_id
+       LEFT JOIN courses  c     ON c.id   = fr.course_id
+       LEFT JOIN subjects sub   ON sub.id = fr.subject_id
+       WHERE r.id = $1`,
       [id]
     );
     if (!receipt) return next(new AppError('Receipt not found', 404));
@@ -477,14 +492,16 @@ export async function resendReceipt(
       return next(new AppError('No parent FCM token on file for this student', 422));
     }
 
+    const subLine = [receipt.course_name, receipt.subject_name].filter(Boolean).join(' › ');
     const sent = await sendFcm({
       token: student.parent_fcm_token,
       title: 'Fee Payment Receipt',
       body:
-        `Dear ${student.parent_name ?? 'Parent'}, your fee receipt for ` +
-        `${student.first_name} ${student.last_name} is ready. ` +
-        `Amount: ₹${parseFloat(receipt.amount_paid.toString()).toFixed(0)}. Receipt No: ${receipt.receipt_number}. ` +
-        `View receipt in the EduScan app.`,
+        `Dear ${student.parent_name ?? 'Parent'}, fee receipt for ` +
+        `${student.first_name} ${student.last_name}` +
+        (subLine ? ` (${subLine})` : '') +
+        ` ready. Amount: ₹${parseFloat(receipt.amount_paid.toString()).toFixed(0)}. ` +
+        `Receipt No: ${receipt.receipt_number}.`,
       data: { type: 'fee_receipt', receipt_id: receipt.id, receipt_number: receipt.receipt_number },
     });
 
