@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import bcrypt from 'bcrypt';
 import { academyQuery, academyQueryOne, academyTransaction, academyExec } from '../../db/poolManager';
 import { AppError } from '../../middleware/errorHandler';
 import { batchEmbed, matchFace, cacheUpsert, cacheDelete } from '../../utils/insightface';
@@ -1144,5 +1145,74 @@ export async function deleteStudent(
     }
 
     res.json({ success: true, message: 'Student deleted successfully' });
+  } catch (err) { next(err); }
+}
+
+// ── PUT /api/academy/students/:id/master-password ─────────────────────────────
+// Admin sets or replaces the fallback login password for a specific student.
+// The password is stored hashed; it is shared with the parent manually (offline).
+
+export async function setMasterPassword(
+  req: Request, res: Response, next: NextFunction
+): Promise<void> {
+  try {
+    const { academySlug } = req.academyUser!;
+    const { id } = req.params;
+    const { password } = req.body as { password?: string };
+
+    if (!password || password.length < 6) {
+      return next(new AppError('Password must be at least 6 characters', 400));
+    }
+
+    const student = await academyQueryOne<{ id: string }>(
+      academySlug, `SELECT id FROM students WHERE id = $1 AND status = 'active'`, [id]
+    );
+    if (!student) return next(new AppError('Student not found or inactive', 404));
+
+    const hash = await bcrypt.hash(password, 12);
+
+    await academyExec(
+      academySlug,
+      `UPDATE students
+       SET fallback_password_hash    = $1,
+           fallback_password_enabled = TRUE,
+           updated_at                = NOW()
+       WHERE id = $2`,
+      [hash, id]
+    );
+
+    console.log(`[admin/master-password] SET for student ${id} @ ${academySlug}`);
+    res.json({ success: true, message: 'Fallback password set. Share it with the parent manually.' });
+  } catch (err) { next(err); }
+}
+
+// ── DELETE /api/academy/students/:id/master-password ─────────────────────────
+// Admin revokes the fallback login password for a student.
+// The "Use Institute Password" option disappears from the parent's login screen.
+
+export async function deleteMasterPassword(
+  req: Request, res: Response, next: NextFunction
+): Promise<void> {
+  try {
+    const { academySlug } = req.academyUser!;
+    const { id } = req.params;
+
+    const student = await academyQueryOne<{ id: string }>(
+      academySlug, `SELECT id FROM students WHERE id = $1`, [id]
+    );
+    if (!student) return next(new AppError('Student not found', 404));
+
+    await academyExec(
+      academySlug,
+      `UPDATE students
+       SET fallback_password_hash    = NULL,
+           fallback_password_enabled = FALSE,
+           updated_at                = NOW()
+       WHERE id = $1`,
+      [id]
+    );
+
+    console.log(`[admin/master-password] REVOKED for student ${id} @ ${academySlug}`);
+    res.json({ success: true, message: 'Fallback password revoked successfully.' });
   } catch (err) { next(err); }
 }

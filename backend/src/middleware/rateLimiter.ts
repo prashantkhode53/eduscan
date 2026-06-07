@@ -22,6 +22,17 @@ export const authLimiter = rateLimit({
   },
 });
 
+export const passwordLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many password attempts. Please try again after 1 hour.',
+  },
+});
+
 export const scanLimiter = rateLimit({
   windowMs: 1 * 60 * 1000,
   max: 120,

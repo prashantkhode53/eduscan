@@ -85,6 +85,14 @@ class _AcademyStudentEditScreenState
   Timer? _stallTimer;
   DateTime? _noProgressSince;
 
+  // ── Master password (fallback login) ──────────────────────────────────────
+  bool   _masterPasswordEnabled = false;
+  bool   _settingPassword       = false;
+  bool   _revokingPassword      = false;
+  final  _newPasswordCtrl       = TextEditingController();
+  bool   _newPasswordObscure    = true;
+  String? _masterPasswordError;
+
   // ── Submit ─────────────────────────────────────────────────────────────────
   bool _submitting = false;
 
@@ -117,7 +125,8 @@ class _AcademyStudentEditScreenState
       _addressCtrl.text    = studentData['address']       as String? ?? '';
       final rawDob = studentData['dob']?.toString() ?? '';
       _dobCtrl.text = rawDob.contains('T') ? rawDob.split('T')[0] : rawDob;
-      _gender = studentData['gender'] as String?;
+      _gender                = studentData['gender'] as String?;
+      _masterPasswordEnabled = studentData['fallback_password_enabled'] as bool? ?? false;
 
       // Restore subject-level enrollments from enrolled_subjects (new API field).
       final rawSubjects = studentData['enrolled_subjects'] as List?;
@@ -249,10 +258,87 @@ class _AcademyStudentEditScreenState
     _dobCtrl.dispose();
     _parentNameCtrl.dispose(); _parentMobCtrl.dispose();
     _addressCtrl.dispose();
+    _newPasswordCtrl.dispose();
     _stallTimer?.cancel();
     _progressTicker?.cancel();
     _camCtrl?.dispose();
     super.dispose();
+  }
+
+  // ── Master password actions ────────────────────────────────────────────────
+
+  Future<void> _setMasterPassword() async {
+    final pwd = _newPasswordCtrl.text.trim();
+    if (pwd.length < 6) {
+      setState(() => _masterPasswordError = 'Password must be at least 6 characters');
+      return;
+    }
+    setState(() { _settingPassword = true; _masterPasswordError = null; });
+    try {
+      await AcademyApiService.setStudentMasterPassword(widget.studentId, pwd);
+      _newPasswordCtrl.clear();
+      if (mounted) {
+        setState(() {
+          _settingPassword       = false;
+          _masterPasswordEnabled = true;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Fallback password set. Share it with the parent manually.'),
+          backgroundColor: Colors.green,
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _settingPassword      = false;
+          _masterPasswordError  = e.toString().replaceFirst('Exception: ', '');
+        });
+      }
+    }
+  }
+
+  Future<void> _revokeMasterPassword() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Revoke Password'),
+        content: const Text(
+            'This will disable the password login option for this parent. Continue?'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: Colors.red),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Revoke')),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+
+    setState(() { _revokingPassword = true; _masterPasswordError = null; });
+    try {
+      await AcademyApiService.deleteStudentMasterPassword(widget.studentId);
+      if (mounted) {
+        setState(() {
+          _revokingPassword      = false;
+          _masterPasswordEnabled = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Fallback password revoked.'),
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _revokingPassword     = false;
+          _masterPasswordError  = e.toString().replaceFirst('Exception: ', '');
+        });
+      }
+    }
   }
 
   // ── Navigation ─────────────────────────────────────────────────────────────
@@ -838,6 +924,133 @@ class _AcademyStudentEditScreenState
               maxLines: 3,
               decoration: const InputDecoration(
                   labelText: 'Address', border: OutlineInputBorder()),
+            ),
+            const SizedBox(height: 24),
+
+            // ── Fallback login password (admin-only) ───────────────────────
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainerLow,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: _masterPasswordEnabled
+                      ? Colors.orange.shade300
+                      : theme.colorScheme.outlineVariant,
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(children: [
+                    Icon(Icons.lock_outline,
+                        size: 18,
+                        color: _masterPasswordEnabled
+                            ? Colors.orange.shade700
+                            : theme.colorScheme.onSurface.withValues(alpha: 0.5)),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text('Fallback Login Password',
+                          style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 14,
+                              color: _masterPasswordEnabled
+                                  ? Colors.orange.shade700
+                                  : theme.colorScheme.onSurface)),
+                    ),
+                    if (_masterPasswordEnabled)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.shade50,
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: Colors.orange.shade200),
+                        ),
+                        child: Text('Active',
+                            style: TextStyle(
+                                fontSize: 11,
+                                color: Colors.orange.shade700,
+                                fontWeight: FontWeight.w600)),
+                      ),
+                  ]),
+                  const SizedBox(height: 6),
+                  Text(
+                    _masterPasswordEnabled
+                        ? 'A password is set. The parent can use it if face scan fails.'
+                        : 'Set a password so the parent can log in without face scan.',
+                    style: TextStyle(
+                        fontSize: 12,
+                        color:
+                            theme.colorScheme.onSurface.withValues(alpha: 0.6)),
+                  ),
+                  const SizedBox(height: 12),
+
+                  // Set / update password
+                  Row(children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _newPasswordCtrl,
+                        obscureText: _newPasswordObscure,
+                        decoration: InputDecoration(
+                          labelText: _masterPasswordEnabled
+                              ? 'New Password'
+                              : 'Set Password',
+                          hintText: 'Min 6 characters',
+                          border: const OutlineInputBorder(),
+                          isDense: true,
+                          suffixIcon: IconButton(
+                            icon: Icon(_newPasswordObscure
+                                ? Icons.visibility_outlined
+                                : Icons.visibility_off_outlined),
+                            onPressed: () => setState(
+                                () => _newPasswordObscure = !_newPasswordObscure),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton(
+                      onPressed: _settingPassword ? null : _setMasterPassword,
+                      style: FilledButton.styleFrom(
+                          backgroundColor: Colors.orange.shade700),
+                      child: _settingPassword
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white))
+                          : Text(_masterPasswordEnabled ? 'Update' : 'Set'),
+                    ),
+                  ]),
+
+                  // Revoke button — only visible when password is active
+                  if (_masterPasswordEnabled) ...[
+                    const SizedBox(height: 8),
+                    OutlinedButton.icon(
+                      onPressed: _revokingPassword ? null : _revokeMasterPassword,
+                      icon: _revokingPassword
+                          ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(strokeWidth: 2))
+                          : const Icon(Icons.lock_open_outlined, size: 16),
+                      label: const Text('Revoke Password'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.red.shade700,
+                        side: BorderSide(color: Colors.red.shade300),
+                      ),
+                    ),
+                  ],
+
+                  if (_masterPasswordError != null) ...[
+                    const SizedBox(height: 8),
+                    Text(_masterPasswordError!,
+                        style: TextStyle(
+                            fontSize: 12, color: Colors.red.shade700)),
+                  ],
+                ],
+              ),
             ),
             const SizedBox(height: 24),
 

@@ -459,4 +459,25 @@ class AcademyApiService {
         .timeout(_timeout);
     _parse(res);
   }
+
+  /// Admin: set or replace the fallback login password for a student.
+  static Future<void> setStudentMasterPassword(String studentId, String password) async {
+    final res = await _http.put(
+          Uri.parse(ApiEndpoints.studentMasterPassword(studentId)),
+          headers: await _headers(),
+          body: jsonEncode({'password': password}),
+        )
+        .timeout(_timeout);
+    _parse(res);
+  }
+
+  /// Admin: revoke the fallback login password for a student.
+  static Future<void> deleteStudentMasterPassword(String studentId) async {
+    final res = await _http.delete(
+          Uri.parse(ApiEndpoints.studentMasterPassword(studentId)),
+          headers: await _headers(),
+        )
+        .timeout(_timeout);
+    _parse(res);
+  }
 }

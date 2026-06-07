@@ -36,15 +36,17 @@ export async function reconcileAcademySchemas(): Promise<void> {
       // academyExec pins the search_path per-transaction (PgBouncer-safe).
       await academyExec(slug, `
         ALTER TABLE IF EXISTS students
-          ADD COLUMN IF NOT EXISTS dob              DATE,
-          ADD COLUMN IF NOT EXISTS gender           VARCHAR(10),
-          ADD COLUMN IF NOT EXISTS email            VARCHAR(100),
-          ADD COLUMN IF NOT EXISTS parent_name      VARCHAR(100),
-          ADD COLUMN IF NOT EXISTS parent_mobile    VARCHAR(15),
-          ADD COLUMN IF NOT EXISTS address          TEXT,
-          ADD COLUMN IF NOT EXISTS face_quality     DECIMAL(4,2),
-          ADD COLUMN IF NOT EXISTS parent_fcm_token TEXT,
-          ADD COLUMN IF NOT EXISTS updated_at       TIMESTAMPTZ DEFAULT NOW()
+          ADD COLUMN IF NOT EXISTS dob                        DATE,
+          ADD COLUMN IF NOT EXISTS gender                    VARCHAR(10),
+          ADD COLUMN IF NOT EXISTS email                     VARCHAR(100),
+          ADD COLUMN IF NOT EXISTS parent_name               VARCHAR(100),
+          ADD COLUMN IF NOT EXISTS parent_mobile             VARCHAR(15),
+          ADD COLUMN IF NOT EXISTS address                   TEXT,
+          ADD COLUMN IF NOT EXISTS face_quality              DECIMAL(4,2),
+          ADD COLUMN IF NOT EXISTS parent_fcm_token          TEXT,
+          ADD COLUMN IF NOT EXISTS updated_at                TIMESTAMPTZ DEFAULT NOW(),
+          ADD COLUMN IF NOT EXISTS fallback_password_hash    TEXT,
+          ADD COLUMN IF NOT EXISTS fallback_password_enabled BOOLEAN NOT NULL DEFAULT FALSE
       `);
       // Idempotent: create qr_codes table for academies created before this feature.
       await academyExec(slug, `
@@ -236,11 +238,13 @@ export async function runAcademyMigrations(
         parent_name      VARCHAR(100),
         parent_mobile    VARCHAR(15),
         address          TEXT,
-        face_embedding   JSONB,
-        face_quality     DECIMAL(4,2),
-        parent_fcm_token TEXT,
-        academic_year_id UUID,
-        status           VARCHAR(10) DEFAULT 'active',
+        face_embedding             JSONB,
+        face_quality               DECIMAL(4,2),
+        parent_fcm_token           TEXT,
+        academic_year_id           UUID,
+        fallback_password_hash     TEXT,
+        fallback_password_enabled  BOOLEAN NOT NULL DEFAULT FALSE,
+        status                     VARCHAR(10) DEFAULT 'active',
         created_at       TIMESTAMPTZ DEFAULT NOW(),
         updated_at       TIMESTAMPTZ DEFAULT NOW()
       )

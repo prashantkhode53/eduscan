@@ -9,6 +9,7 @@ import '../../services/face_service.dart';
 import '../../services/fcm_service.dart';
 import '../../services/parent_api_service.dart';
 import '../../widgets/face_overlay_painter.dart';
+import '../../widgets/institute_password_dialog.dart';
 
 class ParentLoginScreen extends StatefulWidget {
   const ParentLoginScreen({super.key});
@@ -32,6 +33,7 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
   String? _sessionToken;
   String? _studentName;
   String? _academyName;
+  bool    _hasMasterPassword = false;
 
   // ── Step 1: face scan ──────────────────────────────────────────────────────
   CameraController? _camCtrl;
@@ -70,9 +72,10 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
         studentId:   _idCtrl.text.trim(),
         mobile:      _mobileCtrl.text.trim(),
       );
-      _sessionToken = data['session_token'] as String;
-      _studentName  = data['student_name']  as String? ?? '';
-      _academyName  = data['academy_name']  as String? ?? '';
+      _sessionToken      = data['session_token']       as String;
+      _studentName       = data['student_name']        as String? ?? '';
+      _academyName       = data['academy_name']        as String? ?? '';
+      _hasMasterPassword = data['has_master_password'] as bool?   ?? false;
 
       setState(() { _verifying = false; _step = 1; });
       _pageCtrl.animateToPage(1,
@@ -94,13 +97,14 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
     if (_step == 0) { Navigator.pop(context); return; }
     _disposeCamera();
     setState(() {
-      _step         = 0;
-      _faceDone     = false;
-      _faceError    = null;
-      _sessionToken = null;
-      _qualityScore = 0;
-      _holdProgress = 0;
-      _overlayState = FaceOverlayState.idle;
+      _step              = 0;
+      _faceDone          = false;
+      _faceError         = null;
+      _sessionToken      = null;
+      _hasMasterPassword = false;
+      _qualityScore      = 0;
+      _holdProgress      = 0;
+      _overlayState      = FaceOverlayState.idle;
     });
     _pageCtrl.animateToPage(0,
         duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
@@ -651,6 +655,31 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
             ),
             const SizedBox(height: 8),
           ],
+
+          // Password fallback — only shown when admin has enabled it for this student
+          if (_hasMasterPassword && !_submittingFace) ...[
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: () {
+                if (_sessionToken == null) return;
+                showDialog<void>(
+                  context: context,
+                  barrierDismissible: false,
+                  builder: (_) => InstitutePasswordDialog(
+                    sessionToken: _sessionToken!,
+                  ),
+                );
+              },
+              icon: const Icon(Icons.lock_outline, size: 18),
+              label: const Text('Use Institute Password'),
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size.fromHeight(44),
+                foregroundColor: Colors.orange.shade700,
+                side: BorderSide(color: Colors.orange.shade300),
+              ),
+            ),
+          ],
+          const SizedBox(height: 8),
 
           // Instructions
           Container(

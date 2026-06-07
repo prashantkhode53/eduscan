@@ -27,11 +27,15 @@ class ApiEndpoints {
   // Parent — 2-step face-verified login + protected routes
   static const String parentCheckCredentials = '$baseUrl/api/academy/parent/check-credentials';
   static const String parentVerifyFace       = '$baseUrl/api/academy/parent/verify-face';
+  static const String parentVerifyPassword   = '$baseUrl/api/academy/parent/verify-password';
   static const String parentFcmToken         = '$baseUrl/api/academy/parent/fcm-token';
   static const String parentProfile          = '$baseUrl/api/academy/parent/profile';
   static const String parentAttendance       = '$baseUrl/api/academy/parent/attendance';
   static const String parentReceipts         = '$baseUrl/api/academy/parent/receipts';
   static String parentReceiptById(String id) => '$baseUrl/api/academy/parent/receipts/$id';
+
+  // Admin — student master password
+  static String studentMasterPassword(String id) => '$baseUrl/api/academy/students/$id/master-password';
 
   // Auth
   static const String login            = '$baseUrl/api/auth/login';

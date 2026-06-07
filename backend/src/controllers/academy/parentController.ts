@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import bcrypt from 'bcrypt';
 import { academyQuery, academyQueryOne } from '../../db/poolManager';
 import { queryOne } from '../../db/pool';
 import { AppError } from '../../middleware/errorHandler';
@@ -47,10 +48,11 @@ export async function checkCredentials(
       id: string; first_name: string; last_name: string;
       parent_name: string | null; parent_mobile: string | null;
       face_embedding: unknown; status: string;
+      fallback_password_enabled: boolean;
     }>(
       academy.slug,
       `SELECT id, first_name, last_name, parent_name, parent_mobile,
-              face_embedding, status
+              face_embedding, status, fallback_password_enabled
        FROM students WHERE id = $1 AND status = 'active'`,
       [student_id.trim().toUpperCase()]
     );
@@ -66,14 +68,14 @@ export async function checkCredentials(
                     Array.isArray(student.face_embedding) &&
                     (student.face_embedding as unknown[]).length > 0;
 
-    if (!hasFace) {
+    if (!hasFace && !student.fallback_password_enabled) {
       return next(new AppError(
         'No face registered for this student. Please contact your academy admin to complete registration.',
         403
       ));
     }
 
-    // Issue a 5-minute session token — only valid for the face-scan step
+    // Issue a 5-minute session token — only valid for the face-scan or password step
     const sessionToken = jwt.sign(
       {
         type:        'parent_session',
@@ -92,9 +94,11 @@ export async function checkCredentials(
     res.json({
       success: true,
       data: {
-        session_token: sessionToken,
-        student_name:  `${student.first_name} ${student.last_name}`,
-        academy_name:  academy.name,
+        session_token:       sessionToken,
+        student_name:        `${student.first_name} ${student.last_name}`,
+        academy_name:        academy.name,
+        has_face:            hasFace,
+        has_master_password: student.fallback_password_enabled,
       },
       message: 'Credentials verified. Please scan your face to continue.',
     });
@@ -350,6 +354,80 @@ export async function getParentReceipts(
         page: parseInt(page),
         limit: parseInt(limit),
       },
+    });
+  } catch (err) { next(err); }
+}
+
+// ── POST /api/academy/parent/verify-password ─────────────────────────────────
+// Fallback login when face scan is not possible.
+// Requires valid 5-min session token (same as /verify-face).
+// Admin must have set fallback_password_enabled = true for this student.
+
+export async function verifyPassword(
+  req: Request, res: Response, next: NextFunction
+): Promise<void> {
+  try {
+    const { studentId, academySlug, academyName, parentName, mobile } = req.parentSession!;
+    const { password } = req.body as { password?: string };
+
+    if (!password) return next(new AppError('password is required', 400));
+
+    const student = await academyQueryOne<{
+      id: string; first_name: string; last_name: string;
+      parent_name: string | null;
+      fallback_password_hash: string | null;
+      fallback_password_enabled: boolean;
+    }>(
+      academySlug,
+      `SELECT id, first_name, last_name, parent_name,
+              fallback_password_hash, fallback_password_enabled
+       FROM students WHERE id = $1 AND status = 'active'`,
+      [studentId]
+    );
+
+    if (!student) return next(new AppError('Student not found.', 404));
+
+    if (!student.fallback_password_enabled || !student.fallback_password_hash) {
+      return next(new AppError('Password login is not enabled for this student. Contact your institute.', 403));
+    }
+
+    const match = await bcrypt.compare(password, student.fallback_password_hash);
+
+    console.log(`[parent/verify-password] ${studentId} @ ${academySlug} match=${match}`);
+
+    if (!match) {
+      return next(new AppError('Incorrect password. Contact your institute.', 401));
+    }
+
+    const token = jwt.sign(
+      {
+        type:        'parent',
+        studentId:   student.id,
+        academySlug: academySlug,
+        academyName: academyName,
+        parentName:  student.parent_name ?? parentName,
+        mobile:      mobile,
+      },
+      jwtSecret(),
+      { expiresIn: '30d' } as import('jsonwebtoken').SignOptions
+    );
+
+    console.log(`[parent/verify-password] LOGIN SUCCESS (password): ${studentId} @ ${academySlug}`);
+
+    res.json({
+      success: true,
+      data: {
+        token,
+        student: {
+          id:          student.id,
+          first_name:  student.first_name,
+          last_name:   student.last_name,
+          parent_name: student.parent_name ?? '',
+        },
+        academy: { name: academyName, slug: academySlug },
+        login_method: 'password',
+      },
+      message: 'Password verified. Login successful.',
     });
   } catch (err) { next(err); }
 }

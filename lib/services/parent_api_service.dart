@@ -66,6 +66,22 @@ class ParentApiService {
     return _parse(res) as Map<String, dynamic>;
   }
 
+  /// Fallback login using admin-issued institute password.
+  /// [sessionToken] is the 5-min token from [checkCredentials].
+  /// Returns { token, student, academy, login_method } on success.
+  static Future<Map<String, dynamic>> verifyPassword({
+    required String sessionToken,
+    required String password,
+  }) async {
+    final res = await _http.post(
+          Uri.parse(ApiEndpoints.parentVerifyPassword),
+          headers: _sessionHeaders(sessionToken),
+          body: jsonEncode({'password': password}),
+        )
+        .timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
   static Future<void> saveFcmToken(String fcmToken) async {
     final res = await _http.post(
           Uri.parse(ApiEndpoints.parentFcmToken),

@@ -3,7 +3,7 @@ import { academyAuthMiddleware, requireRole } from '../middleware/academyAuth';
 import {
   registerStudent, listStudents, getStudent, getStats,
   updateStudent, updateStudentFace, deleteStudent, checkDuplicate,
-  bulkUploadStudents,
+  bulkUploadStudents, setMasterPassword, deleteMasterPassword,
 } from '../controllers/academy/studentController';
 
 const router = Router();
@@ -20,5 +20,8 @@ router.get  ('/:id',              getStudent);
 router.patch('/:id/face',         requireRole('admin', 'teacher'), updateStudentFace);
 router.patch('/:id',              requireRole('admin', 'teacher'), updateStudent);
 router.delete('/:id',             requireRole('admin', 'teacher'), deleteStudent);
+// ── Fallback password (admin-only) ────────────────────────────────────────────
+router.put   ('/:id/master-password', requireRole('admin'), setMasterPassword);
+router.delete('/:id/master-password', requireRole('admin'), deleteMasterPassword);
 
 export default router;
