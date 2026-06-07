@@ -159,6 +159,39 @@ class AcademyApiService {
     _parse(res);
   }
 
+  // ── Subjects ──────────────────────────────────────────────────────────────
+
+  static Future<List<Map<String, dynamic>>> getSubjectsByCourse(String courseId) async {
+    final res = await _http.get(Uri.parse(ApiEndpoints.academySubjects(courseId)),
+            headers: await _headers())
+        .timeout(_timeout);
+    final data = _parse(res);
+    return (data as List).cast<Map<String, dynamic>>();
+  }
+
+  static Future<Map<String, dynamic>> createSubject(
+      String courseId, Map<String, dynamic> body) async {
+    final res = await _http.post(Uri.parse(ApiEndpoints.academySubjects(courseId)),
+            headers: await _headers(), body: jsonEncode(body))
+        .timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
+  static Future<Map<String, dynamic>> updateSubject(
+      String subjectId, Map<String, dynamic> body) async {
+    final res = await _http.put(Uri.parse(ApiEndpoints.academySubjectById(subjectId)),
+            headers: await _headers(), body: jsonEncode(body))
+        .timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
+  static Future<void> deleteSubject(String subjectId) async {
+    final res = await _http.delete(Uri.parse(ApiEndpoints.academySubjectById(subjectId)),
+            headers: await _headers())
+        .timeout(_timeout);
+    _parse(res);
+  }
+
   // ── Students ──────────────────────────────────────────────────────────────
 
   static Future<Map<String, dynamic>> getStudents({
@@ -340,6 +373,46 @@ class AcademyApiService {
     final res = await _http.get(Uri.parse('${ApiEndpoints.academyFees}/student/$studentId'),
             headers: await _headers())
         .timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
+  // ── Receipts ──────────────────────────────────────────────────────────────
+
+  static Future<Map<String, dynamic>> listReceipts({
+    String? studentId,
+    String? from,
+    String? to,
+    String? q,
+    int page = 1,
+    int limit = 50,
+  }) async {
+    final params = <String, String>{
+      'page': page.toString(),
+      'limit': limit.toString(),
+      if (studentId != null) 'student_id': studentId,
+      if (from != null)      'from':       from,
+      if (to != null)        'to':         to,
+      if (q != null && q.isNotEmpty) 'q': q,
+    };
+    final uri = Uri.parse(ApiEndpoints.academyFeeReceipts)
+        .replace(queryParameters: params);
+    final res = await _http.get(uri, headers: await _headers()).timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
+  static Future<Map<String, dynamic>> getReceipt(String id) async {
+    final res = await _http.get(
+      Uri.parse(ApiEndpoints.academyFeeReceiptById(id)),
+      headers: await _headers(),
+    ).timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
+  static Future<Map<String, dynamic>> resendReceipt(String id) async {
+    final res = await _http.post(
+      Uri.parse(ApiEndpoints.academyFeeReceiptResend(id)),
+      headers: await _headers(),
+    ).timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
   }
 

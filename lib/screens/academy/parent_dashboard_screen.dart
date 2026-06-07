@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../providers/parent_auth_provider.dart';
 import '../../services/parent_api_service.dart';
 import '../../services/fcm_service.dart';
+import 'parent_receipts_screen.dart';
 
 class ParentDashboardScreen extends StatefulWidget {
   const ParentDashboardScreen({super.key});
@@ -125,6 +126,14 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
           ],
         ),
         actions: [
+          IconButton(
+              icon: const Icon(Icons.receipt_long_outlined),
+              tooltip: 'Fee Receipts',
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const ParentReceiptsScreen()),
+              )),
           IconButton(
               icon: const Icon(Icons.refresh_outlined),
               tooltip: 'Refresh',

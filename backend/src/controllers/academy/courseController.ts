@@ -120,6 +120,109 @@ export async function updateCourse(
   } catch (err) { next(err); }
 }
 
+// ── GET /api/academy/courses/:courseId/subjects ───────────────────────────────
+
+interface SubjectRow {
+  id: string;
+  course_id: string;
+  name: string;
+  default_fee: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function listSubjects(
+  req: Request, res: Response, next: NextFunction
+): Promise<void> {
+  try {
+    const { academySlug } = req.academyUser!;
+    const { courseId } = req.params;
+    const subjects = await academyQuery<SubjectRow>(
+      academySlug,
+      `SELECT * FROM subjects
+       WHERE course_id = $1 AND is_active = TRUE
+       ORDER BY name`,
+      [courseId]
+    );
+    res.json({ success: true, data: subjects });
+  } catch (err) { next(err); }
+}
+
+// ── POST /api/academy/courses/:courseId/subjects ──────────────────────────────
+
+export async function createSubject(
+  req: Request, res: Response, next: NextFunction
+): Promise<void> {
+  try {
+    const { academySlug } = req.academyUser!;
+    const { courseId } = req.params;
+    const { name, default_fee } = req.body as { name: string; default_fee?: number };
+    if (!name?.trim()) return next(new AppError('Subject name is required', 400));
+
+    const subject = await academyQueryOne<SubjectRow>(
+      academySlug,
+      `INSERT INTO subjects (course_id, name, default_fee)
+       VALUES ($1, $2, $3)
+       RETURNING *`,
+      [courseId, name.trim(), default_fee ?? 0]
+    );
+    res.status(201).json({ success: true, data: subject, message: 'Subject created' });
+  } catch (err) { next(err); }
+}
+
+// ── PUT /api/academy/subjects/:subjectId ──────────────────────────────────────
+
+export async function updateSubject(
+  req: Request, res: Response, next: NextFunction
+): Promise<void> {
+  try {
+    const { academySlug } = req.academyUser!;
+    const { subjectId } = req.params;
+    const { name, default_fee } = req.body as { name?: string; default_fee?: number };
+
+    const subject = await academyQueryOne<SubjectRow>(
+      academySlug,
+      `UPDATE subjects
+       SET name        = COALESCE($1, name),
+           default_fee = COALESCE($2, default_fee),
+           updated_at  = NOW()
+       WHERE id = $3 AND is_active = TRUE
+       RETURNING *`,
+      [name?.trim() ?? null, default_fee ?? null, subjectId]
+    );
+    if (!subject) return next(new AppError('Subject not found', 404));
+    res.json({ success: true, data: subject, message: 'Subject updated' });
+  } catch (err) { next(err); }
+}
+
+// ── DELETE /api/academy/subjects/:subjectId ───────────────────────────────────
+
+export async function deleteSubject(
+  req: Request, res: Response, next: NextFunction
+): Promise<void> {
+  try {
+    const { academySlug } = req.academyUser!;
+    const { subjectId } = req.params;
+
+    const active = await academyQueryOne<{ count: string }>(
+      academySlug,
+      `SELECT COUNT(*) FROM student_subjects WHERE subject_id = $1 AND status = 'active'`,
+      [subjectId]
+    );
+    if (active && parseInt(active.count) > 0) {
+      return next(new AppError('Cannot delete subject with active student enrollments', 409));
+    }
+
+    await academyQuery(
+      academySlug,
+      `UPDATE subjects SET is_active = FALSE, updated_at = NOW() WHERE id = $1`,
+      [subjectId]
+    );
+    res.json({ success: true, message: 'Subject deleted' });
+  } catch (err) { next(err); }
+}
+
 // ── DELETE /api/academy/courses/:id ──────────────────────────────────────────
 
 export async function deleteCourse(

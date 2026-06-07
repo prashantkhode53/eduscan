@@ -35,7 +35,7 @@ class _CourseMasterScreenState extends State<CourseMasterScreen> {
       if (!mounted) return;
       setState(() {
         _academicYears = results[0].cast<Map<String, dynamic>>();
-        _courses       = (results[1] as List).cast<Map<String, dynamic>>();
+        _courses       = results[1].cast<Map<String, dynamic>>();
         _loading       = false;
       });
     } catch (e) {
@@ -78,6 +78,20 @@ class _CourseMasterScreenState extends State<CourseMasterScreen> {
       ),
     );
     if (result == true) _loadCourses();
+  }
+
+  Future<void> _showSubjects(Map<String, dynamic> course) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => _SubjectMasterSheet(
+        courseId:   course['id'] as String,
+        courseName: course['name'] as String,
+      ),
+    );
   }
 
   Future<void> _delete(Map<String, dynamic> course) async {
@@ -235,6 +249,10 @@ class _CourseMasterScreenState extends State<CourseMasterScreen> {
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
                                     IconButton(
+                                        tooltip: 'Manage Subjects',
+                                        icon: const Icon(Icons.list_alt_outlined),
+                                        onPressed: () => _showSubjects(c)),
+                                    IconButton(
                                         icon: const Icon(Icons.edit_outlined),
                                         onPressed: () =>
                                             _showForm(course: c)),
@@ -260,6 +278,314 @@ class _CourseMasterScreenState extends State<CourseMasterScreen> {
               label: const Text('Add Course'),
             )
           : null,
+    );
+  }
+}
+
+// ── Subject master bottom sheet ───────────────────────────────────────────────
+
+class _SubjectMasterSheet extends StatefulWidget {
+  final String courseId;
+  final String courseName;
+
+  const _SubjectMasterSheet({
+    required this.courseId,
+    required this.courseName,
+  });
+
+  @override
+  State<_SubjectMasterSheet> createState() => _SubjectMasterSheetState();
+}
+
+class _SubjectMasterSheetState extends State<_SubjectMasterSheet> {
+  List<Map<String, dynamic>> _subjects = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    if (!mounted) return;
+    setState(() => _loading = true);
+    try {
+      final data = await AcademyApiService.getSubjectsByCourse(widget.courseId);
+      if (!mounted) return;
+      setState(() { _subjects = data; _loading = false; });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(e.toString().replaceFirst('Exception: ', '')),
+        backgroundColor: Colors.red,
+      ));
+    }
+  }
+
+  Future<void> _showForm({Map<String, dynamic>? subject}) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (_) => _SubjectFormDialog(
+        courseId: widget.courseId,
+        subject:  subject,
+      ),
+    );
+    if (result == true) _load();
+  }
+
+  Future<void> _delete(Map<String, dynamic> subject) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete Subject'),
+        content: Text('Delete "${subject['name']}"? Students enrolled in this subject will be affected.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: Colors.red),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await AcademyApiService.deleteSubject(subject['id'] as String);
+      _load();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(e.toString().replaceFirst('Exception: ', '')),
+          backgroundColor: Colors.red,
+        ));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.6,
+      minChildSize: 0.4,
+      maxChildSize: 0.92,
+      builder: (_, scrollCtrl) => Column(
+        children: [
+          // Handle + header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 12, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Subjects',
+                          style: theme.textTheme.titleLarge
+                              ?.copyWith(fontWeight: FontWeight.bold)),
+                      Text(widget.courseName,
+                          style: TextStyle(
+                              fontSize: 13,
+                              color: theme.colorScheme.onSurface
+                                  .withValues(alpha: 0.6))),
+                    ],
+                  ),
+                ),
+                FilledButton.icon(
+                  onPressed: () => _showForm(),
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('Add Subject'),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          // Subject list
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : _subjects.isEmpty
+                    ? Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.subject_outlined,
+                                size: 48,
+                                color: theme.colorScheme.onSurface
+                                    .withValues(alpha: 0.3)),
+                            const SizedBox(height: 12),
+                            const Text('No subjects yet'),
+                            const SizedBox(height: 8),
+                            FilledButton.icon(
+                              onPressed: () => _showForm(),
+                              icon: const Icon(Icons.add),
+                              label: const Text('Add First Subject'),
+                            ),
+                          ],
+                        ),
+                      )
+                    : ListView.builder(
+                        controller: scrollCtrl,
+                        padding: const EdgeInsets.all(16),
+                        itemCount: _subjects.length,
+                        itemBuilder: (_, i) {
+                          final s = _subjects[i];
+                          final fee = double.tryParse(
+                                  s['default_fee']?.toString() ?? '0') ??
+                              0.0;
+                          return Card(
+                            margin: const EdgeInsets.only(bottom: 8),
+                            child: ListTile(
+                              leading: CircleAvatar(
+                                backgroundColor: theme.colorScheme.secondary
+                                    .withValues(alpha: 0.1),
+                                child: Icon(Icons.science_outlined,
+                                    color: theme.colorScheme.secondary,
+                                    size: 20),
+                              ),
+                              title: Text(s['name'] as String,
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w600)),
+                              subtitle: Text(
+                                  '₹${fee.toStringAsFixed(0)} default fee'),
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  IconButton(
+                                    icon: const Icon(Icons.edit_outlined),
+                                    onPressed: () => _showForm(subject: s),
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(Icons.delete_outline,
+                                        color: Colors.red),
+                                    onPressed: () => _delete(s),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Subject create / edit dialog ──────────────────────────────────────────────
+
+class _SubjectFormDialog extends StatefulWidget {
+  final String courseId;
+  final Map<String, dynamic>? subject;
+
+  const _SubjectFormDialog({required this.courseId, this.subject});
+
+  @override
+  State<_SubjectFormDialog> createState() => _SubjectFormDialogState();
+}
+
+class _SubjectFormDialogState extends State<_SubjectFormDialog> {
+  final _formKey  = GlobalKey<FormState>();
+  final _nameCtrl = TextEditingController();
+  final _feeCtrl  = TextEditingController();
+  bool _saving    = false;
+
+  bool get _isEdit => widget.subject != null;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.subject != null) {
+      _nameCtrl.text = widget.subject!['name'] as String? ?? '';
+      _feeCtrl.text  = widget.subject!['default_fee']?.toString() ?? '0';
+    }
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _feeCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _saving = true);
+    try {
+      final body = {
+        'name':        _nameCtrl.text.trim(),
+        'default_fee': double.tryParse(_feeCtrl.text) ?? 0.0,
+      };
+      if (_isEdit) {
+        await AcademyApiService.updateSubject(
+            widget.subject!['id'] as String, body);
+      } else {
+        await AcademyApiService.createSubject(widget.courseId, body);
+      }
+      if (mounted) Navigator.pop(context, true);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(e.toString().replaceFirst('Exception: ', '')),
+          backgroundColor: Colors.red,
+        ));
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(_isEdit ? 'Edit Subject' : 'New Subject'),
+      content: Form(
+        key: _formKey,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextFormField(
+              controller: _nameCtrl,
+              decoration: const InputDecoration(
+                  labelText: 'Subject Name *',
+                  border: OutlineInputBorder()),
+              autofocus: true,
+              validator: (v) =>
+                  v == null || v.trim().isEmpty ? 'Required' : null,
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: _feeCtrl,
+              decoration: const InputDecoration(
+                  labelText: 'Default Fee (₹) *',
+                  prefixText: '₹ ',
+                  border: OutlineInputBorder()),
+              keyboardType: TextInputType.number,
+              validator: (v) =>
+                  v == null || v.isEmpty ? 'Required' : null,
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+            onPressed: _saving ? null : () => Navigator.pop(context, false),
+            child: const Text('Cancel')),
+        FilledButton(
+          onPressed: _saving ? null : _save,
+          child: _saving
+              ? const SizedBox(
+                  width: 16, height: 16,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Colors.white))
+              : Text(_isEdit ? 'Save' : 'Create'),
+        ),
+      ],
     );
   }
 }

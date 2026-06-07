@@ -787,6 +787,8 @@ class _StudentFeeDetailScreenState extends State<StudentFeeDetailScreen> {
         balance: bal,
         runningOutstanding: runningOutstanding,
         mode: _mode(r['remarks'] as String?),
+        receiptNumber: r['receipt_number'] as String?,
+        receiptId: r['receipt_id'] as String?,
       ));
       if (i != _records.length - 1) widgets.add(const SizedBox(height: 8));
     }
@@ -796,10 +798,12 @@ class _StudentFeeDetailScreenState extends State<StudentFeeDetailScreen> {
 
 // ── Installment card ────────────────────────────────────────────────────────────
 
-class _InstallmentCard extends StatelessWidget {
+class _InstallmentCard extends StatefulWidget {
   final int number;
   final String status, dueDate, paymentDate, mode;
   final double amountDue, amountPaid, balance, runningOutstanding;
+  final String? receiptNumber;
+  final String? receiptId;
   const _InstallmentCard({
     required this.number,
     required this.status,
@@ -810,12 +814,41 @@ class _InstallmentCard extends StatelessWidget {
     required this.amountPaid,
     required this.balance,
     required this.runningOutstanding,
+    this.receiptNumber,
+    this.receiptId,
   });
+
+  @override
+  State<_InstallmentCard> createState() => _InstallmentCardState();
+}
+
+class _InstallmentCardState extends State<_InstallmentCard> {
+  bool _generatingPdf = false;
+
+  Future<void> _downloadReceipt() async {
+    if (_generatingPdf || widget.receiptId == null) return;
+    setState(() => _generatingPdf = true);
+    try {
+      final detail = await AcademyApiService.getReceipt(widget.receiptId!);
+      if (!mounted) return;
+      final academyName =
+          context.read<AuthProvider>().academyUser?.academyName ?? 'Academy';
+      await FeePdfService.generateReceiptPdf(
+          context: context, academyName: academyName, receipt: detail);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(e.toString()), backgroundColor: Colors.red));
+      }
+    } finally {
+      if (mounted) setState(() => _generatingPdf = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final color = _statusColor(status);
+    final color = _statusColor(widget.status);
     return Card(
       margin: EdgeInsets.zero,
       child: Padding(
@@ -828,34 +861,64 @@ class _InstallmentCard extends StatelessWidget {
                 CircleAvatar(
                   radius: 14,
                   backgroundColor: color.withValues(alpha: 0.15),
-                  child: Text('$number',
+                  child: Text('${widget.number}',
                       style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.bold,
                           color: color)),
                 ),
                 const SizedBox(width: 10),
-                Text('Installment $number',
-                    style: const TextStyle(fontWeight: FontWeight.bold)),
-                const Spacer(),
-                _StatusPill(status: status),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Installment ${widget.number}',
+                          style: const TextStyle(fontWeight: FontWeight.bold)),
+                      if (widget.receiptNumber != null)
+                        Text(widget.receiptNumber!,
+                            style: TextStyle(
+                                fontSize: 11,
+                                color: theme.colorScheme.primary)),
+                    ],
+                  ),
+                ),
+                _StatusPill(status: widget.status),
               ],
             ),
             const Divider(height: 18),
-            _kv(theme, Icons.event_outlined, 'Due date', dueDate),
-            _kv(theme, Icons.payments_outlined, 'Amount due', _money(amountDue)),
+            _kv(theme, Icons.event_outlined, 'Due date', widget.dueDate),
+            _kv(theme, Icons.payments_outlined, 'Amount due', _money(widget.amountDue)),
             _kv(theme, Icons.check_circle_outline, 'Amount paid',
-                _money(amountPaid),
-                valueColor: amountPaid > 0 ? Colors.green : null),
-            if (amountPaid > 0) ...[
-              _kv(theme, Icons.calendar_today_outlined, 'Payment date', paymentDate),
-              _kv(theme, Icons.account_balance_wallet_outlined, 'Payment mode', mode),
+                _money(widget.amountPaid),
+                valueColor: widget.amountPaid > 0 ? Colors.green : null),
+            if (widget.amountPaid > 0) ...[
+              _kv(theme, Icons.calendar_today_outlined, 'Payment date', widget.paymentDate),
+              _kv(theme, Icons.account_balance_wallet_outlined, 'Payment mode', widget.mode),
             ],
-            _kv(theme, Icons.pending_actions_outlined, 'Balance', _money(balance),
-                valueColor: balance > 0 ? Colors.orange : Colors.green),
+            _kv(theme, Icons.pending_actions_outlined, 'Balance', _money(widget.balance),
+                valueColor: widget.balance > 0 ? Colors.orange : Colors.green),
             _kv(theme, Icons.trending_down, 'Outstanding after this',
-                _money(runningOutstanding),
-                valueColor: runningOutstanding > 0 ? Colors.red : Colors.green),
+                _money(widget.runningOutstanding),
+                valueColor: widget.runningOutstanding > 0 ? Colors.red : Colors.green),
+            if (widget.receiptId != null) ...[
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
+                onPressed: _generatingPdf ? null : _downloadReceipt,
+                icon: _generatingPdf
+                    ? const SizedBox(
+                        width: 14, height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.picture_as_pdf_outlined, size: 16),
+                label: Text(
+                  widget.receiptNumber != null
+                      ? 'Download Receipt ${widget.receiptNumber}'
+                      : 'Download Receipt',
+                  style: const TextStyle(fontSize: 12),
+                ),
+                style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 6)),
+              ),
+            ],
           ],
         ),
       ),

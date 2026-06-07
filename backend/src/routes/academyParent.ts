@@ -7,6 +7,8 @@ import {
   saveFcmToken,
   getParentProfile,
   getAttendanceHistory,
+  getParentReceipts,
+  getParentReceipt,
 } from '../controllers/academy/parentController';
 
 const router = Router();
@@ -19,8 +21,10 @@ router.post('/check-credentials', authLimiter, checkCredentials);
 router.post('/verify-face', parentSessionMiddleware, verifyFace);
 
 // ── Protected routes — require valid 30-day parent JWT ────────────────────────
-router.post('/fcm-token',  parentAuthMiddleware, saveFcmToken);
-router.get('/profile',     parentAuthMiddleware, getParentProfile);
-router.get('/attendance',  parentAuthMiddleware, getAttendanceHistory);
+router.post('/fcm-token',      parentAuthMiddleware, saveFcmToken);
+router.get('/profile',         parentAuthMiddleware, getParentProfile);
+router.get('/attendance',      parentAuthMiddleware, getAttendanceHistory);
+router.get('/receipts',        parentAuthMiddleware, getParentReceipts);
+router.get('/receipts/:id',    parentAuthMiddleware, getParentReceipt);
 
 export default router;

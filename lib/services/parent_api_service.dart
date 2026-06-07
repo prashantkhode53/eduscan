@@ -89,4 +89,31 @@ class ParentApiService {
         .timeout(_timeout);
     return (_parse(res) as List).cast<Map<String, dynamic>>();
   }
+
+  static Future<Map<String, dynamic>> getReceipts({
+    String? from,
+    String? to,
+    int page = 1,
+    int limit = 30,
+  }) async {
+    final params = <String, String>{
+      'page': page.toString(),
+      'limit': limit.toString(),
+      if (from != null) 'from': from,
+      if (to != null)   'to':   to,
+    };
+    final uri = Uri.parse(ApiEndpoints.parentReceipts)
+        .replace(queryParameters: params);
+    final res = await _http.get(uri, headers: await _authHeaders())
+        .timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
+  static Future<Map<String, dynamic>> getReceiptById(String id) async {
+    final res = await _http.get(
+      Uri.parse(ApiEndpoints.parentReceiptById(id)),
+      headers: await _authHeaders(),
+    ).timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
 }

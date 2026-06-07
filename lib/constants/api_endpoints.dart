@@ -10,8 +10,13 @@ class ApiEndpoints {
   static const String academyLogin     = '$baseUrl/api/academy/login';
   static const String academyProfile   = '$baseUrl/api/academy/profile';
   static const String academyCourses   = '$baseUrl/api/academy/courses';
+  static String academySubjects(String courseId) => '$baseUrl/api/academy/courses/$courseId/subjects';
+  static String academySubjectById(String subjectId) => '$baseUrl/api/academy/courses/subjects/$subjectId';
   static const String academyStudents  = '$baseUrl/api/academy/students';
   static const String academyFees           = '$baseUrl/api/academy/fees';
+  static const String academyFeeReceipts    = '$baseUrl/api/academy/fees/receipts';
+  static String academyFeeReceiptById(String id) => '$baseUrl/api/academy/fees/receipts/$id';
+  static String academyFeeReceiptResend(String id) => '$baseUrl/api/academy/fees/receipts/$id/resend';
   static const String academyAttendanceScan = '$baseUrl/api/academy/attendance/scan';
   static const String academyQrCodes        = '$baseUrl/api/academy/qr-codes';
   static const String academyAcademicYears  = '$baseUrl/api/academy/academic-years';
@@ -25,6 +30,8 @@ class ApiEndpoints {
   static const String parentFcmToken         = '$baseUrl/api/academy/parent/fcm-token';
   static const String parentProfile          = '$baseUrl/api/academy/parent/profile';
   static const String parentAttendance       = '$baseUrl/api/academy/parent/attendance';
+  static const String parentReceipts         = '$baseUrl/api/academy/parent/receipts';
+  static String parentReceiptById(String id) => '$baseUrl/api/academy/parent/receipts/$id';
 
   // Auth
   static const String login            = '$baseUrl/api/auth/login';

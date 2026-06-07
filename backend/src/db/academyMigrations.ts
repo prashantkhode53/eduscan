@@ -76,6 +76,89 @@ export async function reconcileAcademySchemas(): Promise<void> {
         ALTER TABLE IF EXISTS courses
           ADD COLUMN IF NOT EXISTS academic_year_id UUID REFERENCES academic_years(id) ON DELETE SET NULL
       `);
+      // subjects — one row per subject within a course (Physics, Chemistry, …)
+      await academyExec(slug, `
+        CREATE TABLE IF NOT EXISTS subjects (
+          id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          course_id   UUID REFERENCES courses(id) ON DELETE CASCADE,
+          name        VARCHAR(100) NOT NULL,
+          default_fee DECIMAL(10,2) NOT NULL DEFAULT 0,
+          is_active   BOOLEAN DEFAULT TRUE,
+          created_at  TIMESTAMPTZ DEFAULT NOW(),
+          updated_at  TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+      // student_subjects — primary enrollment table; one row per student×subject
+      await academyExec(slug, `
+        CREATE TABLE IF NOT EXISTS student_subjects (
+          id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          student_id  VARCHAR(20) REFERENCES students(id) ON DELETE CASCADE,
+          subject_id  UUID REFERENCES subjects(id) ON DELETE CASCADE,
+          fee_amount  DECIMAL(10,2) NOT NULL,
+          start_date  DATE NOT NULL DEFAULT CURRENT_DATE,
+          end_date    DATE,
+          status      VARCHAR(10) DEFAULT 'active'
+                        CHECK (status IN ('active','completed','dropped')),
+          created_at  TIMESTAMPTZ DEFAULT NOW(),
+          UNIQUE(student_id, subject_id)
+        )
+      `);
+      // fee_records: add subject_id for subject-level fee tracking
+      await academyExec(slug, `
+        ALTER TABLE IF EXISTS fee_records
+          ADD COLUMN IF NOT EXISTS subject_id UUID REFERENCES subjects(id) ON DELETE SET NULL
+      `);
+      // students: add academic_year_id so edit restore works without re-selection
+      await academyExec(slug, `
+        ALTER TABLE IF EXISTS students
+          ADD COLUMN IF NOT EXISTS academic_year_id UUID REFERENCES academic_years(id) ON DELETE SET NULL
+      `);
+      // Migration: seed one subject per course using the old string `subject` field as name
+      await academyExec(slug, `
+        INSERT INTO subjects (course_id, name, default_fee, is_active, created_at, updated_at)
+        SELECT c.id,
+               COALESCE(NULLIF(TRIM(c.subject), ''), c.name),
+               c.default_fee,
+               c.is_active,
+               c.created_at,
+               c.updated_at
+        FROM courses c
+        WHERE NOT EXISTS (SELECT 1 FROM subjects s WHERE s.course_id = c.id)
+      `);
+      // Migration: seed student_subjects from existing student_courses enrollments
+      await academyExec(slug, `
+        INSERT INTO student_subjects (student_id, subject_id, fee_amount, start_date, status, created_at)
+        SELECT sc.student_id, sub.id, sc.fee_amount, sc.start_date, sc.status, sc.created_at
+        FROM student_courses sc
+        JOIN subjects sub ON sub.course_id = sc.course_id AND sub.is_active = TRUE
+        ON CONFLICT (student_id, subject_id) DO NOTHING
+      `);
+      // Indexes for new tables
+      await academyExec(slug, `
+        CREATE INDEX IF NOT EXISTS idx_subj_course ON subjects(course_id);
+        CREATE INDEX IF NOT EXISTS idx_ss_student  ON student_subjects(student_id);
+        CREATE INDEX IF NOT EXISTS idx_ss_subject  ON student_subjects(subject_id);
+        CREATE INDEX IF NOT EXISTS idx_fr_subject  ON fee_records(subject_id)
+      `);
+      // Receipt sequence + table for existing academies
+      await academyExec(slug, `CREATE SEQUENCE IF NOT EXISTS fee_receipt_seq START 1 INCREMENT 1`);
+      await academyExec(slug, `
+        CREATE TABLE IF NOT EXISTS fee_receipts (
+          id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          receipt_number  VARCHAR(20) NOT NULL UNIQUE,
+          fee_record_id   UUID REFERENCES fee_records(id) ON DELETE SET NULL,
+          student_id      VARCHAR(20) REFERENCES students(id) ON DELETE CASCADE,
+          amount_paid     DECIMAL(10,2) NOT NULL,
+          payment_mode    VARCHAR(20),
+          generated_by    UUID REFERENCES users(id) ON DELETE SET NULL,
+          generated_at    TIMESTAMPTZ DEFAULT NOW(),
+          fcm_sent        BOOLEAN DEFAULT FALSE
+        )
+      `);
+      await academyExec(slug, `
+        CREATE INDEX IF NOT EXISTS idx_receipts_student ON fee_receipts(student_id);
+        CREATE INDEX IF NOT EXISTS idx_receipts_gendate ON fee_receipts(generated_at)
+      `);
       ok++;
     } catch (err) {
       console.error(`[Reconcile] schema "${slug}" failed:`, err);
@@ -134,25 +217,26 @@ export async function runAcademyMigrations(
     // ── Students ──────────────────────────────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS students (
-        id              VARCHAR(20) PRIMARY KEY,
-        user_id         UUID REFERENCES users(id) ON DELETE SET NULL,
-        first_name      VARCHAR(50) NOT NULL,
-        middle_name     VARCHAR(50),
-        last_name       VARCHAR(50) NOT NULL,
-        dob             DATE,
-        gender          VARCHAR(10),
-        blood_group     VARCHAR(5),
-        mobile          VARCHAR(15) NOT NULL,
-        email           VARCHAR(100),
-        parent_name     VARCHAR(100),
-        parent_mobile   VARCHAR(15),
-        address         TEXT,
-        face_embedding    JSONB,
-        face_quality      DECIMAL(4,2),
-        parent_fcm_token  TEXT,
-        status            VARCHAR(10) DEFAULT 'active',
-        created_at        TIMESTAMPTZ DEFAULT NOW(),
-        updated_at        TIMESTAMPTZ DEFAULT NOW()
+        id               VARCHAR(20) PRIMARY KEY,
+        user_id          UUID REFERENCES users(id) ON DELETE SET NULL,
+        first_name       VARCHAR(50) NOT NULL,
+        middle_name      VARCHAR(50),
+        last_name        VARCHAR(50) NOT NULL,
+        dob              DATE,
+        gender           VARCHAR(10),
+        blood_group      VARCHAR(5),
+        mobile           VARCHAR(15) NOT NULL,
+        email            VARCHAR(100),
+        parent_name      VARCHAR(100),
+        parent_mobile    VARCHAR(15),
+        address          TEXT,
+        face_embedding   JSONB,
+        face_quality     DECIMAL(4,2),
+        parent_fcm_token TEXT,
+        academic_year_id UUID,
+        status           VARCHAR(10) DEFAULT 'active',
+        created_at       TIMESTAMPTZ DEFAULT NOW(),
+        updated_at       TIMESTAMPTZ DEFAULT NOW()
       )
     `);
 
@@ -177,6 +261,15 @@ export async function runAcademyMigrations(
       )
     `);
 
+    // Now that academic_years exists, wire the FK on students (students was
+    // created first because it has no references to academic_years at table
+    // creation time — the FK must be added afterward).
+    await client.query(`
+      ALTER TABLE students
+        ADD CONSTRAINT fk_students_academic_year
+        FOREIGN KEY (academic_year_id) REFERENCES academic_years(id) ON DELETE SET NULL
+    `);
+
     // ── Courses ───────────────────────────────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS courses (
@@ -192,6 +285,19 @@ export async function runAcademyMigrations(
         is_active        BOOLEAN DEFAULT TRUE,
         created_at       TIMESTAMPTZ DEFAULT NOW(),
         updated_at       TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    // ── Subjects ──────────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS subjects (
+        id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        course_id   UUID REFERENCES courses(id) ON DELETE CASCADE,
+        name        VARCHAR(100) NOT NULL,
+        default_fee DECIMAL(10,2) NOT NULL DEFAULT 0,
+        is_active   BOOLEAN DEFAULT TRUE,
+        created_at  TIMESTAMPTZ DEFAULT NOW(),
+        updated_at  TIMESTAMPTZ DEFAULT NOW()
       )
     `);
 
@@ -211,12 +317,29 @@ export async function runAcademyMigrations(
       )
     `);
 
+    // ── Student-Subject enrollment ────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS student_subjects (
+        id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        student_id  VARCHAR(20) REFERENCES students(id) ON DELETE CASCADE,
+        subject_id  UUID REFERENCES subjects(id) ON DELETE CASCADE,
+        fee_amount  DECIMAL(10,2) NOT NULL,
+        start_date  DATE NOT NULL DEFAULT CURRENT_DATE,
+        end_date    DATE,
+        status      VARCHAR(10) DEFAULT 'active'
+                      CHECK (status IN ('active','completed','dropped')),
+        created_at  TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(student_id, subject_id)
+      )
+    `);
+
     // ── Fee records ───────────────────────────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS fee_records (
         id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         student_id    VARCHAR(20) REFERENCES students(id) ON DELETE CASCADE,
         course_id     UUID REFERENCES courses(id) ON DELETE SET NULL,
+        subject_id    UUID REFERENCES subjects(id) ON DELETE SET NULL,
         amount_due    DECIMAL(10,2) NOT NULL,
         amount_paid   DECIMAL(10,2) DEFAULT 0,
         due_date      DATE NOT NULL,
@@ -227,6 +350,22 @@ export async function runAcademyMigrations(
         collected_by  UUID REFERENCES users(id) ON DELETE SET NULL,
         created_at    TIMESTAMPTZ DEFAULT NOW(),
         updated_at    TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    // ── Receipt sequence + table ──────────────────────────────────────────
+    await client.query(`CREATE SEQUENCE IF NOT EXISTS fee_receipt_seq START 1 INCREMENT 1`);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS fee_receipts (
+        id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        receipt_number  VARCHAR(20) NOT NULL UNIQUE,
+        fee_record_id   UUID REFERENCES fee_records(id) ON DELETE SET NULL,
+        student_id      VARCHAR(20) REFERENCES students(id) ON DELETE CASCADE,
+        amount_paid     DECIMAL(10,2) NOT NULL,
+        payment_mode    VARCHAR(20),
+        generated_by    UUID REFERENCES users(id) ON DELETE SET NULL,
+        generated_at    TIMESTAMPTZ DEFAULT NOW(),
+        fcm_sent        BOOLEAN DEFAULT FALSE
       )
     `);
 
@@ -323,6 +462,12 @@ export async function runAcademyMigrations(
     await client.query(`CREATE INDEX IF NOT EXISTS idx_fee_due      ON fee_records(due_date)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_notif_user   ON notifications(user_id, is_read)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_msg_receiver ON messages(receiver_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_subj_course  ON subjects(course_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_ss_student   ON student_subjects(student_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_ss_subject   ON student_subjects(subject_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_fr_subject      ON fee_records(subject_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_receipts_student ON fee_receipts(student_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_receipts_gendate ON fee_receipts(generated_at)`);
 
     await client.query('COMMIT');
     console.log(`[Migration] Schema "${slug}" created successfully`);

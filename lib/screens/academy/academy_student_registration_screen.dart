@@ -40,7 +40,13 @@ class _AcademyStudentRegistrationScreenState
 
   // â”€â”€ Step 3: Courses â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   List<Map<String, dynamic>> _availableCourses = [];
-  final Map<String, double> _selectedFees = {};
+  // subjectId → custom fee (primary enrollment state)
+  final Map<String, double> _selectedSubjectFees = {};
+  // courseId → subjects list (lazy-loaded on first expand)
+  final Map<String, List<Map<String, dynamic>>> _subjectsByCourse = {};
+  final Set<String> _expandedCourses = {};
+  final Set<String> _subjectsLoadingFor = {};
+  final Map<String, String> _subjectsError = {};
   bool _loadingCourses = false;
   String? _courseError;
 
@@ -88,8 +94,6 @@ class _AcademyStudentRegistrationScreenState
     if (!mounted) return;
     setState(() { _loadingCourses = true; _courseError = null; });
     try {
-      // Use the globally selected academic year from the Dashboard header.
-      // Falls back to all active courses if no year is selected yet.
       final yearId = context.read<AcademicYearProvider>().selectedId;
       final data = await AcademyApiService.getCourses(academicYearId: yearId);
       if (!mounted) return;
@@ -106,12 +110,48 @@ class _AcademyStudentRegistrationScreenState
     }
   }
 
+  Future<void> _loadSubjects(String courseId) async {
+    if (_subjectsByCourse.containsKey(courseId) &&
+        !_subjectsError.containsKey(courseId)) {
+      // Already loaded successfully — just toggle expand
+      setState(() {
+        if (_expandedCourses.contains(courseId)) {
+          _expandedCourses.remove(courseId);
+        } else {
+          _expandedCourses.add(courseId);
+        }
+      });
+      return;
+    }
+    if (_subjectsLoadingFor.contains(courseId)) return;
+    setState(() {
+      _expandedCourses.add(courseId);
+      _subjectsLoadingFor.add(courseId);
+      _subjectsError.remove(courseId);
+    });
+    try {
+      final data = await AcademyApiService.getSubjectsByCourse(courseId);
+      if (!mounted) return;
+      setState(() {
+        _subjectsByCourse[courseId] = data;
+        _subjectsLoadingFor.remove(courseId);
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _subjectsError[courseId] = e.toString().replaceFirst('Exception: ', '');
+        _subjectsLoadingFor.remove(courseId);
+      });
+    }
+  }
+
   @override
   void dispose() {
     _pageCtrl.dispose();
     _firstNameCtrl.dispose(); _lastNameCtrl.dispose();
     _dobCtrl.dispose(); _mobileCtrl.dispose(); _emailCtrl.dispose();
     _parentNameCtrl.dispose(); _parentMobCtrl.dispose(); _addressCtrl.dispose();
+    _stallCheckTimer?.cancel();
     _progressTicker?.cancel();
     _camCtrl?.dispose();
     super.dispose();
@@ -159,9 +199,9 @@ class _AcademyStudentRegistrationScreenState
       if (s2Valid == false) return;
     }
     if (_step == 2) {
-      if (_selectedFees.isEmpty) {
+      if (_selectedSubjectFees.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Select at least one course')),
+          const SnackBar(content: Text('Select at least one subject')),
         );
         return;
       }
@@ -191,9 +231,11 @@ class _AcademyStudentRegistrationScreenState
         'parent_name':   _parentNameCtrl.text.trim().isNotEmpty ? _parentNameCtrl.text.trim() : null,
         'parent_mobile': _parentMobCtrl.text.trim().isNotEmpty ? _parentMobCtrl.text.trim() : null,
         'address':       _addressCtrl.text.trim().isNotEmpty ? _addressCtrl.text.trim() : null,
-        'courses': _selectedFees.entries
-            .map((e) => {'course_id': e.key, 'fee_amount': e.value})
+        'subjects': _selectedSubjectFees.entries
+            .map((e) => {'subject_id': e.key, 'fee_amount': e.value})
             .toList(),
+        'academic_year_id':
+            context.read<AcademicYearProvider>().selectedId,
       };
 
   /// Phase 1: persist the student's details before the face scan so they are
@@ -665,21 +707,26 @@ class _AcademyStudentRegistrationScreenState
             onNext: _goNext,
           ),
           AcademyCourseSelector(
-            loading: _loadingCourses,
-            error:   _courseError,
-            courses: _availableCourses,
-            selectedFees: _selectedFees,
-            onToggle: (courseId, defaultFee, selected) {
+            loading:            _loadingCourses,
+            error:              _courseError,
+            courses:            _availableCourses,
+            subjectsByCourse:   _subjectsByCourse,
+            selectedSubjectFees: _selectedSubjectFees,
+            expandedCourses:    _expandedCourses,
+            subjectsLoadingFor: _subjectsLoadingFor,
+            subjectsError:      _subjectsError,
+            onCourseExpand:     _loadSubjects,
+            onSubjectToggle: (subjectId, defaultFee, selected) {
               setState(() {
                 if (selected) {
-                  _selectedFees[courseId] = defaultFee;
+                  _selectedSubjectFees[subjectId] = defaultFee;
                 } else {
-                  _selectedFees.remove(courseId);
+                  _selectedSubjectFees.remove(subjectId);
                 }
               });
             },
-            onFeeChanged: (courseId, fee) =>
-                setState(() => _selectedFees[courseId] = fee),
+            onSubjectFeeChanged: (subjectId, fee) =>
+                setState(() => _selectedSubjectFees[subjectId] = fee),
             onNext:  _goNext,
             onRetry: _loadCourses,
           ),

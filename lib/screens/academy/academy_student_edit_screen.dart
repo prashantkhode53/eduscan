@@ -7,6 +7,7 @@ import '../../services/academy_api_service.dart';
 import '../../services/face_service.dart';
 import '../../widgets/face_overlay_painter.dart';
 import '../../widgets/academy_course_selector.dart';
+import '../../models/subject.dart';
 
 /// 3-step wizard: (0) Personal Info  (1) Courses  (2) Face update.
 /// Returns true via Navigator.pop when the student is successfully updated.
@@ -46,11 +47,19 @@ class _AcademyStudentEditScreenState
   final _addressCtrl    = TextEditingController();
   String? _gender;
 
-  // ── Step 1: Courses ────────────────────────────────────────────────────────
+  // ── Step 1: Courses / Subjects ──────────────────────────────────────────────
   List<Map<String, dynamic>> _availableCourses = [];
-  final Map<String, double> _selectedFees = {};
+  // subjectId → custom fee (primary enrollment state)
+  final Map<String, double> _selectedSubjectFees = {};
+  // courseId → subjects list (lazy-loaded on first expand; pre-loaded for enrolled)
+  final Map<String, List<Map<String, dynamic>>> _subjectsByCourse = {};
+  final Set<String> _expandedCourses = {};
+  final Set<String> _subjectsLoadingFor = {};
+  final Map<String, String> _subjectsError = {};
   bool _loadingCourses = false;
   String? _courseError;
+  // The academic year the student was enrolled under (drives course filter)
+  String? _studentAcademicYearId;
 
   // ── Step 2: Face ───────────────────────────────────────────────────────────
   bool _hasFaceData   = false;
@@ -89,38 +98,65 @@ class _AcademyStudentEditScreenState
     if (!mounted) return;
     setState(() { _initialLoading = true; _loadError = null; });
     try {
-      final results = await Future.wait([
-        AcademyApiService.getStudentById(widget.studentId),
-        AcademyApiService.getCourses(),
-      ]);
+      final studentData = await AcademyApiService.getStudentById(widget.studentId);
 
-      final studentData = results[0] as Map<String, dynamic>;
-      final courses     = (results[1] as List).cast<Map<String, dynamic>>();
+      // Use the student's own academic_year_id to filter courses correctly.
+      final yearId = studentData['academic_year_id'] as String?;
+
+      // Load courses filtered to the student's academic year (parallel with subject loads).
+      final courses = (await AcademyApiService.getCourses(academicYearId: yearId))
+          .cast<Map<String, dynamic>>();
 
       // Pre-populate personal info
-      _firstNameCtrl.text  = studentData['first_name']   as String? ?? '';
-      _lastNameCtrl.text   = studentData['last_name']    as String? ?? '';
-      _mobileCtrl.text     = studentData['mobile']       as String? ?? '';
-      _emailCtrl.text      = studentData['email']        as String? ?? '';
-      _parentNameCtrl.text = studentData['parent_name']  as String? ?? '';
+      _firstNameCtrl.text  = studentData['first_name']    as String? ?? '';
+      _lastNameCtrl.text   = studentData['last_name']     as String? ?? '';
+      _mobileCtrl.text     = studentData['mobile']        as String? ?? '';
+      _emailCtrl.text      = studentData['email']         as String? ?? '';
+      _parentNameCtrl.text = studentData['parent_name']   as String? ?? '';
       _parentMobCtrl.text  = studentData['parent_mobile'] as String? ?? '';
-      _addressCtrl.text    = studentData['address']      as String? ?? '';
-      // DOB: strip ISO timestamp → YYYY-MM-DD
+      _addressCtrl.text    = studentData['address']       as String? ?? '';
       final rawDob = studentData['dob']?.toString() ?? '';
       _dobCtrl.text = rawDob.contains('T') ? rawDob.split('T')[0] : rawDob;
       _gender = studentData['gender'] as String?;
 
-      // Pre-populate courses from active enrolments
-      final enrollments = (studentData['courses'] as List? ?? [])
+      // Restore subject-level enrollments from enrolled_subjects (new API field).
+      final rawSubjects = studentData['enrolled_subjects'] as List?;
+      final enrolled = (rawSubjects ?? [])
           .cast<Map<String, dynamic>>()
-          .where((c) => c['status'] == 'active')
+          .map(EnrolledSubject.fromJson)
+          .where((s) => s.status == 'active')
           .toList();
 
-      final fees = <String, double>{};
-      for (final e in enrollments) {
-        final id  = e['course_id'] as String?;
-        final fee = double.tryParse(e['fee_amount']?.toString() ?? '');
-        if (id != null && fee != null) fees[id] = fee;
+      final subjectFees = <String, double>{};
+      final enrolledByCourse = <String, List<Map<String, dynamic>>>{};
+      for (final s in enrolled) {
+        subjectFees[s.subjectId] = s.feeAmount;
+        enrolledByCourse.putIfAbsent(s.courseId, () => []).add({
+          'id':          s.subjectId,
+          'course_id':   s.courseId,
+          'name':        s.subjectName,
+          'default_fee': s.feeAmount,
+          'is_active':   true,
+        });
+      }
+
+      // If no enrolled_subjects (legacy student), fall back to course-level data.
+      if (enrolled.isEmpty) {
+        final legacyEnrollments = (studentData['courses'] as List? ?? [])
+            .cast<Map<String, dynamic>>()
+            .where((c) => c['status'] == 'active')
+            .toList();
+        for (final e in legacyEnrollments) {
+          // Legacy: pre-load subjects for each enrolled course so the selector
+          // can show them. We do this eagerly only for already-enrolled courses.
+          final cid = e['course_id'] as String?;
+          if (cid == null) continue;
+          try {
+            final subs = await AcademyApiService.getSubjectsByCourse(cid);
+            if (!mounted) return;
+            enrolledByCourse[cid] = subs;
+          } catch (_) {}
+        }
       }
 
       final embedding = studentData['face_embedding'];
@@ -128,10 +164,18 @@ class _AcademyStudentEditScreenState
 
       if (!mounted) return;
       setState(() {
+        _studentAcademicYearId = yearId;
         _availableCourses = courses;
-        _selectedFees
+        _selectedSubjectFees
           ..clear()
-          ..addAll(fees);
+          ..addAll(subjectFees);
+        _subjectsByCourse
+          ..clear()
+          ..addAll(enrolledByCourse);
+        // Pre-expand courses that have enrolled subjects so admin sees them immediately.
+        _expandedCourses
+          ..clear()
+          ..addAll(enrolledByCourse.keys);
         _hasFaceData    = hasFace;
         _initialLoading = false;
       });
@@ -148,7 +192,7 @@ class _AcademyStudentEditScreenState
     if (!mounted) return;
     setState(() { _loadingCourses = true; _courseError = null; });
     try {
-      final data = await AcademyApiService.getCourses();
+      final data = await AcademyApiService.getCourses(academicYearId: _studentAcademicYearId);
       if (!mounted) return;
       setState(() {
         _availableCourses = data.cast<Map<String, dynamic>>();
@@ -159,6 +203,40 @@ class _AcademyStudentEditScreenState
       setState(() {
         _courseError    = e.toString().replaceFirst('Exception: ', '');
         _loadingCourses = false;
+      });
+    }
+  }
+
+  Future<void> _loadSubjects(String courseId) async {
+    if (_subjectsByCourse.containsKey(courseId) &&
+        !_subjectsError.containsKey(courseId)) {
+      setState(() {
+        if (_expandedCourses.contains(courseId)) {
+          _expandedCourses.remove(courseId);
+        } else {
+          _expandedCourses.add(courseId);
+        }
+      });
+      return;
+    }
+    if (_subjectsLoadingFor.contains(courseId)) return;
+    setState(() {
+      _expandedCourses.add(courseId);
+      _subjectsLoadingFor.add(courseId);
+      _subjectsError.remove(courseId);
+    });
+    try {
+      final data = await AcademyApiService.getSubjectsByCourse(courseId);
+      if (!mounted) return;
+      setState(() {
+        _subjectsByCourse[courseId] = data;
+        _subjectsLoadingFor.remove(courseId);
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _subjectsError[courseId] = e.toString().replaceFirst('Exception: ', '');
+        _subjectsLoadingFor.remove(courseId);
       });
     }
   }
@@ -183,9 +261,9 @@ class _AcademyStudentEditScreenState
     if (_step == 0) {
       if (!(_s0Key.currentState?.validate() ?? false)) return;
     }
-    if (_step == 1 && _selectedFees.isEmpty) {
+    if (_step == 1 && _selectedSubjectFees.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Select at least one course')),
+        const SnackBar(content: Text('Select at least one subject')),
       );
       return;
     }
@@ -456,21 +534,20 @@ class _AcademyStudentEditScreenState
   Future<void> _submit({bool withNewFace = false}) async {
     setState(() => _submitting = true);
     try {
-      final courses = _selectedFees.entries
-          .map((e) => {'course_id': e.key, 'fee_amount': e.value})
-          .toList();
-
       final body = <String, dynamic>{
-        'first_name':    _firstNameCtrl.text.trim(),
-        'last_name':     _lastNameCtrl.text.trim(),
-        'mobile':        _mobileCtrl.text.trim(),
-        'email':         _emailCtrl.text.trim().isNotEmpty ? _emailCtrl.text.trim() : null,
-        'dob':           _dobCtrl.text.isNotEmpty ? _dobCtrl.text : null,
-        'gender':        _gender,
-        'parent_name':   _parentNameCtrl.text.trim().isNotEmpty ? _parentNameCtrl.text.trim() : null,
-        'parent_mobile': _parentMobCtrl.text.trim().isNotEmpty  ? _parentMobCtrl.text.trim()  : null,
-        'address':       _addressCtrl.text.trim().isNotEmpty    ? _addressCtrl.text.trim()    : null,
-        'courses':       courses,
+        'first_name':      _firstNameCtrl.text.trim(),
+        'last_name':       _lastNameCtrl.text.trim(),
+        'mobile':          _mobileCtrl.text.trim(),
+        'email':           _emailCtrl.text.trim().isNotEmpty ? _emailCtrl.text.trim() : null,
+        'dob':             _dobCtrl.text.isNotEmpty ? _dobCtrl.text : null,
+        'gender':          _gender,
+        'parent_name':     _parentNameCtrl.text.trim().isNotEmpty ? _parentNameCtrl.text.trim() : null,
+        'parent_mobile':   _parentMobCtrl.text.trim().isNotEmpty  ? _parentMobCtrl.text.trim()  : null,
+        'address':         _addressCtrl.text.trim().isNotEmpty    ? _addressCtrl.text.trim()    : null,
+        'academic_year_id': _studentAcademicYearId,
+        'subjects': _selectedSubjectFees.entries
+            .map((e) => {'subject_id': e.key, 'fee_amount': e.value})
+            .toList(),
       };
       if (withNewFace && _faceImages.isNotEmpty) {
         body['face_images'] = _faceImages;
@@ -562,23 +639,28 @@ class _AcademyStudentEditScreenState
 
           // ── Step 1: Courses ────────────────────────────────────────────────
           AcademyCourseSelector(
-            loading: _loadingCourses,
-            error: _courseError,
-            courses: _availableCourses,
-            selectedFees: _selectedFees,
-            onToggle: (courseId, defaultFee, selected) {
+            loading:             _loadingCourses,
+            error:               _courseError,
+            courses:             _availableCourses,
+            subjectsByCourse:    _subjectsByCourse,
+            selectedSubjectFees: _selectedSubjectFees,
+            expandedCourses:     _expandedCourses,
+            subjectsLoadingFor:  _subjectsLoadingFor,
+            subjectsError:       _subjectsError,
+            onCourseExpand:      _loadSubjects,
+            onSubjectToggle: (subjectId, defaultFee, selected) {
               setState(() {
                 if (selected) {
-                  _selectedFees[courseId] = defaultFee;
+                  _selectedSubjectFees[subjectId] = defaultFee;
                 } else {
-                  _selectedFees.remove(courseId);
+                  _selectedSubjectFees.remove(subjectId);
                 }
               });
             },
-            onFeeChanged: (courseId, fee) =>
-                setState(() => _selectedFees[courseId] = fee),
-            onNext: _goNext,
-            onRetry: _reloadCourses,
+            onSubjectFeeChanged: (subjectId, fee) =>
+                setState(() => _selectedSubjectFees[subjectId] = fee),
+            onNext:    _goNext,
+            onRetry:   _reloadCourses,
             nextLabel: 'Continue to Face Update',
           ),
 

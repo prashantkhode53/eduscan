@@ -293,3 +293,96 @@ export async function getAttendanceHistory(
     res.json({ success: true, data: records });
   } catch (err) { next(err); }
 }
+
+// ── GET /api/academy/parent/receipts ─────────────────────────────────────────
+
+export async function getParentReceipts(
+  req: Request, res: Response, next: NextFunction
+): Promise<void> {
+  try {
+    const { studentId, academySlug } = req.parentUser!;
+    const { from, to, page = '1', limit = '30' } = req.query as Record<string, string>;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    const receipts = await academyQuery<Record<string, unknown>>(
+      academySlug,
+      `SELECT
+         r.id, r.receipt_number, r.amount_paid, r.payment_mode, r.generated_at,
+         c.name  AS course_name,
+         sub.name AS subject_name,
+         fr.amount_due, fr.amount_paid AS fr_amount_paid,
+         GREATEST(0, fr.amount_due - fr.amount_paid) AS balance,
+         fr.status AS fee_status, fr.due_date
+       FROM fee_receipts r
+       LEFT JOIN fee_records fr ON fr.id = r.fee_record_id
+       LEFT JOIN courses c      ON c.id  = fr.course_id
+       LEFT JOIN subjects sub   ON sub.id = fr.subject_id
+       WHERE r.student_id = $1
+         AND ($2::date IS NULL OR r.generated_at::date >= $2::date)
+         AND ($3::date IS NULL OR r.generated_at::date <= $3::date)
+       ORDER BY r.generated_at DESC
+       LIMIT $4 OFFSET $5`,
+      [studentId, from || null, to || null, parseInt(limit), offset]
+    );
+
+    // Overall fee summary for this student
+    const summary = await academyQueryOne<{
+      total_due: string; total_paid: string; total_balance: string;
+    }>(
+      academySlug,
+      `SELECT
+         COALESCE(SUM(amount_due),  0) AS total_due,
+         COALESCE(SUM(amount_paid), 0) AS total_paid,
+         COALESCE(SUM(GREATEST(0, amount_due - amount_paid)), 0) AS total_balance
+       FROM fee_records WHERE student_id = $1`,
+      [studentId]
+    );
+
+    res.json({
+      success: true,
+      data: {
+        receipts,
+        summary: {
+          total_due:     parseFloat(summary?.total_due     ?? '0'),
+          total_paid:    parseFloat(summary?.total_paid    ?? '0'),
+          total_balance: parseFloat(summary?.total_balance ?? '0'),
+        },
+        page: parseInt(page),
+        limit: parseInt(limit),
+      },
+    });
+  } catch (err) { next(err); }
+}
+
+// ── GET /api/academy/parent/receipts/:id ─────────────────────────────────────
+
+export async function getParentReceipt(
+  req: Request, res: Response, next: NextFunction
+): Promise<void> {
+  try {
+    const { studentId, academySlug } = req.parentUser!;
+    const { id } = req.params;
+
+    const receipt = await academyQueryOne<Record<string, unknown>>(
+      academySlug,
+      `SELECT
+         r.id, r.receipt_number, r.amount_paid, r.payment_mode, r.generated_at,
+         s.id AS student_id, s.first_name, s.last_name, s.mobile, s.parent_name,
+         c.name  AS course_name,
+         sub.name AS subject_name,
+         fr.amount_due, fr.amount_paid AS fr_amount_paid,
+         GREATEST(0, fr.amount_due - fr.amount_paid) AS balance,
+         fr.status AS fee_status, fr.due_date, fr.paid_date
+       FROM fee_receipts r
+       JOIN students s          ON s.id  = r.student_id
+       LEFT JOIN fee_records fr ON fr.id = r.fee_record_id
+       LEFT JOIN courses c      ON c.id  = fr.course_id
+       LEFT JOIN subjects sub   ON sub.id = fr.subject_id
+       WHERE r.id = $1 AND r.student_id = $2`,
+      [id, studentId]
+    );
+
+    if (!receipt) return next(new AppError('Receipt not found', 404));
+    res.json({ success: true, data: receipt });
+  } catch (err) { next(err); }
+}

@@ -28,6 +28,7 @@ async function generateStudentId(slug: string): Promise<string> {
 // ── POST /api/academy/students ────────────────────────────────────────────────
 
 interface CourseSelection { course_id: string; fee_amount: number }
+interface SubjectSelection { subject_id: string; fee_amount: number }
 
 export async function registerStudent(
   req: Request, res: Response, next: NextFunction
@@ -37,20 +38,23 @@ export async function registerStudent(
     const {
       first_name, last_name, dob, gender, mobile,
       email, parent_name, parent_mobile, address,
-      courses, face_images,
+      subjects, courses, face_images, academic_year_id,
     } = req.body as {
       first_name: string; last_name: string; dob?: string;
       gender?: string; mobile: string; email?: string;
       parent_name?: string; parent_mobile?: string; address?: string;
-      courses: CourseSelection[];
+      subjects?: SubjectSelection[];
+      courses?: CourseSelection[];
       face_images: string[];
+      academic_year_id?: string;
     };
 
     if (!first_name || !last_name || !mobile) {
       return next(new AppError('first_name, last_name, mobile are required', 400));
     }
-    if (!courses?.length) {
-      return next(new AppError('At least one course must be selected', 400));
+    // Accept either subjects[] (new) or courses[] (legacy). At least one is required.
+    if (!subjects?.length && !courses?.length) {
+      return next(new AppError('At least one subject must be selected', 400));
     }
 
     // Remove any orphaned face-less students for this mobile number created by
@@ -124,35 +128,79 @@ export async function registerStudent(
       quality   = embedResult.quality ?? null;
     }
 
-    // 3 — Validate all course IDs exist in this academy
-    const courseIds = courses.map(c => c.course_id);
-    const foundCourses = await academyQuery<{ id: string; name: string; default_fee: number }>(
-      academySlug,
-      `SELECT id, name, default_fee FROM courses
-       WHERE id = ANY($1::uuid[]) AND is_active = TRUE`,
-      [courseIds]
-    );
-    if (foundCourses.length !== courseIds.length) {
-      return next(new AppError('One or more course IDs are invalid', 400));
+    // 3a — Resolve subjects and validate. Support both new (subjects[]) and legacy (courses[]) payloads.
+    let resolvedSubjects: Array<{ subject_id: string; course_id: string; fee_amount: number }> = [];
+
+    if (subjects?.length) {
+      const subjectIds = subjects.map(s => s.subject_id);
+      const foundSubjects = await academyQuery<{ id: string; course_id: string }>(
+        academySlug,
+        `SELECT id, course_id FROM subjects WHERE id = ANY($1::uuid[]) AND is_active = TRUE`,
+        [subjectIds]
+      );
+      if (foundSubjects.length !== subjectIds.length) {
+        return next(new AppError('One or more subject IDs are invalid', 400));
+      }
+      const subjectMap = new Map(foundSubjects.map(s => [s.id, s.course_id]));
+      resolvedSubjects = subjects.map(s => ({
+        subject_id: s.subject_id,
+        course_id:  subjectMap.get(s.subject_id)!,
+        fee_amount: s.fee_amount,
+      }));
+    } else if (courses?.length) {
+      // Legacy: derive subjects from courses (first active subject per course)
+      const courseIds = courses.map(c => c.course_id);
+      const foundCourses = await academyQuery<{ id: string }>(
+        academySlug,
+        `SELECT id FROM courses WHERE id = ANY($1::uuid[]) AND is_active = TRUE`,
+        [courseIds]
+      );
+      if (foundCourses.length !== courseIds.length) {
+        return next(new AppError('One or more course IDs are invalid', 400));
+      }
+      const subjectRows = await academyQuery<{ id: string; course_id: string }>(
+        academySlug,
+        `SELECT DISTINCT ON (course_id) id, course_id
+         FROM subjects WHERE course_id = ANY($1::uuid[]) AND is_active = TRUE
+         ORDER BY course_id, created_at`,
+        [courseIds]
+      );
+      const subjectByCourse = new Map(subjectRows.map(s => [s.course_id, s.id]));
+      resolvedSubjects = courses.map(c => ({
+        subject_id: subjectByCourse.get(c.course_id) ?? '',
+        course_id:  c.course_id,
+        fee_amount: c.fee_amount,
+      })).filter(s => s.subject_id !== '');
+      if (!resolvedSubjects.length) {
+        return next(new AppError('No subjects found for selected courses', 400));
+      }
     }
 
     // 4 — Generate student ID + persist in academy schema
     const studentId = await generateStudentId(academySlug);
 
-    // First fee is due at the end of the current month. This matches
-    // updateStudent's fee logic so a two-phase save (details now, edits on a
-    // back-navigation) never produces duplicate fee records for the same month.
+    // First fee is due at the end of the current month.
     const month   = new Date().toISOString().substring(0, 7);
     const dueDate = new Date(
       new Date().getFullYear(), new Date().getMonth() + 1, 0
     ).toISOString().split('T')[0];
 
+    // Unique course_ids derived from resolved subjects (for student_courses aggregate)
+    const uniqueCourseEnrollments = new Map<string, number>();
+    for (const s of resolvedSubjects) {
+      uniqueCourseEnrollments.set(
+        s.course_id,
+        (uniqueCourseEnrollments.get(s.course_id) ?? 0) + s.fee_amount
+      );
+    }
+
     await academyTransaction(academySlug, async (client) => {
       await client.query(
         `INSERT INTO students
            (id, first_name, last_name, dob, gender, mobile, email,
-            parent_name, parent_mobile, address, face_embedding, face_quality)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+            parent_name, parent_mobile, address, face_embedding, face_quality,
+            academic_year_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
         [
           studentId, first_name.trim(), last_name.trim(),
           dob ?? null, gender ?? null, mobile,
@@ -160,28 +208,39 @@ export async function registerStudent(
           address ?? null,
           embedding ? JSON.stringify(embedding) : null,
           quality,
+          academic_year_id ?? null,
         ]
       );
 
-      // Enrol in each course + generate first fee record (idempotent)
-      for (const sel of courses) {
+      // Enrol in each subject + generate first fee record per subject
+      for (const sel of resolvedSubjects) {
+        await client.query(
+          `INSERT INTO student_subjects (student_id, subject_id, fee_amount, start_date)
+           VALUES ($1,$2,$3,CURRENT_DATE)
+           ON CONFLICT (student_id, subject_id) DO NOTHING`,
+          [studentId, sel.subject_id, sel.fee_amount]
+        );
+
+        await client.query(
+          `INSERT INTO fee_records (student_id, subject_id, course_id, amount_due, due_date, status)
+           SELECT $1::varchar, $2::uuid, $3::uuid, $4::numeric, $5::date, 'pending'
+           WHERE NOT EXISTS (
+             SELECT 1 FROM fee_records fr
+             WHERE fr.student_id = $1
+               AND fr.subject_id = $2
+               AND TO_CHAR(fr.due_date, 'YYYY-MM') = $6::text
+           )`,
+          [studentId, sel.subject_id, sel.course_id, sel.fee_amount, dueDate, month]
+        );
+      }
+
+      // Maintain student_courses aggregate (for backward-compat course-level queries)
+      for (const [courseId, totalFee] of uniqueCourseEnrollments) {
         await client.query(
           `INSERT INTO student_courses (student_id, course_id, fee_amount, start_date)
            VALUES ($1,$2,$3,CURRENT_DATE)
            ON CONFLICT (student_id, course_id) DO NOTHING`,
-          [studentId, sel.course_id, sel.fee_amount]
-        );
-
-        await client.query(
-          `INSERT INTO fee_records (student_id, course_id, amount_due, due_date, status)
-           SELECT $1::varchar, $2::uuid, $3::numeric, $4::date, 'pending'
-           WHERE NOT EXISTS (
-             SELECT 1 FROM fee_records fr
-             WHERE fr.student_id = $1
-               AND fr.course_id  = $2
-               AND TO_CHAR(fr.due_date, 'YYYY-MM') = $5::text
-           )`,
-          [studentId, sel.course_id, sel.fee_amount, dueDate, month]
+          [studentId, courseId, totalFee]
         );
       }
     });
@@ -201,7 +260,7 @@ export async function registerStudent(
 
     res.status(201).json({
       success: true,
-      data: { id: studentId, first_name, last_name, courses_enrolled: courses.length },
+      data: { id: studentId, first_name, last_name, subjects_enrolled: resolvedSubjects.length },
       message: 'Student registered successfully',
     });
   } catch (err) { next(err); }
@@ -281,6 +340,22 @@ export async function bulkUploadStudents(
     for (const c of courseRows) {
       courseMap.set(c.name.trim().toLowerCase(), { id: c.id, default_fee: Number(c.default_fee) });
     }
+
+    // Fetch first active subject per course so bulk-uploaded students receive
+    // student_subjects entries (required for the edit-screen auto-restore and
+    // subject-level fee generation). The migration seeds existing students but
+    // new bulk uploads after the migration must be handled here.
+    const allCourseIds = [...courseMap.values()].map(c => c.id);
+    const bulkSubjectRows = allCourseIds.length > 0
+      ? await academyQuery<{ id: string; course_id: string }>(
+          academySlug,
+          `SELECT DISTINCT ON (course_id) id, course_id
+           FROM subjects WHERE course_id = ANY($1::uuid[]) AND is_active = TRUE
+           ORDER BY course_id, created_at`,
+          [allCourseIds]
+        )
+      : [];
+    const subjectByCourseId = new Map(bulkSubjectRows.map(s => [s.course_id, s.id]));
 
     // Current max ID sequence for bulk ID generation.
     const year = new Date().getFullYear();
@@ -426,6 +501,19 @@ export async function bulkUploadStudents(
                   [row.params[0], course.id, course.default_fee]
                 );
                 results.course_assignments++;
+
+                // Also enrol in the first active subject for this course so
+                // subject-level fee generation and edit-screen restore work.
+                const bulkSubjectId = subjectByCourseId.get(course.id);
+                if (bulkSubjectId) {
+                  await client.query(
+                    `INSERT INTO student_subjects
+                       (student_id, subject_id, fee_amount, start_date, status)
+                     VALUES ($1, $2, $3, CURRENT_DATE, 'active')
+                     ON CONFLICT (student_id, subject_id) DO NOTHING`,
+                    [row.params[0], bulkSubjectId, course.default_fee]
+                  );
+                }
               }
             }
           } else {
@@ -603,14 +691,33 @@ export async function getStudent(
                 '[]'
               ) AS courses
        FROM students s
-       LEFT JOIN student_courses sc ON sc.student_id = s.id
+       LEFT JOIN student_courses sc ON sc.student_id = s.id AND sc.status = 'active'
        LEFT JOIN courses c          ON c.id = sc.course_id
        WHERE s.id = $1
        GROUP BY s.id`,
       [id]
     );
     if (!student) return next(new AppError('Student not found', 404));
-    res.json({ success: true, data: student });
+
+    // Include subject-level enrollments for the edit screen auto-restore
+    const enrolledSubjects = await academyQuery<{
+      subject_id: string; subject_name: string;
+      course_id: string; course_name: string;
+      fee_amount: number; status: string;
+    }>(
+      academySlug,
+      `SELECT ss.subject_id, sub.name AS subject_name,
+              sub.course_id, c.name AS course_name,
+              ss.fee_amount, ss.status
+       FROM student_subjects ss
+       JOIN subjects sub ON sub.id = ss.subject_id
+       JOIN courses c    ON c.id   = sub.course_id
+       WHERE ss.student_id = $1 AND ss.status = 'active'
+       ORDER BY c.name, sub.name`,
+      [id]
+    );
+
+    res.json({ success: true, data: { ...student, enrolled_subjects: enrolledSubjects } });
   } catch (err) { next(err); }
 }
 
@@ -703,19 +810,22 @@ export async function updateStudent(
     const { academySlug } = req.academyUser!;
     const { id } = req.params;
     const {
-      courses, face_images,
+      subjects, courses, face_images,
       first_name, last_name, mobile, email,
       dob, gender, parent_name, parent_mobile, address,
+      academic_year_id,
     } = req.body as {
-      courses: CourseSelection[];
+      subjects?: SubjectSelection[];
+      courses?: CourseSelection[];
       face_images?: string[];
       first_name?: string; last_name?: string; mobile?: string;
       email?: string; dob?: string; gender?: string;
       parent_name?: string; parent_mobile?: string; address?: string;
+      academic_year_id?: string;
     };
 
-    if (!courses?.length) {
-      return next(new AppError('At least one course is required', 400));
+    if (!subjects?.length && !courses?.length) {
+      return next(new AppError('At least one subject is required', 400));
     }
 
     const student = await academyQueryOne<{
@@ -723,14 +833,48 @@ export async function updateStudent(
     }>(academySlug, `SELECT id, first_name, last_name FROM students WHERE id = $1`, [id]);
     if (!student) return next(new AppError('Student not found', 404));
 
-    const courseIds = courses.map(c => c.course_id);
-    const foundCourses = await academyQuery<{ id: string }>(
-      academySlug,
-      `SELECT id FROM courses WHERE id = ANY($1::uuid[]) AND is_active = TRUE`,
-      [courseIds]
-    );
-    if (foundCourses.length !== courseIds.length) {
-      return next(new AppError('One or more course IDs are invalid', 400));
+    // Resolve subjects (same logic as register)
+    let resolvedSubjects: Array<{ subject_id: string; course_id: string; fee_amount: number }> = [];
+
+    if (subjects?.length) {
+      const subjectIds = subjects.map(s => s.subject_id);
+      const foundSubjects = await academyQuery<{ id: string; course_id: string }>(
+        academySlug,
+        `SELECT id, course_id FROM subjects WHERE id = ANY($1::uuid[]) AND is_active = TRUE`,
+        [subjectIds]
+      );
+      if (foundSubjects.length !== subjectIds.length) {
+        return next(new AppError('One or more subject IDs are invalid', 400));
+      }
+      const subjectMap = new Map(foundSubjects.map(s => [s.id, s.course_id]));
+      resolvedSubjects = subjects.map(s => ({
+        subject_id: s.subject_id,
+        course_id:  subjectMap.get(s.subject_id)!,
+        fee_amount: s.fee_amount,
+      }));
+    } else if (courses?.length) {
+      const courseIds = courses.map(c => c.course_id);
+      const foundCourses = await academyQuery<{ id: string }>(
+        academySlug,
+        `SELECT id FROM courses WHERE id = ANY($1::uuid[]) AND is_active = TRUE`,
+        [courseIds]
+      );
+      if (foundCourses.length !== courseIds.length) {
+        return next(new AppError('One or more course IDs are invalid', 400));
+      }
+      const subjectRows = await academyQuery<{ id: string; course_id: string }>(
+        academySlug,
+        `SELECT DISTINCT ON (course_id) id, course_id
+         FROM subjects WHERE course_id = ANY($1::uuid[]) AND is_active = TRUE
+         ORDER BY course_id, created_at`,
+        [courseIds]
+      );
+      const subjectByCourse = new Map(subjectRows.map(s => [s.course_id, s.id]));
+      resolvedSubjects = courses.map(c => ({
+        subject_id: subjectByCourse.get(c.course_id) ?? '',
+        course_id:  c.course_id,
+        fee_amount: c.fee_amount,
+      })).filter(s => s.subject_id !== '');
     }
 
     let newEmbedding: number[] | null = null;
@@ -747,7 +891,30 @@ export async function updateStudent(
       newQuality   = embed.quality ?? null;
     }
 
+    const uniqueCourseEnrollments = new Map<string, number>();
+    for (const s of resolvedSubjects) {
+      uniqueCourseEnrollments.set(
+        s.course_id,
+        (uniqueCourseEnrollments.get(s.course_id) ?? 0) + s.fee_amount
+      );
+    }
+
+    const month   = new Date().toISOString().substring(0, 7);
+    const dueDate = new Date(
+      new Date().getFullYear(),
+      new Date().getMonth() + 1,
+      0
+    ).toISOString().split('T')[0];
+
     await academyTransaction(academySlug, async (client) => {
+      // Drop all active subject enrollments, then re-insert fresh set
+      await client.query(
+        `UPDATE student_subjects
+         SET status = 'dropped', end_date = CURRENT_DATE
+         WHERE student_id = $1 AND status = 'active'`,
+        [id]
+      );
+      // Also drop legacy course enrollments
       await client.query(
         `UPDATE student_courses
          SET status = 'dropped', end_date = CURRENT_DATE
@@ -755,55 +922,55 @@ export async function updateStudent(
         [id]
       );
 
-      const month   = new Date().toISOString().substring(0, 7);
-      const dueDate = new Date(
-        new Date().getFullYear(),
-        new Date().getMonth() + 1,
-        0
-      ).toISOString().split('T')[0];
+      for (const sel of resolvedSubjects) {
+        await client.query(
+          `INSERT INTO student_subjects (student_id, subject_id, fee_amount, start_date, status)
+           VALUES ($1, $2, $3, CURRENT_DATE, 'active')
+           ON CONFLICT (student_id, subject_id)
+           DO UPDATE SET fee_amount = $3, status = 'active', end_date = NULL`,
+          [id, sel.subject_id, sel.fee_amount]
+        );
 
-      for (const sel of courses) {
+        await client.query(
+          `INSERT INTO fee_records (student_id, subject_id, course_id, amount_due, due_date, status)
+           SELECT $1::varchar, $2::uuid, $3::uuid, $4::numeric, $5::date, 'pending'
+           WHERE NOT EXISTS (
+             SELECT 1 FROM fee_records fr
+             WHERE fr.student_id = $1
+               AND fr.subject_id = $2
+               AND TO_CHAR(fr.due_date, 'YYYY-MM') = $6::text
+           )`,
+          [id, sel.subject_id, sel.course_id, sel.fee_amount, dueDate, month]
+        );
+      }
+
+      // Re-insert course aggregate rows for backward-compat
+      for (const [courseId, totalFee] of uniqueCourseEnrollments) {
         await client.query(
           `INSERT INTO student_courses (student_id, course_id, fee_amount, start_date, status)
            VALUES ($1, $2, $3, CURRENT_DATE, 'active')
            ON CONFLICT (student_id, course_id)
            DO UPDATE SET fee_amount = $3, status = 'active', end_date = NULL`,
-          [id, sel.course_id, sel.fee_amount]
-        );
-
-        await client.query(
-          // Explicit casts on the SELECT-list params are required: in an
-          // INSERT ... SELECT (unlike INSERT ... VALUES) Postgres does not take
-          // the parameter types from the target columns, and because $1/$2 are
-          // also used in the WHERE NOT EXISTS it otherwise fails with
-          // "inconsistent types deduced for parameter $1".
-          `INSERT INTO fee_records (student_id, course_id, amount_due, due_date, status)
-           SELECT $1::varchar, $2::uuid, $3::numeric, $4::date, 'pending'
-           WHERE NOT EXISTS (
-             SELECT 1 FROM fee_records fr
-             WHERE fr.student_id = $1
-               AND fr.course_id  = $2
-               AND TO_CHAR(fr.due_date, 'YYYY-MM') = $5::text
-           )`,
-          [id, sel.course_id, sel.fee_amount, dueDate, month]
+          [id, courseId, totalFee]
         );
       }
 
       // Update personal info fields when provided
-      if (first_name || last_name || mobile) {
+      if (first_name || last_name || mobile || academic_year_id !== undefined) {
         await client.query(
           `UPDATE students SET
-             first_name    = COALESCE($1, first_name),
-             last_name     = COALESCE($2, last_name),
-             mobile        = COALESCE($3, mobile),
-             email         = $4,
-             dob           = $5,
-             gender        = $6,
-             parent_name   = $7,
-             parent_mobile = $8,
-             address       = $9,
-             updated_at    = NOW()
-           WHERE id = $10`,
+             first_name       = COALESCE($1, first_name),
+             last_name        = COALESCE($2, last_name),
+             mobile           = COALESCE($3, mobile),
+             email            = $4,
+             dob              = $5,
+             gender           = $6,
+             parent_name      = $7,
+             parent_mobile    = $8,
+             address          = $9,
+             academic_year_id = COALESCE($10::uuid, academic_year_id),
+             updated_at       = NOW()
+           WHERE id = $11`,
           [
             first_name?.trim()    || null,
             last_name?.trim()     || null,
@@ -814,6 +981,7 @@ export async function updateStudent(
             parent_name?.trim()   || null,
             parent_mobile?.trim() || null,
             address?.trim()       || null,
+            academic_year_id      || null,
             id,
           ]
         );
@@ -828,7 +996,7 @@ export async function updateStudent(
         );
       }
 
-      if (!first_name && !last_name && !mobile && !newEmbedding) {
+      if (!first_name && !last_name && !mobile && !newEmbedding && academic_year_id === undefined) {
         await client.query(`UPDATE students SET updated_at = NOW() WHERE id = $1`, [id]);
       }
     });
