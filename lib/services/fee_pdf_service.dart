@@ -1,42 +1,55 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
-/// Generates a professional fee statement PDF and opens it.
+/// Generates professional fee PDF documents and opens them.
+///
+/// Font strategy: Noto Sans (via PdfGoogleFonts) is loaded async before each
+/// PDF build. It supports the ₹ glyph (U+20B9). If the download fails (offline
+/// first run), we fall back to the built-in PDF Helvetica font — ₹ will render
+/// as a box in that case but the PDF is still usable.
 class FeePdfService {
-  static final _money = NumberFormat('#,##0', 'en_IN');
+  // ── Formatters ──────────────────────────────────────────────────────────────
 
-  static String _fmt(double v) => '${_money.format(v)}';
-  static String _money2(dynamic v) => '${_money.format((double.tryParse(v?.toString() ?? '') ?? 0))}';
+  // Indian locale, 2 decimal places: 10000 → "10,000.00"
+  static final _money = NumberFormat('#,##,##0.00', 'en_IN');
+
+  /// Formats a double as ₹ + Indian-comma amount with 2 decimals.
+  static String _fmt(double v) => '₹${_money.format(v)}';
+
+  /// Same as [_fmt] but accepts any dynamic value (parses to double first).
+  static String _m(dynamic v) =>
+      _fmt(double.tryParse(v?.toString() ?? '') ?? 0);
 
   static String _fmtDate(dynamic raw) {
-    final s = raw?.toString() ?? '';
+    final s     = raw?.toString() ?? '';
     final clean = s.contains('T') ? s.split('T')[0] : s;
     if (clean.isEmpty || clean == 'null') return '-';
     try {
-      final d = DateTime.parse(clean);
-      return DateFormat('dd MMM yyyy').format(d);
+      return DateFormat('dd MMM yyyy').format(DateTime.parse(clean));
     } catch (_) {
       return clean;
     }
   }
 
-  static String _parseMode(String? remarks) {
-    if (remarks == null || remarks.isEmpty) return '-';
-    final m = RegExp(r'Mode:\s*([a-zA-Z_ ]+)').firstMatch(remarks);
-    if (m == null) return '-';
-    switch (m.group(1)!.trim().toLowerCase()) {
+  /// Accepts either a raw mode string ("cash", "upi") or the old embedded
+  /// remarks format ("Mode: cash") used by the legacy fee_records controller.
+  static String _parseMode(String? raw) {
+    if (raw == null || raw.trim().isEmpty) return '-';
+    final embedded = RegExp(r'Mode:\s*([a-zA-Z_ ]+)').firstMatch(raw);
+    final mode     = embedded != null ? embedded.group(1)!.trim() : raw.trim();
+    switch (mode.toLowerCase()) {
       case 'cash':          return 'Cash';
       case 'upi':           return 'UPI';
       case 'bank_transfer': return 'Bank Transfer';
       case 'cheque':        return 'Cheque';
-      default:              return m.group(1)!.trim();
+      default:              return mode;
     }
   }
 
@@ -58,14 +71,26 @@ class FeePdfService {
     }
   }
 
-  /// Generate and open the fee statement PDF.
-  ///
-  /// [studentName], [studentId], [mobile], [courseName] — student info.
-  /// [academyName] — header branding.
-  /// [records] — sorted list of fee_records from getStudentFees API.
-  /// [qrImageData] — optional base64 QR image (with or without data-URI prefix).
-  /// [qrName] — display name below the QR image.
-  /// [qrDescription] — optional sub-label below the QR name.
+  // ── Font loading ─────────────────────────────────────────────────────────────
+
+  /// Returns a [pw.ThemeData] using bundled Noto Sans fonts.
+  /// Noto Sans covers U+20B9 (₹) and virtually all Unicode scripts.
+  /// Falls back to built-in Helvetica only if the asset load fails.
+  static Future<pw.ThemeData> _theme() async {
+    try {
+      final regularData = await rootBundle.load('assets/fonts/NotoSans-Regular.ttf');
+      final boldData    = await rootBundle.load('assets/fonts/NotoSans-Bold.ttf');
+      final base = pw.Font.ttf(regularData.buffer.asByteData());
+      final bold = pw.Font.ttf(boldData.buffer.asByteData());
+      return pw.ThemeData.withFont(base: base, bold: bold);
+    } catch (_) {
+      return pw.ThemeData();
+    }
+  }
+
+  // ── Fee Statement (multi-instalment) ─────────────────────────────────────────
+
+  /// Generates a full fee statement PDF with instalment history and opens it.
   static Future<void> generate({
     required BuildContext context,
     required String academyName,
@@ -78,26 +103,24 @@ class FeePdfService {
     String? qrName,
     String? qrDescription,
   }) async {
-    // Derive summary totals
-    double totalDue  = 0, totalPaid = 0;
+    double totalDue = 0, totalPaid = 0;
     for (final r in records) {
       totalDue  += double.tryParse(r['amount_due']?.toString()  ?? '') ?? 0;
       totalPaid += double.tryParse(r['amount_paid']?.toString() ?? '') ?? 0;
     }
-    final pending = (totalDue - totalPaid).clamp(0.0, double.infinity);
+    final pending  = (totalDue - totalPaid).clamp(0.0, double.infinity);
     final progress = totalDue > 0 ? (totalPaid / totalDue).clamp(0.0, 1.0) : 0.0;
 
     String overallStatus = 'Pending';
-    if (pending <= 0)                        overallStatus = 'Paid';
-    else if (records.any((r) => r['status'] == 'overdue')) overallStatus = 'Overdue';
-    else if (totalPaid > 0)                  overallStatus = 'Partial';
+    if (pending <= 0)                                         overallStatus = 'Paid';
+    else if (records.any((r) => r['status'] == 'overdue'))   overallStatus = 'Overdue';
+    else if (totalPaid > 0)                                  overallStatus = 'Partial';
 
     final nextDue = records.firstWhere(
       (r) => r['status'] != 'paid',
       orElse: () => const {},
     );
 
-    // Decode QR image bytes (if provided)
     Uint8List? qrBytes;
     if (qrImageData != null && qrImageData.isNotEmpty) {
       try {
@@ -106,61 +129,52 @@ class FeePdfService {
       } catch (_) {}
     }
 
-    final pdf = pw.Document();
+    final theme   = await _theme();
+    final pdf     = pw.Document();
     final primary = PdfColor.fromHex('#1A56DB');
     final lightBg = PdfColor.fromHex('#F1F5F9');
     final divider = PdfColor.fromHex('#CBD5E1');
     final grey    = PdfColor.fromHex('#64748B');
     final dark    = PdfColor.fromHex('#1E293B');
 
-    final headerStyle    = pw.TextStyle(fontSize: 9,  color: grey);
-    final valueStyle     = pw.TextStyle(fontSize: 9,  color: dark, fontWeight: pw.FontWeight.bold);
-    final tableHeader    = pw.TextStyle(fontSize: 8,  color: PdfColors.white, fontWeight: pw.FontWeight.bold);
-    final tableCell      = pw.TextStyle(fontSize: 8,  color: dark);
-    final tableCellBold  = pw.TextStyle(fontSize: 8,  color: dark, fontWeight: pw.FontWeight.bold);
+    final headerStyle   = pw.TextStyle(fontSize: 9,  color: grey);
+    final valueStyle    = pw.TextStyle(fontSize: 9,  color: dark, fontWeight: pw.FontWeight.bold);
+    final tableHeader   = pw.TextStyle(fontSize: 8,  color: PdfColors.white, fontWeight: pw.FontWeight.bold);
+    final tableCell     = pw.TextStyle(fontSize: 8,  color: dark);
+    final tableCellBold = pw.TextStyle(fontSize: 8,  color: dark, fontWeight: pw.FontWeight.bold);
 
-    // ── Column widths for installment table ──────────────────────────────────
-    const colWidths = [
-      0.05, // #
-      0.10, // Due Date
-      0.10, // Amount Due
-      0.10, // Amount Paid
-      0.10, // Payment Date
-      0.10, // Mode
-      0.10, // Balance
-      0.12, // Outstanding
-      0.08, // Status
-    ];
+    const colWidths = [0.05, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.12, 0.08];
 
     pw.Widget tableHeaderRow() => pw.Container(
-          color: primary,
-          child: pw.Row(
-            children: [
-              ...[
-                '#', 'Due Date', 'Amt Due', 'Amt Paid', 'Paid On', 'Mode', 'Balance', 'Outstanding', 'Status'
-              ].asMap().entries.map((e) => pw.Expanded(
+      color: primary,
+      child: pw.Row(
+        children: [
+          ...['#', 'Due Date', 'Amt Due', 'Amt Paid', 'Paid On', 'Mode', 'Balance', 'Outstanding', 'Status']
+              .asMap()
+              .entries
+              .map((e) => pw.Expanded(
                     flex: (colWidths[e.key] * 100).round(),
                     child: pw.Padding(
                       padding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 5),
                       child: pw.Text(e.value, style: tableHeader),
                     ),
-                  )).toList(),
-            ],
-          ),
-        );
+                  )),
+        ],
+      ),
+    );
 
     pdf.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
-        margin: const pw.EdgeInsets.all(28),
+        margin:     const pw.EdgeInsets.all(28),
+        theme:      theme,
         header: (_) => pw.Column(
           crossAxisAlignment: pw.CrossAxisAlignment.stretch,
           children: [
-            // ── Branded header ───────────────────────────────────────────────
             pw.Container(
               padding: const pw.EdgeInsets.all(14),
               decoration: pw.BoxDecoration(
-                color: primary,
+                color:        primary,
                 borderRadius: const pw.BorderRadius.all(pw.Radius.circular(6)),
               ),
               child: pw.Row(
@@ -170,23 +184,15 @@ class FeePdfService {
                     crossAxisAlignment: pw.CrossAxisAlignment.start,
                     children: [
                       pw.Text(academyName,
-                          style: pw.TextStyle(
-                              fontSize: 14,
-                              color: PdfColors.white,
-                              fontWeight: pw.FontWeight.bold)),
+                          style: pw.TextStyle(fontSize: 14, color: PdfColors.white, fontWeight: pw.FontWeight.bold)),
                       pw.SizedBox(height: 2),
                       pw.Text('Fee Statement',
                           style: pw.TextStyle(fontSize: 10, color: PdfColors.white)),
                     ],
                   ),
-                  pw.Column(
-                    crossAxisAlignment: pw.CrossAxisAlignment.end,
-                    children: [
-                      pw.Text(
-                        'Generated: ${DateFormat('dd MMM yyyy').format(DateTime.now())}',
-                        style: pw.TextStyle(fontSize: 8, color: PdfColors.white),
-                      ),
-                    ],
+                  pw.Text(
+                    'Generated: ${DateFormat('dd MMM yyyy').format(DateTime.now())}',
+                    style: pw.TextStyle(fontSize: 8, color: PdfColors.white),
                   ),
                 ],
               ),
@@ -195,13 +201,13 @@ class FeePdfService {
           ],
         ),
         build: (context) => [
-          // ── Student info box ─────────────────────────────────────────────
+          // ── Student info ─────────────────────────────────────────────────
           pw.Container(
             padding: const pw.EdgeInsets.all(12),
             decoration: pw.BoxDecoration(
-              color: lightBg,
+              color:        lightBg,
               borderRadius: const pw.BorderRadius.all(pw.Radius.circular(5)),
-              border: pw.Border.all(color: divider),
+              border:       pw.Border.all(color: divider),
             ),
             child: pw.Row(
               children: [
@@ -209,11 +215,11 @@ class FeePdfService {
                   child: pw.Column(
                     crossAxisAlignment: pw.CrossAxisAlignment.start,
                     children: [
-                      pw.Text('Student Name',  style: headerStyle),
+                      pw.Text('Student Name',     style: headerStyle),
                       pw.Text(studentName.isNotEmpty ? studentName : '-', style: valueStyle),
                       pw.SizedBox(height: 6),
                       pw.Text('Registration No.', style: headerStyle),
-                      pw.Text(studentId.isNotEmpty ? studentId : '-', style: valueStyle),
+                      pw.Text(studentId.isNotEmpty ? studentId : '-',     style: valueStyle),
                     ],
                   ),
                 ),
@@ -225,7 +231,7 @@ class FeePdfService {
                       pw.Text(courseName.isNotEmpty ? courseName : '-', style: valueStyle),
                       pw.SizedBox(height: 6),
                       pw.Text('Mobile', style: headerStyle),
-                      pw.Text(mobile.isNotEmpty ? mobile : '-', style: valueStyle),
+                      pw.Text(mobile.isNotEmpty ? mobile : '-',         style: valueStyle),
                     ],
                   ),
                 ),
@@ -236,28 +242,26 @@ class FeePdfService {
 
           // ── Fee summary ──────────────────────────────────────────────────
           pw.Text('Fee Summary',
-              style: pw.TextStyle(
-                  fontSize: 11, fontWeight: pw.FontWeight.bold, color: dark)),
+              style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold, color: dark)),
           pw.SizedBox(height: 6),
           pw.Container(
             padding: const pw.EdgeInsets.all(12),
             decoration: pw.BoxDecoration(
-              border: pw.Border.all(color: divider),
+              border:       pw.Border.all(color: divider),
               borderRadius: const pw.BorderRadius.all(pw.Radius.circular(5)),
             ),
             child: pw.Column(
               children: [
                 pw.Row(
                   children: [
-                    _summaryCell('Total Course Fee', '${_fmt(totalDue)}', dark),
-                    _summaryCell('Total Paid', '${_fmt(totalPaid)}', PdfColors.green700),
-                    _summaryCell('Pending', '${_fmt(pending)}',
+                    _summaryCell('Total Course Fee', _fmt(totalDue),  dark),
+                    _summaryCell('Total Paid',       _fmt(totalPaid), PdfColors.green700),
+                    _summaryCell('Pending',          _fmt(pending),
                         pending > 0 ? PdfColors.orange700 : PdfColors.green700),
                     _summaryCell('Status', overallStatus, _statusColor(overallStatus)),
                   ],
                 ),
                 pw.SizedBox(height: 10),
-                // Progress bar (FractionallySizedBox not in pdf package; use Row flex instead)
                 pw.Row(
                   children: [
                     pw.Expanded(
@@ -265,7 +269,7 @@ class FeePdfService {
                       child: pw.Container(
                         height: 7,
                         decoration: pw.BoxDecoration(
-                          color: pending <= 0 ? PdfColors.green700 : primary,
+                          color:        pending <= 0 ? PdfColors.green700 : primary,
                           borderRadius: const pw.BorderRadius.all(pw.Radius.circular(4)),
                         ),
                       ),
@@ -276,7 +280,7 @@ class FeePdfService {
                         child: pw.Container(
                           height: 7,
                           decoration: const pw.BoxDecoration(
-                            color: PdfColors.grey300,
+                            color:        PdfColors.grey300,
                             borderRadius: pw.BorderRadius.all(pw.Radius.circular(4)),
                           ),
                         ),
@@ -303,34 +307,31 @@ class FeePdfService {
           ),
           pw.SizedBox(height: 16),
 
-          // ── Installment history ──────────────────────────────────────────
+          // ── Instalment history ───────────────────────────────────────────
           pw.Text('Installment History',
-              style: pw.TextStyle(
-                  fontSize: 11, fontWeight: pw.FontWeight.bold, color: dark)),
+              style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold, color: dark)),
           pw.SizedBox(height: 6),
           tableHeaderRow(),
 
-          // Data rows
           ...records.asMap().entries.map((entry) {
-            final i = entry.key;
-            final r = entry.value;
-            final due     = double.tryParse(r['amount_due']?.toString()  ?? '') ?? 0;
-            final paid    = double.tryParse(r['amount_paid']?.toString() ?? '') ?? 0;
-            final bal     = (due - paid).clamp(0.0, double.infinity);
-            // Running outstanding = sum of balances from this record onwards
+            final i   = entry.key;
+            final r   = entry.value;
+            final due  = double.tryParse(r['amount_due']?.toString()  ?? '') ?? 0;
+            final paid = double.tryParse(r['amount_paid']?.toString() ?? '') ?? 0;
+            final bal  = (due - paid).clamp(0.0, double.infinity);
             double outstanding = 0;
             for (var j = i; j < records.length; j++) {
               final rd = double.tryParse(records[j]['amount_due']?.toString()  ?? '') ?? 0;
               final rp = double.tryParse(records[j]['amount_paid']?.toString() ?? '') ?? 0;
               outstanding += (rd - rp).clamp(0.0, double.infinity);
             }
-            final status    = r['status'] as String? ?? 'pending';
-            final rowBg     = i.isEven ? PdfColors.white : lightBg;
-            final cells = [
+            final status = r['status'] as String? ?? 'pending';
+            final rowBg  = i.isEven ? PdfColors.white : lightBg;
+            final cells  = [
               '${i + 1}',
               _fmtDate(r['due_date']),
-              _money2(r['amount_due']),
-              paid > 0 ? _money2(r['amount_paid']) : '-',
+              _m(r['amount_due']),
+              paid > 0 ? _m(r['amount_paid']) : '-',
               _fmtDate(r['paid_date']),
               _parseMode(r['remarks'] as String?),
               _fmt(bal),
@@ -345,8 +346,7 @@ class FeePdfService {
                   return pw.Expanded(
                     flex: (colWidths[e.key] * 100).round(),
                     child: pw.Padding(
-                      padding: const pw.EdgeInsets.symmetric(
-                          horizontal: 4, vertical: 5),
+                      padding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 5),
                       child: isStatus
                           ? pw.Text(e.value,
                               style: pw.TextStyle(
@@ -364,18 +364,17 @@ class FeePdfService {
           pw.Container(height: 1, color: divider),
           pw.SizedBox(height: 16),
 
-          // ── QR Code section ──────────────────────────────────────────────
+          // ── QR Code ──────────────────────────────────────────────────────
           if (qrBytes != null) ...[
             pw.Text('Payment QR Code',
-                style: pw.TextStyle(
-                    fontSize: 11, fontWeight: pw.FontWeight.bold, color: dark)),
+                style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold, color: dark)),
             pw.SizedBox(height: 8),
             pw.Container(
               padding: const pw.EdgeInsets.all(12),
               decoration: pw.BoxDecoration(
-                color: lightBg,
+                color:        lightBg,
                 borderRadius: const pw.BorderRadius.all(pw.Radius.circular(5)),
-                border: pw.Border.all(color: divider),
+                border:       pw.Border.all(color: divider),
               ),
               child: pw.Row(
                 crossAxisAlignment: pw.CrossAxisAlignment.center,
@@ -386,25 +385,13 @@ class FeePdfService {
                     child: pw.Column(
                       crossAxisAlignment: pw.CrossAxisAlignment.start,
                       children: [
-                        pw.Text(
-                          'Scan to Pay',
-                          style: pw.TextStyle(
-                              fontSize: 9, color: grey),
-                        ),
+                        pw.Text('Scan to Pay', style: pw.TextStyle(fontSize: 9, color: grey)),
                         pw.SizedBox(height: 4),
-                        pw.Text(
-                          qrName ?? 'Academy QR',
-                          style: pw.TextStyle(
-                              fontSize: 11,
-                              fontWeight: pw.FontWeight.bold,
-                              color: dark),
-                        ),
+                        pw.Text(qrName ?? 'Academy QR',
+                            style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold, color: dark)),
                         if (qrDescription != null && qrDescription.isNotEmpty) ...[
                           pw.SizedBox(height: 4),
-                          pw.Text(
-                            qrDescription,
-                            style: pw.TextStyle(fontSize: 8, color: grey),
-                          ),
+                          pw.Text(qrDescription, style: pw.TextStyle(fontSize: 8, color: grey)),
                         ],
                         pw.SizedBox(height: 8),
                         pw.Text(
@@ -420,11 +407,11 @@ class FeePdfService {
             pw.SizedBox(height: 16),
           ],
 
-          // ── Footer note ──────────────────────────────────────────────────
+          // ── Footer ───────────────────────────────────────────────────────
           pw.Container(
             padding: const pw.EdgeInsets.all(10),
             decoration: pw.BoxDecoration(
-              color: lightBg,
+              color:        lightBg,
               borderRadius: const pw.BorderRadius.all(pw.Radius.circular(4)),
             ),
             child: pw.Text(
@@ -437,11 +424,10 @@ class FeePdfService {
       ),
     );
 
-    // Save and open
     final dir  = await getApplicationDocumentsDirectory();
     final safe = studentName.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
     final date = DateFormat('yyyyMMdd').format(DateTime.now());
-    final file = File('${dir.path}/${safe}_Fees_Receipt_$date.pdf');
+    final file = File('${dir.path}/${safe}_Fees_Statement_$date.pdf');
     await file.writeAsBytes(await pdf.save());
 
     if (context.mounted) {
@@ -457,72 +443,57 @@ class FeePdfService {
     }
   }
 
-  static pw.Expanded _summaryCell(String label, String value, PdfColor valueColor) =>
-      pw.Expanded(
-        child: pw.Column(
-          crossAxisAlignment: pw.CrossAxisAlignment.start,
-          children: [
-            pw.Text(label,
-                style: pw.TextStyle(fontSize: 7.5, color: PdfColor.fromHex('#64748B'))),
-            pw.SizedBox(height: 2),
-            pw.Text(value,
-                style: pw.TextStyle(
-                    fontSize: 11,
-                    fontWeight: pw.FontWeight.bold,
-                    color: valueColor)),
-          ],
-        ),
-      );
+  // ── Single Receipt PDF ────────────────────────────────────────────────────────
 
-  /// Generate a single-payment fee receipt PDF and open it.
-  ///
-  /// This generates a receipt for one specific payment (not the full statement).
-  /// [receipt] — the receipt map from the API (receipt_number, amount_paid, etc.)
-  /// [academyName] — for header branding.
+  /// Generates a single-payment receipt PDF and opens it.
+  /// File name: Receipt_RCP_2026_000001.pdf
   static Future<void> generateReceiptPdf({
     required BuildContext context,
     required String academyName,
     required Map<String, dynamic> receipt,
   }) async {
+    final theme    = await _theme();
     final primary  = PdfColor.fromHex('#1A56DB');
     final lightBg  = PdfColor.fromHex('#F1F5F9');
     final divider  = PdfColor.fromHex('#CBD5E1');
     final grey     = PdfColor.fromHex('#64748B');
     final dark     = PdfColor.fromHex('#1E293B');
-    final green700 = PdfColors.green700;
-    final orange700= PdfColors.orange700;
 
-    final labelStyle = pw.TextStyle(fontSize: 8, color: grey);
+    final labelStyle = pw.TextStyle(fontSize: 8,  color: grey);
     final valueStyle = pw.TextStyle(fontSize: 10, color: dark, fontWeight: pw.FontWeight.bold);
 
     final receiptNumber = receipt['receipt_number'] as String? ?? '—';
     final studentName   = '${receipt['first_name'] ?? ''} ${receipt['last_name'] ?? ''}'.trim();
-    final studentId     = receipt['student_id'] as String? ?? '';
+    final studentId     = receipt['student_id']  as String? ?? '';
     final parentName    = receipt['parent_name'] as String? ?? '—';
-    final mobile        = receipt['mobile'] as String? ?? '—';
+    final mobile        = receipt['mobile']      as String? ?? '—';
     final courseName    = receipt['course_name'] as String? ?? '';
     final subjectName   = receipt['subject_name'] as String?;
     final amountPaid    = double.tryParse(receipt['amount_paid']?.toString() ?? '') ?? 0;
-    final amountDue     = double.tryParse(receipt['amount_due']?.toString() ?? '') ?? 0;
-    final balance       = double.tryParse(receipt['balance']?.toString() ?? '') ?? (amountDue - amountPaid).clamp(0.0, double.infinity);
-    final paymentMode   = _parseMode(receipt['payment_mode'] as String?);
-    final generatedAt   = _fmtDate(receipt['generated_at']);
-    final dueDate       = _fmtDate(receipt['due_date']);
+    final amountDue     = double.tryParse(receipt['amount_due']?.toString()  ?? '') ?? 0;
+    final balance       = double.tryParse(receipt['balance']?.toString() ?? '')
+        ?? (amountDue - amountPaid).clamp(0.0, double.infinity);
+    // payment_mode is stored directly in fee_receipts; _parseMode handles both
+    // the direct value ("cash", "upi") and the older embedded remarks format.
+    final paymentMode = _parseMode(receipt['payment_mode'] as String?);
+    final generatedAt = _fmtDate(receipt['generated_at']);
+    final dueDate     = _fmtDate(receipt['due_date']);
 
     final pdf = pw.Document();
 
     pdf.addPage(
       pw.Page(
         pageFormat: PdfPageFormat.a4,
-        margin: const pw.EdgeInsets.all(40),
+        margin:     const pw.EdgeInsets.all(40),
+        theme:      theme,
         build: (ctx) => pw.Column(
           crossAxisAlignment: pw.CrossAxisAlignment.stretch,
           children: [
-            // ── Header ───────────────────────────────────────────────────────
+            // ── Header ──────────────────────────────────────────────────────
             pw.Container(
               padding: const pw.EdgeInsets.all(16),
               decoration: pw.BoxDecoration(
-                color: primary,
+                color:        primary,
                 borderRadius: const pw.BorderRadius.all(pw.Radius.circular(8)),
               ),
               child: pw.Row(
@@ -553,13 +524,13 @@ class FeePdfService {
             ),
             pw.SizedBox(height: 20),
 
-            // ── Student details box ───────────────────────────────────────────
+            // ── Student details ──────────────────────────────────────────────
             pw.Container(
               padding: const pw.EdgeInsets.all(14),
               decoration: pw.BoxDecoration(
-                color: lightBg,
+                color:        lightBg,
                 borderRadius: const pw.BorderRadius.all(pw.Radius.circular(6)),
-                border: pw.Border.all(color: divider),
+                border:       pw.Border.all(color: divider),
               ),
               child: pw.Column(
                 crossAxisAlignment: pw.CrossAxisAlignment.start,
@@ -569,29 +540,44 @@ class FeePdfService {
                   pw.SizedBox(height: 10),
                   pw.Row(
                     children: [
-                      pw.Expanded(child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-                        pw.Text('Student Name', style: labelStyle),
-                        pw.Text(studentName.isNotEmpty ? studentName : '—', style: valueStyle),
-                        pw.SizedBox(height: 8),
-                        pw.Text('Student ID', style: labelStyle),
-                        pw.Text(studentId.isNotEmpty ? studentId : '—', style: valueStyle),
-                      ])),
-                      pw.Expanded(child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-                        pw.Text('Parent / Guardian', style: labelStyle),
-                        pw.Text(parentName, style: valueStyle),
-                        pw.SizedBox(height: 8),
-                        pw.Text('Mobile', style: labelStyle),
-                        pw.Text(mobile, style: valueStyle),
-                      ])),
-                      pw.Expanded(child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-                        pw.Text('Course', style: labelStyle),
-                        pw.Text(courseName.isNotEmpty ? courseName : '—', style: valueStyle),
-                        if (subjectName != null && subjectName.isNotEmpty) ...[
-                          pw.SizedBox(height: 8),
-                          pw.Text('Subject', style: labelStyle),
-                          pw.Text(subjectName, style: valueStyle),
-                        ],
-                      ])),
+                      pw.Expanded(
+                        child: pw.Column(
+                          crossAxisAlignment: pw.CrossAxisAlignment.start,
+                          children: [
+                            pw.Text('Student Name', style: labelStyle),
+                            pw.Text(studentName.isNotEmpty ? studentName : '—', style: valueStyle),
+                            pw.SizedBox(height: 8),
+                            pw.Text('Student ID', style: labelStyle),
+                            pw.Text(studentId.isNotEmpty ? studentId : '—', style: valueStyle),
+                          ],
+                        ),
+                      ),
+                      pw.Expanded(
+                        child: pw.Column(
+                          crossAxisAlignment: pw.CrossAxisAlignment.start,
+                          children: [
+                            pw.Text('Parent / Guardian', style: labelStyle),
+                            pw.Text(parentName, style: valueStyle),
+                            pw.SizedBox(height: 8),
+                            pw.Text('Mobile', style: labelStyle),
+                            pw.Text(mobile, style: valueStyle),
+                          ],
+                        ),
+                      ),
+                      pw.Expanded(
+                        child: pw.Column(
+                          crossAxisAlignment: pw.CrossAxisAlignment.start,
+                          children: [
+                            pw.Text('Course', style: labelStyle),
+                            pw.Text(courseName.isNotEmpty ? courseName : '—', style: valueStyle),
+                            if (subjectName != null && subjectName.isNotEmpty) ...[
+                              pw.SizedBox(height: 8),
+                              pw.Text('Subject', style: labelStyle),
+                              pw.Text(subjectName, style: valueStyle),
+                            ],
+                          ],
+                        ),
+                      ),
                     ],
                   ),
                 ],
@@ -599,29 +585,29 @@ class FeePdfService {
             ),
             pw.SizedBox(height: 16),
 
-            // ── Payment details ───────────────────────────────────────────────
+            // ── Payment details ──────────────────────────────────────────────
             pw.Text('Payment Details',
                 style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold, color: dark)),
             pw.SizedBox(height: 8),
             pw.Container(
               decoration: pw.BoxDecoration(
-                border: pw.Border.all(color: divider),
+                border:       pw.Border.all(color: divider),
                 borderRadius: const pw.BorderRadius.all(pw.Radius.circular(6)),
               ),
               child: pw.Column(
                 children: [
-                  _receiptRow('Total Fee',   '₹${_fmt(amountDue)}',   primary, isHeader: true),
-                  _receiptRow('Amount Paid', '₹${_fmt(amountPaid)}',  green700),
-                  _receiptRow('Balance Due', '₹${_fmt(balance)}',
-                      balance > 0 ? orange700 : green700),
-                  _receiptRow('Payment Mode', paymentMode,              dark),
-                  _receiptRow('Due Date',     dueDate,                  dark),
+                  _receiptRow('Total Fee',    _fmt(amountDue),  primary,  isHeader: true),
+                  _receiptRow('Amount Paid',  _fmt(amountPaid), PdfColors.green700),
+                  _receiptRow('Balance Due',  _fmt(balance),
+                      balance > 0 ? PdfColors.orange700 : PdfColors.green700),
+                  _receiptRow('Payment Mode', paymentMode,      dark),
+                  _receiptRow('Due Date',     dueDate,          dark),
                 ],
               ),
             ),
             pw.SizedBox(height: 20),
 
-            // ── Payment status banner ─────────────────────────────────────────
+            // ── Status banner ────────────────────────────────────────────────
             pw.Container(
               padding: const pw.EdgeInsets.symmetric(vertical: 12, horizontal: 16),
               decoration: pw.BoxDecoration(
@@ -631,42 +617,39 @@ class FeePdfService {
                   color: balance <= 0 ? PdfColors.green700 : PdfColors.orange700,
                 ),
               ),
-              child: pw.Row(
-                mainAxisAlignment: pw.MainAxisAlignment.center,
-                children: [
-                  pw.Text(
-                    balance <= 0
-                        ? 'All fees cleared. Thank you!'
-                        : 'Remaining balance: ₹${_fmt(balance)}',
-                    style: pw.TextStyle(
-                      fontSize: 11,
-                      fontWeight: pw.FontWeight.bold,
-                      color: balance <= 0 ? PdfColors.green800 : PdfColors.orange800,
-                    ),
+              child: pw.Center(
+                child: pw.Text(
+                  balance <= 0
+                      ? 'All fees cleared. Thank you!'
+                      : 'Remaining balance: ${_fmt(balance)}',
+                  style: pw.TextStyle(
+                    fontSize: 11,
+                    fontWeight: pw.FontWeight.bold,
+                    color: balance <= 0 ? PdfColors.green800 : PdfColors.orange800,
                   ),
-                ],
+                ),
               ),
             ),
             pw.Spacer(),
 
-            // ── Footer ────────────────────────────────────────────────────────
+            // ── Footer ───────────────────────────────────────────────────────
             pw.Container(
               padding: const pw.EdgeInsets.all(10),
               decoration: pw.BoxDecoration(
-                color: lightBg,
+                color:        lightBg,
                 borderRadius: const pw.BorderRadius.all(pw.Radius.circular(4)),
               ),
               child: pw.Column(
                 children: [
                   pw.Text(
                     'This is a computer-generated receipt from $academyName.',
-                    style: pw.TextStyle(fontSize: 7, color: grey),
+                    style:     pw.TextStyle(fontSize: 7, color: grey),
                     textAlign: pw.TextAlign.center,
                   ),
                   pw.SizedBox(height: 3),
                   pw.Text(
                     'Receipt No: $receiptNumber  |  Generated: $generatedAt',
-                    style: pw.TextStyle(fontSize: 7, color: grey),
+                    style:     pw.TextStyle(fontSize: 7, color: grey),
                     textAlign: pw.TextAlign.center,
                   ),
                 ],
@@ -677,10 +660,10 @@ class FeePdfService {
       ),
     );
 
-    // Save and open
-    final dir    = await getApplicationDocumentsDirectory();
+    // File: Receipt_RCP_2026_000001.pdf
+    final dir      = await getApplicationDocumentsDirectory();
     final safeRcpt = receiptNumber.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
-    final file   = File('${dir.path}/Receipt_${safeRcpt}.pdf');
+    final file     = File('${dir.path}/Receipt_$safeRcpt.pdf');
     await file.writeAsBytes(await pdf.save());
 
     if (context.mounted) {
@@ -693,6 +676,23 @@ class FeePdfService {
     }
   }
 
+  // ── Shared widgets ────────────────────────────────────────────────────────────
+
+  static pw.Expanded _summaryCell(String label, String value, PdfColor valueColor) =>
+      pw.Expanded(
+        child: pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.Text(label,
+                style: pw.TextStyle(fontSize: 7.5, color: PdfColor.fromHex('#64748B'))),
+            pw.SizedBox(height: 2),
+            pw.Text(value,
+                style: pw.TextStyle(
+                    fontSize: 11, fontWeight: pw.FontWeight.bold, color: valueColor)),
+          ],
+        ),
+      );
+
   static pw.Widget _receiptRow(
     String label,
     String value,
@@ -701,7 +701,7 @@ class FeePdfService {
   }) {
     final bg = isHeader ? PdfColor.fromHex('#EFF6FF') : PdfColors.white;
     return pw.Container(
-      color: bg,
+      color:   bg,
       padding: const pw.EdgeInsets.symmetric(horizontal: 14, vertical: 9),
       child: pw.Row(
         mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
@@ -710,9 +710,9 @@ class FeePdfService {
               style: pw.TextStyle(fontSize: 9, color: PdfColor.fromHex('#64748B'))),
           pw.Text(value,
               style: pw.TextStyle(
-                  fontSize: 10,
+                  fontSize:   10,
                   fontWeight: isHeader ? pw.FontWeight.bold : pw.FontWeight.normal,
-                  color: valueColor)),
+                  color:      valueColor)),
         ],
       ),
     );

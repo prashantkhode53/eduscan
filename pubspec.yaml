@@ -42,3 +42,5 @@ flutter:
   uses-material-design: true
   assets:
     - assets/images/logo.png
+    - assets/fonts/NotoSans-Regular.ttf
+    - assets/fonts/NotoSans-Bold.ttf
