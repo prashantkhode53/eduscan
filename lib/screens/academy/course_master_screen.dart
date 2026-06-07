@@ -369,111 +369,121 @@ class _SubjectMasterSheetState extends State<_SubjectMasterSheet> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return DraggableScrollableSheet(
-      expand: false,
-      initialChildSize: 0.6,
-      minChildSize: 0.4,
-      maxChildSize: 0.92,
-      builder: (_, scrollCtrl) => Column(
-        children: [
-          // Handle + header
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 12, 8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Subjects',
-                          style: theme.textTheme.titleLarge
-                              ?.copyWith(fontWeight: FontWeight.bold)),
-                      Text(widget.courseName,
-                          style: TextStyle(
-                              fontSize: 13,
-                              color: theme.colorScheme.onSurface
-                                  .withValues(alpha: 0.6))),
-                    ],
-                  ),
+    final mq    = MediaQuery.of(context);
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // ── Drag handle ───────────────────────────────────────────────────
+        Center(
+          child: Container(
+            margin: const EdgeInsets.only(top: 12, bottom: 4),
+            width: 40, height: 4,
+            decoration: BoxDecoration(
+              color: theme.colorScheme.outlineVariant,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+        ),
+        // ── Header ────────────────────────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 12, 12, 8),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Subjects',
+                        style: theme.textTheme.titleLarge
+                            ?.copyWith(fontWeight: FontWeight.bold)),
+                    Text(widget.courseName,
+                        style: TextStyle(
+                            fontSize: 13,
+                            color: theme.colorScheme.onSurface
+                                .withValues(alpha: 0.6))),
+                  ],
                 ),
+              ),
+              FilledButton.icon(
+                onPressed: () => _showForm(),
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('Add Subject'),
+              ),
+            ],
+          ),
+        ),
+        const Divider(height: 1),
+        // ── Subject list ──────────────────────────────────────────────────
+        if (_loading)
+          const Padding(
+            padding: EdgeInsets.all(40),
+            child: Center(child: CircularProgressIndicator()),
+          )
+        else if (_subjects.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 40),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.subject_outlined,
+                    size: 48,
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.3)),
+                const SizedBox(height: 12),
+                const Text('No subjects yet'),
+                const SizedBox(height: 8),
                 FilledButton.icon(
                   onPressed: () => _showForm(),
-                  icon: const Icon(Icons.add, size: 18),
-                  label: const Text('Add Subject'),
+                  icon: const Icon(Icons.add),
+                  label: const Text('Add First Subject'),
                 ),
               ],
             ),
-          ),
-          const Divider(height: 1),
-          // Subject list
-          Expanded(
-            child: _loading
-                ? const Center(child: CircularProgressIndicator())
-                : _subjects.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.subject_outlined,
-                                size: 48,
-                                color: theme.colorScheme.onSurface
-                                    .withValues(alpha: 0.3)),
-                            const SizedBox(height: 12),
-                            const Text('No subjects yet'),
-                            const SizedBox(height: 8),
-                            FilledButton.icon(
-                              onPressed: () => _showForm(),
-                              icon: const Icon(Icons.add),
-                              label: const Text('Add First Subject'),
-                            ),
-                          ],
+          )
+        else
+          LimitedBox(
+            maxHeight: mq.size.height * 0.55,
+            child: ListView.builder(
+              shrinkWrap: true,
+              padding: const EdgeInsets.all(16),
+              itemCount: _subjects.length,
+              itemBuilder: (_, i) {
+                final s   = _subjects[i];
+                final fee = double.tryParse(s['default_fee']?.toString() ?? '0') ?? 0.0;
+                return Card(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  child: ListTile(
+                    leading: CircleAvatar(
+                      backgroundColor: theme.colorScheme.secondary
+                          .withValues(alpha: 0.1),
+                      child: Icon(Icons.science_outlined,
+                          color: theme.colorScheme.secondary, size: 20),
+                    ),
+                    title: Text(s['name'] as String,
+                        style: const TextStyle(fontWeight: FontWeight.w600)),
+                    subtitle: Text('₹${fee.toStringAsFixed(0)} default fee'),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.edit_outlined),
+                          onPressed: () => _showForm(subject: s),
                         ),
-                      )
-                    : ListView.builder(
-                        controller: scrollCtrl,
-                        padding: const EdgeInsets.all(16),
-                        itemCount: _subjects.length,
-                        itemBuilder: (_, i) {
-                          final s = _subjects[i];
-                          final fee = double.tryParse(
-                                  s['default_fee']?.toString() ?? '0') ??
-                              0.0;
-                          return Card(
-                            margin: const EdgeInsets.only(bottom: 8),
-                            child: ListTile(
-                              leading: CircleAvatar(
-                                backgroundColor: theme.colorScheme.secondary
-                                    .withValues(alpha: 0.1),
-                                child: Icon(Icons.science_outlined,
-                                    color: theme.colorScheme.secondary,
-                                    size: 20),
-                              ),
-                              title: Text(s['name'] as String,
-                                  style: const TextStyle(
-                                      fontWeight: FontWeight.w600)),
-                              subtitle: Text(
-                                  '₹${fee.toStringAsFixed(0)} default fee'),
-                              trailing: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  IconButton(
-                                    icon: const Icon(Icons.edit_outlined),
-                                    onPressed: () => _showForm(subject: s),
-                                  ),
-                                  IconButton(
-                                    icon: const Icon(Icons.delete_outline,
-                                        color: Colors.red),
-                                    onPressed: () => _delete(s),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          );
-                        },
-                      ),
+                        IconButton(
+                          icon: const Icon(Icons.delete_outline,
+                              color: Colors.red),
+                          onPressed: () => _delete(s),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
           ),
-        ],
-      ),
+        SizedBox(height: mq.padding.bottom + 16),
+      ],
     );
   }
 }
