@@ -673,7 +673,7 @@ class _FeeCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme   = Theme.of(context);
-    final status  = record['status'] as String;
+    final status  = (record['status'] as String?) ?? 'pending';
     final due     = double.tryParse(record['amount_due']?.toString()  ?? '0') ?? 0.0;
     final paid    = double.tryParse(record['amount_paid']?.toString() ?? '0') ?? 0.0;
     final balance = (due - paid).clamp(0.0, double.infinity);

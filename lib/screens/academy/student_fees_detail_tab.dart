@@ -1162,12 +1162,14 @@ String _mode(String? remarks) {
   if (remarks == null || remarks.isEmpty) return '—';
   final m = RegExp(r'Mode:\s*([a-zA-Z_ ]+)').firstMatch(remarks);
   if (m == null) return '—';
-  switch (m.group(1)!.trim().toLowerCase()) {
+  final mode = (m.group(1) ?? '').trim();
+  if (mode.isEmpty) return '—';
+  switch (mode.toLowerCase()) {
     case 'cash':          return 'Cash';
     case 'upi':           return 'UPI';
     case 'bank_transfer': return 'Bank Transfer';
     case 'cheque':        return 'Cheque';
-    default:              return m.group(1)!.trim();
+    default:              return mode;
   }
 }
 

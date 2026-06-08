@@ -452,6 +452,7 @@ class FeePdfService {
     required String academyName,
     required Map<String, dynamic> receipt,
   }) async {
+    debugPrint('[PDF] generateReceiptPdf start');
     final theme    = await _theme();
     final primary  = PdfColor.fromHex('#1A56DB');
     final lightBg  = PdfColor.fromHex('#F1F5F9');
@@ -477,6 +478,9 @@ class FeePdfService {
     // the direct value ("cash", "upi") and the older embedded remarks format.
     final paymentMode = _parseMode(receipt['payment_mode'] as String?);
     final generatedAt = _fmtDate(receipt['generated_at']);
+
+    debugPrint('[PDF] receipt=$receiptNumber student=$studentName '
+        'paid=$amountPaid due=$amountDue balance=$balance mode=$paymentMode');
     final dueDate     = _fmtDate(receipt['due_date']);
 
     final pdf = pw.Document();
@@ -630,7 +634,7 @@ class FeePdfService {
                 ),
               ),
             ),
-            pw.Spacer(),
+            pw.Expanded(child: pw.SizedBox()),
 
             // ── Footer ───────────────────────────────────────────────────────
             pw.Container(
@@ -664,7 +668,17 @@ class FeePdfService {
     final dir      = await getApplicationDocumentsDirectory();
     final safeRcpt = receiptNumber.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
     final file     = File('${dir.path}/Receipt_$safeRcpt.pdf');
-    await file.writeAsBytes(await pdf.save());
+
+    debugPrint('[PDF] Saving to ${file.path}');
+    late final Uint8List bytes;
+    try {
+      bytes = await pdf.save();
+    } catch (e, st) {
+      debugPrint('[PDF] pdf.save() failed: $e\n$st');
+      throw Exception('PDF generation failed — please try again.');
+    }
+    await file.writeAsBytes(bytes);
+    debugPrint('[PDF] Wrote ${bytes.length} bytes');
 
     if (context.mounted) {
       final result = await OpenFilex.open(file.path);
