@@ -99,6 +99,52 @@ export async function getAcademyStats(
           `SELECT COALESCE(SUM(amount_paid), 0) as total FROM fee_records`),
       ]);
 
+    // Admin login status — resilient: falls back to no lock fields if reconcile
+    // hasn't added locked_at / locked_by columns yet (PostgreSQL error 42703)
+    let adminLoginStatus: Record<string, unknown> | null = null;
+    try {
+      const u = await academyQueryOne<{
+        id: string; name: string; email: string;
+        failed_attempts: number; is_active: boolean;
+        locked_at: string | null; locked_by: string | null; last_login: string | null;
+      }>(slug, `SELECT id, name, email, failed_attempts, is_active,
+                       locked_at, locked_by, last_login
+                FROM users WHERE role = 'admin' LIMIT 1`);
+      if (u) {
+        adminLoginStatus = {
+          id:              u.id,
+          name:            u.name,
+          email:           u.email,
+          failed_attempts: u.failed_attempts,
+          is_locked:       !u.is_active,
+          locked_at:       u.locked_at,
+          locked_by:       u.locked_by,
+          last_login:      u.last_login,
+        };
+      }
+    } catch {
+      // locked_at / locked_by columns not yet present — reconcile pending
+      try {
+        const u = await academyQueryOne<{
+          id: string; name: string; email: string;
+          failed_attempts: number; is_active: boolean; last_login: string | null;
+        }>(slug, `SELECT id, name, email, failed_attempts, is_active, last_login
+                  FROM users WHERE role = 'admin' LIMIT 1`);
+        if (u) {
+          adminLoginStatus = {
+            id:              u.id,
+            name:            u.name,
+            email:           u.email,
+            failed_attempts: u.failed_attempts,
+            is_locked:       !u.is_active,
+            locked_at:       null,
+            locked_by:       null,
+            last_login:      u.last_login,
+          };
+        }
+      } catch { /* non-fatal */ }
+    }
+
     res.json({
       success: true,
       data: {
@@ -112,6 +158,7 @@ export async function getAcademyStats(
           attendance_records: parseInt(attendance?.count ?? '0') || 0,
           fee_collected:      parseFloat(fees?.total    ?? '0') || 0,
         },
+        admin_login_status: adminLoginStatus,
       },
     });
   } catch (err) { next(err); }

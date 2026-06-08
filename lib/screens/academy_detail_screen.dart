@@ -16,9 +16,8 @@ class AcademyDetailScreen extends StatefulWidget {
 class _AcademyDetailScreenState extends State<AcademyDetailScreen> {
   Map<String, dynamic>? _stats;
   Map<String, dynamic>? _loginStatus;
-  bool _loading           = true;
-  bool _loginStatusLoading = false;
-  bool _changed           = false; // true when caller should refresh list
+  bool _loading = true;
+  bool _changed = false; // true when caller should refresh list
 
   late Map<String, dynamic> _academy;
 
@@ -27,7 +26,6 @@ class _AcademyDetailScreenState extends State<AcademyDetailScreen> {
     super.initState();
     _academy = Map.from(widget.academy);
     _loadStats();
-    _loadLoginStatus();
   }
 
   Future<void> _loadStats() async {
@@ -38,9 +36,10 @@ class _AcademyDetailScreenState extends State<AcademyDetailScreen> {
           _academy['slug'] as String);
       if (!mounted) return;
       setState(() {
-        _stats   = data['stats'] as Map<String, dynamic>?;
-        _academy = (data['academy'] as Map<String, dynamic>?) ?? _academy;
-        _loading = false;
+        _stats       = data['stats'] as Map<String, dynamic>?;
+        _academy     = (data['academy'] as Map<String, dynamic>?) ?? _academy;
+        _loginStatus = data['admin_login_status'] as Map<String, dynamic>?;
+        _loading     = false;
       });
     } catch (e) {
       if (!mounted) return;
@@ -49,22 +48,6 @@ class _AcademyDetailScreenState extends State<AcademyDetailScreen> {
         content: Text(e.toString().replaceFirst('Exception: ', '')),
         backgroundColor: Colors.red,
       ));
-    }
-  }
-
-  Future<void> _loadLoginStatus() async {
-    if (!mounted) return;
-    setState(() => _loginStatusLoading = true);
-    try {
-      final data = await SuperAdminApiService.getAcademyLoginStatus(_slug);
-      if (!mounted) return;
-      setState(() {
-        _loginStatus        = data;
-        _loginStatusLoading = false;
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _loginStatusLoading = false);
     }
   }
 
@@ -141,7 +124,7 @@ class _AcademyDetailScreenState extends State<AcademyDetailScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Account unlocked'), backgroundColor: Colors.green));
-      _loadLoginStatus();
+      _loadStats();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -157,7 +140,7 @@ class _AcademyDetailScreenState extends State<AcademyDetailScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Login attempts reset'), backgroundColor: Colors.green));
-      _loadLoginStatus();
+      _loadStats();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -192,7 +175,7 @@ class _AcademyDetailScreenState extends State<AcademyDetailScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Account blocked'), backgroundColor: Colors.orange));
-      _loadLoginStatus();
+      _loadStats();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -545,7 +528,7 @@ class _AcademyDetailScreenState extends State<AcademyDetailScreen> {
   }
 
   Widget _buildAccountStatusCard(ThemeData theme) {
-    if (_loginStatusLoading) {
+    if (_loading) {
       return const Card(
         child: Padding(
           padding: EdgeInsets.all(16),
