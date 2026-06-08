@@ -226,10 +226,19 @@ class _ParentReceiptCardState extends State<_ParentReceiptCard> {
 
   Future<void> _downloadPdf() async {
     if (_generatingPdf) return;
+    final id = widget.receipt['id'] as String?;
+    if (id == null || id.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Receipt not found.'), backgroundColor: Colors.red));
+      }
+      return;
+    }
     setState(() => _generatingPdf = true);
+    print('[Receipt] Download Started');
+    print('[Receipt] Receipt No: ${widget.receipt['receipt_number'] ?? 'unknown'}');
     try {
-      final detail = await ParentApiService.getReceiptById(
-          widget.receipt['id'] as String);
+      final detail = await ParentApiService.getReceiptById(id);
       if (!mounted) return;
       final user = context.read<ParentAuthProvider>().user;
       await FeePdfService.generateReceiptPdf(
@@ -237,10 +246,13 @@ class _ParentReceiptCardState extends State<_ParentReceiptCard> {
         academyName: user?.academyName ?? 'Academy',
         receipt: detail,
       );
+      print('[Receipt] PDF Generated Successfully');
     } catch (e) {
+      print('[Receipt] Validation Failed: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(e.toString()), backgroundColor: Colors.red));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(e.toString().replaceFirst('Exception: ', '')),
+            backgroundColor: Colors.red));
       }
     } finally {
       if (mounted) setState(() => _generatingPdf = false);
@@ -350,7 +362,7 @@ class _ParentReceiptCardState extends State<_ParentReceiptCard> {
                       width: 16, height: 16,
                       child: CircularProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.download_outlined, size: 18),
-              label: const Text('Download Receipt PDF'),
+              label: Text(_generatingPdf ? 'Generating Receipt...' : 'Download Receipt PDF'),
               style: FilledButton.styleFrom(
                   minimumSize: const Size.fromHeight(42)),
             ),

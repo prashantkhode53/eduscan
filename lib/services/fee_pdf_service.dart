@@ -43,7 +43,7 @@ class FeePdfService {
   static String _parseMode(String? raw) {
     if (raw == null || raw.trim().isEmpty) return '-';
     final embedded = RegExp(r'Mode:\s*([a-zA-Z_ ]+)').firstMatch(raw);
-    final mode     = embedded != null ? embedded.group(1)!.trim() : raw.trim();
+    final mode     = embedded != null ? (embedded.group(1) ?? raw.trim()).trim() : raw.trim();
     switch (mode.toLowerCase()) {
       case 'cash':          return 'Cash';
       case 'upi':           return 'UPI';

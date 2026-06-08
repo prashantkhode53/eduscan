@@ -81,15 +81,13 @@ class _CourseMasterScreenState extends State<CourseMasterScreen> {
   }
 
   Future<void> _showSubjects(Map<String, dynamic> course) async {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (_) => _SubjectMasterSheet(
-        courseId:   course['id'] as String,
-        courseName: course['name'] as String,
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => _SubjectMasterPage(
+          courseId:   course['id'] as String,
+          courseName: course['name'] as String,
+        ),
       ),
     );
   }
@@ -287,22 +285,22 @@ class _CourseMasterScreenState extends State<CourseMasterScreen> {
   }
 }
 
-// ── Subject master bottom sheet ───────────────────────────────────────────────
+// ── Subject master full-screen page ──────────────────────────────────────────
 
-class _SubjectMasterSheet extends StatefulWidget {
+class _SubjectMasterPage extends StatefulWidget {
   final String courseId;
   final String courseName;
 
-  const _SubjectMasterSheet({
+  const _SubjectMasterPage({
     required this.courseId,
     required this.courseName,
   });
 
   @override
-  State<_SubjectMasterSheet> createState() => _SubjectMasterSheetState();
+  State<_SubjectMasterPage> createState() => _SubjectMasterPageState();
 }
 
-class _SubjectMasterSheetState extends State<_SubjectMasterSheet> {
+class _SubjectMasterPageState extends State<_SubjectMasterPage> {
   List<Map<String, dynamic>> _subjects = [];
   bool _loading = true;
 
@@ -330,7 +328,6 @@ class _SubjectMasterSheetState extends State<_SubjectMasterSheet> {
   }
 
   Future<void> _showForm({Map<String, dynamic>? subject}) async {
-    // Build list of existing names (lowercase), excluding the subject being edited
     final existingNames = _subjects
         .where((s) => s['id'] != subject?['id'])
         .map((s) => (s['name'] as String).toLowerCase())
@@ -352,7 +349,8 @@ class _SubjectMasterSheetState extends State<_SubjectMasterSheet> {
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('Delete Subject'),
-        content: Text('Delete "${subject['name']}"? Students enrolled in this subject will be affected.'),
+        content: Text(
+            'Delete "${subject['name']}"? Students enrolled in this subject will be affected.'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context, false),
@@ -381,128 +379,102 @@ class _SubjectMasterSheetState extends State<_SubjectMasterSheet> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final mq    = MediaQuery.of(context);
-
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // ── Drag handle ───────────────────────────────────────────────────
-        Center(
-          child: Container(
-            margin: const EdgeInsets.only(top: 12, bottom: 4),
-            width: 40, height: 4,
-            decoration: BoxDecoration(
-              color: theme.colorScheme.outlineVariant,
-              borderRadius: BorderRadius.circular(2),
+    return Scaffold(
+      appBar: AppBar(
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(widget.courseName,
+                style: const TextStyle(fontWeight: FontWeight.bold)),
+            Text(
+              'Subjects',
+              style: TextStyle(
+                fontSize: 12,
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+              ),
             ),
-          ),
+          ],
         ),
-        // ── Header ────────────────────────────────────────────────────────
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 12, 12, 8),
-          child: Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      widget.courseName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.titleLarge
-                          ?.copyWith(fontWeight: FontWeight.bold),
-                    ),
-                    Text(
-                      'Subjects',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.add),
+            tooltip: 'Add Subject',
+            onPressed: () => _showForm(),
+          ),
+        ],
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : _subjects.isEmpty
+              ? Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.subject_outlined,
+                          size: 64,
+                          color: theme.colorScheme.onSurface
+                              .withValues(alpha: 0.3)),
+                      const SizedBox(height: 12),
+                      const Text('No subjects yet'),
+                      const SizedBox(height: 8),
+                      FilledButton.icon(
+                        onPressed: () => _showForm(),
+                        icon: const Icon(Icons.add),
+                        label: const Text('Add First Subject'),
                       ),
-                    ),
-                  ],
-                ),
-              ),
-              FilledButton.icon(
-                onPressed: () => _showForm(),
-                icon: const Icon(Icons.add, size: 18),
-                label: const Text('Add Subject'),
-              ),
-            ],
-          ),
-        ),
-        const Divider(height: 1),
-        // ── Subject list ──────────────────────────────────────────────────
-        if (_loading)
-          const Padding(
-            padding: EdgeInsets.all(40),
-            child: Center(child: CircularProgressIndicator()),
-          )
-        else if (_subjects.isEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 40),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.subject_outlined,
-                    size: 48,
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.3)),
-                const SizedBox(height: 12),
-                const Text('No subjects yet'),
-                const SizedBox(height: 8),
-                FilledButton.icon(
-                  onPressed: () => _showForm(),
-                  icon: const Icon(Icons.add),
-                  label: const Text('Add First Subject'),
-                ),
-              ],
-            ),
-          )
-        else
-          LimitedBox(
-            maxHeight: mq.size.height * 0.55,
-            child: ListView.builder(
-              shrinkWrap: true,
-              padding: const EdgeInsets.all(16),
-              itemCount: _subjects.length,
-              itemBuilder: (_, i) {
-                final s   = _subjects[i];
-                final fee = double.tryParse(s['default_fee']?.toString() ?? '0') ?? 0.0;
-                return Card(
-                  margin: const EdgeInsets.only(bottom: 8),
-                  child: ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor: theme.colorScheme.secondary
-                          .withValues(alpha: 0.1),
-                      child: Icon(Icons.science_outlined,
-                          color: theme.colorScheme.secondary, size: 20),
-                    ),
-                    title: Text(s['name'] as String,
-                        style: const TextStyle(fontWeight: FontWeight.w600)),
-                    subtitle: Text('₹${fee.toStringAsFixed(0)} default fee'),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        IconButton(
-                          icon: const Icon(Icons.edit_outlined),
-                          onPressed: () => _showForm(subject: s),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.delete_outline,
-                              color: Colors.red),
-                          onPressed: () => _delete(s),
-                        ),
-                      ],
-                    ),
+                    ],
                   ),
-                );
-              },
-            ),
-          ),
-        SizedBox(height: mq.padding.bottom + 16),
-      ],
+                )
+              : RefreshIndicator(
+                  onRefresh: _load,
+                  child: ListView.separated(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: _subjects.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    itemBuilder: (_, i) {
+                      final s   = _subjects[i];
+                      final fee =
+                          double.tryParse(s['default_fee']?.toString() ?? '0') ??
+                              0.0;
+                      return Card(
+                        child: ListTile(
+                          leading: CircleAvatar(
+                            backgroundColor: theme.colorScheme.secondary
+                                .withValues(alpha: 0.1),
+                            child: Icon(Icons.science_outlined,
+                                color: theme.colorScheme.secondary, size: 20),
+                          ),
+                          title: Text(s['name'] as String,
+                              style:
+                                  const TextStyle(fontWeight: FontWeight.w600)),
+                          subtitle:
+                              Text('₹${fee.toStringAsFixed(0)} default fee'),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                icon: const Icon(Icons.edit_outlined),
+                                onPressed: () => _showForm(subject: s),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.delete_outline,
+                                    color: Colors.red),
+                                onPressed: () => _delete(s),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+      floatingActionButton: _subjects.isNotEmpty
+          ? FloatingActionButton.extended(
+              onPressed: () => _showForm(),
+              icon: const Icon(Icons.add),
+              label: const Text('Add Subject'),
+            )
+          : null,
     );
   }
 }

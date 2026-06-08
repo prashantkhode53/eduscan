@@ -426,18 +426,32 @@ class _ReceiptAdminCardState extends State<_ReceiptAdminCard> {
 
   Future<void> _downloadPdf() async {
     if (_generatingPdf) return;
+    final id = widget.receipt['id'] as String?;
+    if (id == null || id.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Receipt not found.'), backgroundColor: Colors.red));
+      }
+      return;
+    }
     setState(() => _generatingPdf = true);
+    print('[Receipt] Download Started');
+    print('[Receipt] Receipt No: ${widget.receipt['receipt_number'] ?? 'unknown'}');
+    print('[Receipt] Student Id: ${widget.receipt['student_id'] ?? 'unknown'}');
     try {
-      final detail = await AcademyApiService.getReceipt(widget.receipt['id'] as String);
+      final detail = await AcademyApiService.getReceipt(id);
       if (!mounted) return;
       final academyName =
           context.read<AuthProvider>().academyUser?.academyName ?? 'Academy';
       await FeePdfService.generateReceiptPdf(
           context: context, academyName: academyName, receipt: detail);
+      print('[Receipt] PDF Generated Successfully');
     } catch (e) {
+      print('[Receipt] Validation Failed: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(e.toString()), backgroundColor: Colors.red));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(e.toString().replaceFirst('Exception: ', '')),
+            backgroundColor: Colors.red));
       }
     } finally {
       if (mounted) setState(() => _generatingPdf = false);
@@ -446,19 +460,35 @@ class _ReceiptAdminCardState extends State<_ReceiptAdminCard> {
 
   Future<void> _resend() async {
     if (_resending) return;
-    setState(() => _resending = true);
-    try {
-      final res = await AcademyApiService.resendReceipt(widget.receipt['id'] as String);
+    final id = widget.receipt['id'] as String?;
+    if (id == null || id.isEmpty) {
       if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Receipt not found.'), backgroundColor: Colors.red));
+      }
+      return;
+    }
+    setState(() => _resending = true);
+    print('[Receipt] Resend Started');
+    print('[Receipt] Receipt No: ${widget.receipt['receipt_number'] ?? 'unknown'}');
+    try {
+      final res = await AcademyApiService.resendReceipt(id);
+      print('[Receipt] Notification Sent');
+      if (mounted) {
+        final sent = res['sent'] as bool? ?? false;
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(res['message']?.toString() ?? 'Notification sent'),
-          backgroundColor: Colors.green,
+          content: Text(sent
+              ? 'Notification sent to parent'
+              : 'Could not send — no device registered for this student'),
+          backgroundColor: sent ? Colors.green : Colors.orange,
         ));
       }
     } catch (e) {
+      print('[Receipt] Validation Failed: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(e.toString()), backgroundColor: Colors.red));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(e.toString().replaceFirst('Exception: ', '')),
+            backgroundColor: Colors.red));
       }
     } finally {
       if (mounted) setState(() => _resending = false);
@@ -551,7 +581,10 @@ class _ReceiptAdminCardState extends State<_ReceiptAdminCard> {
                             width: 14, height: 14,
                             child: CircularProgressIndicator(strokeWidth: 2))
                         : const Icon(Icons.picture_as_pdf_outlined, size: 16),
-                    label: const Text('PDF', style: TextStyle(fontSize: 12)),
+                    label: Text(
+                      _generatingPdf ? 'Generating...' : 'PDF',
+                      style: const TextStyle(fontSize: 12),
+                    ),
                     style: OutlinedButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 6)),
                   ),
@@ -565,7 +598,10 @@ class _ReceiptAdminCardState extends State<_ReceiptAdminCard> {
                             width: 14, height: 14,
                             child: CircularProgressIndicator(strokeWidth: 2))
                         : const Icon(Icons.send_outlined, size: 16),
-                    label: const Text('Resend', style: TextStyle(fontSize: 12)),
+                    label: Text(
+                      _resending ? 'Sending...' : 'Resend',
+                      style: const TextStyle(fontSize: 12),
+                    ),
                     style: OutlinedButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 6)),
                   ),
@@ -879,18 +915,24 @@ class _FeeCollectionSheetState extends State<FeeCollectionSheet> {
   }
 
   Future<void> _downloadReceipt() async {
-    if (_receiptId == null) return;
+    final id = _receiptId;
+    if (id == null || id.isEmpty) return;
+    print('[Receipt] Download Started');
+    print('[Receipt] Receipt No: ${_receiptNumber ?? 'unknown'}');
     try {
-      final detail = await AcademyApiService.getReceipt(_receiptId!);
+      final detail = await AcademyApiService.getReceipt(id);
       if (!mounted) return;
       final academyName =
           context.read<AuthProvider>().academyUser?.academyName ?? 'Academy';
       await FeePdfService.generateReceiptPdf(
           context: context, academyName: academyName, receipt: detail);
+      print('[Receipt] PDF Generated Successfully');
     } catch (e) {
+      print('[Receipt] Validation Failed: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(e.toString()), backgroundColor: Colors.red));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(e.toString().replaceFirst('Exception: ', '')),
+            backgroundColor: Colors.red));
       }
     }
   }
