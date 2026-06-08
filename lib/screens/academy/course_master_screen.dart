@@ -90,6 +90,7 @@ class _CourseMasterScreenState extends State<CourseMasterScreen> {
         ),
       ),
     );
+    if (mounted) _loadCourses(); // refresh subject count & total fees
   }
 
   Future<void> _delete(Map<String, dynamic> course) async {
@@ -195,10 +196,11 @@ class _CourseMasterScreenState extends State<CourseMasterScreen> {
                           separatorBuilder: (_, __) =>
                               const SizedBox(height: 8),
                           itemBuilder: (_, i) {
-                            final c = _courses[i];
-                            final count = c['student_count'] ?? 0;
-                            final yearName =
-                                c['academic_year_name'] as String?;
+                            final c            = _courses[i];
+                            final count        = (c['student_count'] as num?)?.toInt() ?? 0;
+                            final subjectCount = (c['subject_count'] as num?)?.toInt() ?? 0;
+                            final totalFee     = double.tryParse(c['total_subject_fee']?.toString() ?? '0') ?? 0.0;
+                            final yearName     = c['academic_year_name'] as String?;
                             return Card(
                               child: ListTile(
                                 leading: CircleAvatar(
@@ -234,9 +236,8 @@ class _CourseMasterScreenState extends State<CourseMasterScreen> {
                                       ),
                                     Text(
                                       [
-                                        if (c['subject'] != null)
-                                          c['subject'],
-                                        '₹${c['default_fee']}/${c['schedule']}',
+                                        '$subjectCount subject${subjectCount == 1 ? '' : 's'}',
+                                        '₹${totalFee.toStringAsFixed(0)} total',
                                         '$count student${count == 1 ? '' : 's'}',
                                       ].join(' · '),
                                       style: const TextStyle(fontSize: 12),
@@ -684,9 +685,7 @@ class _CourseForm extends StatefulWidget {
 class _CourseFormState extends State<_CourseForm> {
   final _formKey       = GlobalKey<FormState>();
   final _nameCtrl      = TextEditingController();
-  final _subjectCtrl   = TextEditingController();
   final _descCtrl      = TextEditingController();
-  final _feeCtrl       = TextEditingController();
   final _durationCtrl  = TextEditingController();
   String  _schedule    = 'monthly';
   String? _academicYearId;
@@ -700,9 +699,7 @@ class _CourseFormState extends State<_CourseForm> {
     final c = widget.course;
     if (c != null) {
       _nameCtrl.text     = c['name'] ?? '';
-      _subjectCtrl.text  = c['subject'] ?? '';
       _descCtrl.text     = c['description'] ?? '';
-      _feeCtrl.text      = c['default_fee']?.toString() ?? '0';
       _durationCtrl.text = c['duration_months']?.toString() ?? '';
       _schedule          = c['schedule'] ?? 'monthly';
       _academicYearId    = c['academic_year_id'] as String?;
@@ -713,8 +710,7 @@ class _CourseFormState extends State<_CourseForm> {
 
   @override
   void dispose() {
-    _nameCtrl.dispose(); _subjectCtrl.dispose(); _descCtrl.dispose();
-    _feeCtrl.dispose(); _durationCtrl.dispose();
+    _nameCtrl.dispose(); _descCtrl.dispose(); _durationCtrl.dispose();
     super.dispose();
   }
 
@@ -723,11 +719,9 @@ class _CourseFormState extends State<_CourseForm> {
     setState(() => _saving = true);
     try {
       final body = <String, dynamic>{
-        'name':            _nameCtrl.text.trim(),
-        'subject':         _subjectCtrl.text.trim(),
-        'description':     _descCtrl.text.trim(),
-        'default_fee':     double.tryParse(_feeCtrl.text) ?? 0,
-        'schedule':        _schedule,
+        'name':             _nameCtrl.text.trim(),
+        'description':      _descCtrl.text.trim(),
+        'schedule':         _schedule,
         'academic_year_id': _academicYearId,
         if (_durationCtrl.text.isNotEmpty)
           'duration_months': int.tryParse(_durationCtrl.text),
@@ -806,36 +800,17 @@ class _CourseFormState extends State<_CourseForm> {
               children: [
                 Expanded(
                   child: TextFormField(
-                    controller: _subjectCtrl,
-                    decoration: const InputDecoration(
-                        labelText: 'Subject', border: OutlineInputBorder()),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: TextFormField(
                     controller: _durationCtrl,
                     decoration: const InputDecoration(
                         labelText: 'Duration (months)',
                         border: OutlineInputBorder()),
                     keyboardType: TextInputType.number,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: TextFormField(
-                    controller: _feeCtrl,
-                    decoration: const InputDecoration(
-                        labelText: 'Default Fee (₹) *',
-                        prefixText: '₹ ',
-                        border: OutlineInputBorder()),
-                    keyboardType: TextInputType.number,
-                    validator: (v) =>
-                        v == null || v.isEmpty ? 'Required' : null,
+                    validator: (v) {
+                      if (v != null && v.isNotEmpty && int.tryParse(v) == null) {
+                        return 'Enter a valid number';
+                      }
+                      return null;
+                    },
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -843,20 +818,19 @@ class _CourseFormState extends State<_CourseForm> {
                   child: DropdownButtonFormField<String>(
                     value: _schedule,
                     decoration: const InputDecoration(
-                        labelText: 'Schedule', border: OutlineInputBorder()),
+                        labelText: 'Schedule *', border: OutlineInputBorder()),
                     items: const [
-                      DropdownMenuItem(
-                          value: 'monthly', child: Text('Monthly')),
-                      DropdownMenuItem(
-                          value: 'quarterly', child: Text('Quarterly')),
-                      DropdownMenuItem(
-                          value: 'onetime', child: Text('One-time')),
+                      DropdownMenuItem(value: 'monthly',   child: Text('Monthly')),
+                      DropdownMenuItem(value: 'quarterly', child: Text('Quarterly')),
+                      DropdownMenuItem(value: 'onetime',   child: Text('One-time')),
                     ],
                     onChanged: (v) => setState(() => _schedule = v!),
                   ),
                 ),
               ],
             ),
+            const SizedBox(height: 12),
+            _SubjectInfoTile(course: widget.course),
             const SizedBox(height: 12),
             TextFormField(
               controller: _descCtrl,
@@ -875,6 +849,75 @@ class _CourseFormState extends State<_CourseForm> {
                       child: CircularProgressIndicator(
                           strokeWidth: 2, color: Colors.white))
                   : Text(_isEdit ? 'Save Changes' : 'Create Course'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Read-only subject count / total fee tile ──────────────────────────────────
+
+class _SubjectInfoTile extends StatelessWidget {
+  final Map<String, dynamic>? course;
+  const _SubjectInfoTile({this.course});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme        = Theme.of(context);
+    final subjectCount = (course?['subject_count'] as num?)?.toInt() ?? 0;
+    final totalFee     = double.tryParse(course?['total_subject_fee']?.toString() ?? '0') ?? 0.0;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+            color: theme.colorScheme.outline.withValues(alpha: 0.3)),
+      ),
+      child: IntrinsicHeight(
+        child: Row(
+          children: [
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Subjects Configured',
+                        style: TextStyle(
+                            fontSize: 11,
+                            color: theme.colorScheme.onSurface.withValues(alpha: 0.6))),
+                    const SizedBox(height: 4),
+                    Text('$subjectCount',
+                        style: theme.textTheme.headlineSmall
+                            ?.copyWith(fontWeight: FontWeight.bold)),
+                  ],
+                ),
+              ),
+            ),
+            VerticalDivider(
+                width: 1,
+                color: theme.colorScheme.outline.withValues(alpha: 0.3)),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Total Subject Fees',
+                        style: TextStyle(
+                            fontSize: 11,
+                            color: theme.colorScheme.onSurface.withValues(alpha: 0.6))),
+                    const SizedBox(height: 4),
+                    Text('₹${totalFee.toStringAsFixed(0)}',
+                        style: theme.textTheme.headlineSmall?.copyWith(
+                            fontWeight: FontWeight.bold,
+                            color: theme.colorScheme.primary)),
+                  ],
+                ),
+              ),
             ),
           ],
         ),

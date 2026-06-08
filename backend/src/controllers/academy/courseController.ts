@@ -15,6 +15,8 @@ interface CourseRow {
   is_active: boolean;
   created_at: string;
   student_count?: number;
+  subject_count?: number;
+  total_subject_fee?: number;
 }
 
 // ── GET /api/academy/courses ──────────────────────────────────────────────────
@@ -30,13 +32,16 @@ export async function listCourses(
       academySlug,
       `SELECT c.*,
               ay.academic_year_name,
-              COUNT(sc.id) FILTER (WHERE sc.status = 'active') AS student_count
+              (SELECT COUNT(*) FROM student_courses sc
+               WHERE sc.course_id = c.id AND sc.status = 'active')  AS student_count,
+              (SELECT COUNT(*) FROM subjects sub
+               WHERE sub.course_id = c.id AND sub.is_active = TRUE)  AS subject_count,
+              (SELECT COALESCE(SUM(sub.default_fee), 0) FROM subjects sub
+               WHERE sub.course_id = c.id AND sub.is_active = TRUE)  AS total_subject_fee
        FROM courses c
        LEFT JOIN academic_years ay ON ay.id = c.academic_year_id
-       LEFT JOIN student_courses sc ON sc.course_id = c.id
        WHERE c.is_active = TRUE
          AND ($1::uuid IS NULL OR c.academic_year_id = $1::uuid)
-       GROUP BY c.id, ay.academic_year_name
        ORDER BY c.name`,
       [academic_year_id || null]
     );
