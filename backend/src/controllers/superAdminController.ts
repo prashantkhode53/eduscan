@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import bcrypt from 'bcrypt';
-import { sharedPool, academyQuery, academyQueryOne } from '../db/poolManager';
+import { sharedPool, academyQuery, academyQueryOne, academyExec } from '../db/poolManager';
 import { AppError } from '../middleware/errorHandler';
 
 // ── Internal: audit log ───────────────────────────────────────────────────────
@@ -300,5 +300,128 @@ export async function deleteAcademy(
     );
 
     res.json({ success: true, message: `Academy "${ac[0].name}" permanently deleted` });
+  } catch (err) { next(err); }
+}
+
+// ── GET /api/super-admin/academies/:slug/login-status ─────────────────────────
+
+export async function getAcademyLoginStatus(
+  req: Request, res: Response, next: NextFunction
+): Promise<void> {
+  try {
+    const { slug } = req.params;
+    const { rows: ac } = await sharedPool.query(
+      `SELECT id FROM academies WHERE slug = $1`, [slug]
+    );
+    if (!ac.length) return next(new AppError('Academy not found', 404));
+
+    const user = await academyQueryOne<{
+      id: string; name: string; email: string;
+      failed_attempts: number; is_active: boolean;
+      locked_at: string | null; locked_by: string | null; last_login: string | null;
+    }>(
+      slug,
+      `SELECT id, name, email, failed_attempts, is_active, locked_at, locked_by, last_login
+       FROM users WHERE role = 'admin' LIMIT 1`
+    );
+
+    if (!user) return next(new AppError('No admin user found for this academy', 404));
+
+    res.json({
+      success: true,
+      data: {
+        id:              user.id,
+        name:            user.name,
+        email:           user.email,
+        failed_attempts: user.failed_attempts,
+        is_locked:       !user.is_active,
+        locked_at:       user.locked_at,
+        locked_by:       user.locked_by,
+        last_login:      user.last_login,
+      },
+    });
+  } catch (err) { next(err); }
+}
+
+// ── PATCH /api/super-admin/academies/:slug/unlock-user ────────────────────────
+
+export async function unlockAcademyUser(
+  req: Request, res: Response, next: NextFunction
+): Promise<void> {
+  try {
+    const { slug } = req.params;
+    const { rows: ac } = await sharedPool.query(
+      `SELECT name FROM academies WHERE slug = $1`, [slug]
+    );
+    if (!ac.length) return next(new AppError('Academy not found', 404));
+
+    await academyExec(
+      slug,
+      `UPDATE users
+       SET is_active=TRUE, failed_attempts=0, locked_at=NULL, locked_by=NULL, updated_at=NOW()
+       WHERE role='admin'`
+    );
+
+    await auditLog(
+      req.admin!.id, 'UNLOCK_ACADEMY_USER', slug,
+      `Unlocked admin account for ${ac[0].name as string}`
+    );
+
+    res.json({ success: true, message: 'Account unlocked successfully' });
+  } catch (err) { next(err); }
+}
+
+// ── PATCH /api/super-admin/academies/:slug/reset-attempts ─────────────────────
+
+export async function resetLoginAttempts(
+  req: Request, res: Response, next: NextFunction
+): Promise<void> {
+  try {
+    const { slug } = req.params;
+    const { rows: ac } = await sharedPool.query(
+      `SELECT name FROM academies WHERE slug = $1`, [slug]
+    );
+    if (!ac.length) return next(new AppError('Academy not found', 404));
+
+    await academyExec(
+      slug,
+      `UPDATE users SET failed_attempts=0, updated_at=NOW() WHERE role='admin'`
+    );
+
+    await auditLog(
+      req.admin!.id, 'RESET_LOGIN_ATTEMPTS', slug,
+      `Reset failed login attempts for admin of ${ac[0].name as string}`
+    );
+
+    res.json({ success: true, message: 'Login attempts reset successfully' });
+  } catch (err) { next(err); }
+}
+
+// ── PATCH /api/super-admin/academies/:slug/block-user ────────────────────────
+
+export async function blockAcademyUser(
+  req: Request, res: Response, next: NextFunction
+): Promise<void> {
+  try {
+    const { slug } = req.params;
+    const { rows: ac } = await sharedPool.query(
+      `SELECT name FROM academies WHERE slug = $1`, [slug]
+    );
+    if (!ac.length) return next(new AppError('Academy not found', 404));
+
+    await academyExec(
+      slug,
+      `UPDATE users
+       SET is_active=FALSE, locked_at=NOW(), locked_by=$1, updated_at=NOW()
+       WHERE role='admin'`,
+      [req.admin!.email]
+    );
+
+    await auditLog(
+      req.admin!.id, 'BLOCK_ACADEMY_USER', slug,
+      `Manually blocked admin account for ${ac[0].name as string}`
+    );
+
+    res.json({ success: true, message: 'Account blocked successfully' });
   } catch (err) { next(err); }
 }

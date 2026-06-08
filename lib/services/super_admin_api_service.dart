@@ -103,4 +103,38 @@ class SuperAdminApiService {
         .timeout(_timeout);
     _parse(res);
   }
+
+  // ── Account lock / unlock ──────────────────────────────────────────────────
+
+  static Future<Map<String, dynamic>> getAcademyLoginStatus(String slug) async {
+    final res = await _http
+        .get(Uri.parse('${ApiEndpoints.superAdminAcademies}/$slug/login-status'),
+            headers: await _headers())
+        .timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
+  static Future<void> unlockAcademyUser(String slug) async {
+    final res = await _http
+        .patch(Uri.parse('${ApiEndpoints.superAdminAcademies}/$slug/unlock-user'),
+            headers: await _headers())
+        .timeout(_timeout);
+    _parse(res);
+  }
+
+  static Future<void> resetLoginAttempts(String slug) async {
+    final res = await _http
+        .patch(Uri.parse('${ApiEndpoints.superAdminAcademies}/$slug/reset-attempts'),
+            headers: await _headers())
+        .timeout(_timeout);
+    _parse(res);
+  }
+
+  static Future<void> blockAcademyUser(String slug) async {
+    final res = await _http
+        .patch(Uri.parse('${ApiEndpoints.superAdminAcademies}/$slug/block-user'),
+            headers: await _headers())
+        .timeout(_timeout);
+    _parse(res);
+  }
 }

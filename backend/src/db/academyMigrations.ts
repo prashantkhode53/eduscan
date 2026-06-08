@@ -148,6 +148,12 @@ export async function reconcileAcademySchemas(): Promise<void> {
         ON subjects(course_id, LOWER(name))
         WHERE is_active = TRUE
       `);
+      // users: add lock-tracking columns introduced with the account-unlock feature
+      await academyExec(slug, `
+        ALTER TABLE IF EXISTS users
+          ADD COLUMN IF NOT EXISTS locked_at TIMESTAMPTZ,
+          ADD COLUMN IF NOT EXISTS locked_by TEXT
+      `);
       // Receipt sequence + table for existing academies
       await academyExec(slug, `CREATE SEQUENCE IF NOT EXISTS fee_receipt_seq START 1 INCREMENT 1`);
       await academyExec(slug, `
@@ -214,6 +220,8 @@ export async function runAcademyMigrations(
         fcm_token       TEXT,
         is_active       BOOLEAN DEFAULT TRUE,
         failed_attempts INT DEFAULT 0,
+        locked_at       TIMESTAMPTZ,
+        locked_by       TEXT,
         last_login      TIMESTAMPTZ,
         otp_code        VARCHAR(6),
         otp_expires_at  TIMESTAMPTZ,

@@ -15,8 +15,10 @@ class AcademyDetailScreen extends StatefulWidget {
 
 class _AcademyDetailScreenState extends State<AcademyDetailScreen> {
   Map<String, dynamic>? _stats;
-  bool _loading = true;
-  bool _changed = false; // true when caller should refresh list
+  Map<String, dynamic>? _loginStatus;
+  bool _loading           = true;
+  bool _loginStatusLoading = false;
+  bool _changed           = false; // true when caller should refresh list
 
   late Map<String, dynamic> _academy;
 
@@ -25,6 +27,7 @@ class _AcademyDetailScreenState extends State<AcademyDetailScreen> {
     super.initState();
     _academy = Map.from(widget.academy);
     _loadStats();
+    _loadLoginStatus();
   }
 
   Future<void> _loadStats() async {
@@ -46,6 +49,22 @@ class _AcademyDetailScreenState extends State<AcademyDetailScreen> {
         content: Text(e.toString().replaceFirst('Exception: ', '')),
         backgroundColor: Colors.red,
       ));
+    }
+  }
+
+  Future<void> _loadLoginStatus() async {
+    if (!mounted) return;
+    setState(() => _loginStatusLoading = true);
+    try {
+      final data = await SuperAdminApiService.getAcademyLoginStatus(_slug);
+      if (!mounted) return;
+      setState(() {
+        _loginStatus        = data;
+        _loginStatusLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loginStatusLoading = false);
     }
   }
 
@@ -91,6 +110,94 @@ class _AcademyDetailScreenState extends State<AcademyDetailScreen> {
           content: Text(e.toString().replaceFirst('Exception: ', '')),
           backgroundColor: Colors.red,
         ));
+      }
+    }
+  }
+
+  // ── Account lock / unlock ─────────────────────────────────────────────────
+
+  Future<void> _unlockUser() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Unlock Account'),
+        content: const Text(
+            'Reset the failed login attempts and re-activate the admin account?\n\n'
+            'The academy admin will be able to log in immediately.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: Colors.green),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Unlock')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      await SuperAdminApiService.unlockAcademyUser(_slug);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Account unlocked'), backgroundColor: Colors.green));
+      _loadLoginStatus();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(e.toString().replaceFirst('Exception: ', '')),
+            backgroundColor: Colors.red));
+      }
+    }
+  }
+
+  Future<void> _resetAttempts() async {
+    try {
+      await SuperAdminApiService.resetLoginAttempts(_slug);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Login attempts reset'), backgroundColor: Colors.green));
+      _loadLoginStatus();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(e.toString().replaceFirst('Exception: ', '')),
+            backgroundColor: Colors.red));
+      }
+    }
+  }
+
+  Future<void> _blockUser() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Block Account'),
+        content: Text(
+            'Manually block the admin account for "$_name"?\n\n'
+            'The academy admin will not be able to log in until you unlock it.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: Colors.red),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Block')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      await SuperAdminApiService.blockAcademyUser(_slug);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Account blocked'), backgroundColor: Colors.orange));
+      _loadLoginStatus();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(e.toString().replaceFirst('Exception: ', '')),
+            backgroundColor: Colors.red));
       }
     }
   }
@@ -353,6 +460,12 @@ class _AcademyDetailScreenState extends State<AcademyDetailScreen> {
 
                   const SizedBox(height: 16),
 
+                  // ── Account Status ────────────────────────────────────
+                  _SectionLabel('Admin Account Status'),
+                  _buildAccountStatusCard(theme),
+
+                  const SizedBox(height: 16),
+
                   // ── Stats ─────────────────────────────────────────────
                   _SectionLabel('Statistics'),
                   GridView.count(
@@ -427,6 +540,143 @@ class _AcademyDetailScreenState extends State<AcademyDetailScreen> {
                   const SizedBox(height: 32),
                 ],
               ),
+      ),
+    );
+  }
+
+  Widget _buildAccountStatusCard(ThemeData theme) {
+    if (_loginStatusLoading) {
+      return const Card(
+        child: Padding(
+          padding: EdgeInsets.all(16),
+          child: LinearProgressIndicator(),
+        ),
+      );
+    }
+    if (_loginStatus == null) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(children: [
+            Icon(Icons.info_outline,
+                size: 16,
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.4)),
+            const SizedBox(width: 8),
+            Text('Status unavailable',
+                style: TextStyle(
+                    fontSize: 13,
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.5))),
+          ]),
+        ),
+      );
+    }
+
+    final s         = _loginStatus!;
+    final isLocked  = s['is_locked'] as bool? ?? false;
+    final attempts  = s['failed_attempts'] as int? ?? 0;
+    final lockedAt  = s['locked_at']  as String?;
+    final lockedBy  = s['locked_by']  as String?;
+    final lastLogin = s['last_login'] as String?;
+    final email     = s['email']      as String? ?? '—';
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Status badge + email row
+            Row(children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: (isLocked ? Colors.red : Colors.green)
+                      .withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(
+                    isLocked ? Icons.lock_outline : Icons.lock_open_outlined,
+                    size: 13,
+                    color: isLocked ? Colors.red : Colors.green,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    isLocked ? 'LOCKED' : 'ACTIVE',
+                    style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: isLocked ? Colors.red : Colors.green),
+                  ),
+                ]),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(email,
+                    style: const TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.w600),
+                    overflow: TextOverflow.ellipsis),
+              ),
+            ]),
+            const SizedBox(height: 12),
+
+            // Info rows
+            _InfoTile(Icons.warning_amber_outlined, 'Failed Attempts',
+                '$attempts / 4',
+                valueColor: attempts >= 3 ? Colors.orange : null),
+            if (lockedAt != null)
+              _InfoTile(Icons.schedule_outlined, 'Locked At',
+                  _fmtDate(lockedAt)),
+            if (lockedBy != null)
+              _InfoTile(Icons.manage_accounts_outlined, 'Locked By', lockedBy),
+            _InfoTile(Icons.login_outlined, 'Last Login',
+                lastLogin != null ? _fmtDate(lastLogin) : 'Never'),
+
+            const SizedBox(height: 14),
+
+            // Action buttons
+            Row(children: [
+              if (isLocked)
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: _unlockUser,
+                    icon: const Icon(Icons.lock_open_outlined, size: 16),
+                    label: const Text('Unlock'),
+                    style: FilledButton.styleFrom(
+                        backgroundColor: Colors.green,
+                        minimumSize: const Size.fromHeight(40)),
+                  ),
+                ),
+              if (isLocked && attempts > 0) const SizedBox(width: 8),
+              if (attempts > 0)
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _resetAttempts,
+                    icon: const Icon(Icons.refresh_outlined, size: 16),
+                    label: const Text('Reset Attempts'),
+                    style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.orange,
+                        side: const BorderSide(color: Colors.orange),
+                        minimumSize: const Size.fromHeight(40)),
+                  ),
+                ),
+              if (!isLocked) ...[
+                if (attempts > 0) const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _blockUser,
+                    icon: const Icon(Icons.block_outlined, size: 16),
+                    label: const Text('Block'),
+                    style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.red,
+                        side: const BorderSide(color: Colors.red),
+                        minimumSize: const Size.fromHeight(40)),
+                  ),
+                ),
+              ],
+            ]),
+          ],
+        ),
       ),
     );
   }

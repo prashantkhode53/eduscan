@@ -93,6 +93,9 @@ class _AcademyStudentEditScreenState
   bool   _newPasswordObscure    = true;
   String? _masterPasswordError;
 
+  // ── Scroll controller for step-0 form ─────────────────────────────────────
+  final _step0ScrollCtrl = ScrollController();
+
   // ── Submit ─────────────────────────────────────────────────────────────────
   bool _submitting = false;
 
@@ -259,6 +262,7 @@ class _AcademyStudentEditScreenState
     _parentNameCtrl.dispose(); _parentMobCtrl.dispose();
     _addressCtrl.dispose();
     _newPasswordCtrl.dispose();
+    _step0ScrollCtrl.dispose();
     _stallTimer?.cancel();
     _progressTicker?.cancel();
     _camCtrl?.dispose();
@@ -815,6 +819,7 @@ class _AcademyStudentEditScreenState
     return Form(
       key: _s0Key,
       child: SingleChildScrollView(
+        controller: _step0ScrollCtrl,
         padding: EdgeInsets.fromLTRB(
             24, 16, 24, MediaQuery.of(context).padding.bottom + 24),
         child: Column(
@@ -992,6 +997,21 @@ class _AcademyStudentEditScreenState
                       child: TextFormField(
                         controller: _newPasswordCtrl,
                         obscureText: _newPasswordObscure,
+                        keyboardType: TextInputType.visiblePassword,
+                        textInputAction: TextInputAction.done,
+                        onTap: () {
+                          // Scroll to bottom so the field is never hidden behind the keyboard
+                          Future.delayed(const Duration(milliseconds: 300), () {
+                            if (_step0ScrollCtrl.hasClients) {
+                              _step0ScrollCtrl.animateTo(
+                                _step0ScrollCtrl.position.maxScrollExtent,
+                                duration: const Duration(milliseconds: 250),
+                                curve: Curves.easeOut,
+                              );
+                            }
+                          });
+                        },
+                        onFieldSubmitted: (_) => _setMasterPassword(),
                         decoration: InputDecoration(
                           labelText: _masterPasswordEnabled
                               ? 'New Password'

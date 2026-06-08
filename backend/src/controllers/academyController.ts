@@ -166,20 +166,25 @@ export async function loginAcademyUser(
     const match = await bcrypt.compare(password, user.password_hash);
     if (!match) {
       const attempts = user.failed_attempts + 1;
-      const lock     = attempts >= 5;
+      const lock     = attempts >= 4;
       await academyExec(
         academy.slug,
-        `UPDATE users SET failed_attempts=$1, is_active=CASE WHEN $2 THEN FALSE ELSE is_active END WHERE id=$3`,
+        `UPDATE users SET
+           failed_attempts = $1,
+           is_active  = CASE WHEN $2 THEN FALSE ELSE is_active END,
+           locked_at  = CASE WHEN $2 THEN NOW()  ELSE locked_at END,
+           locked_by  = CASE WHEN $2 THEN 'system' ELSE locked_by END
+         WHERE id = $3`,
         [attempts, lock, user.id]
       );
-      if (lock) return next(new AppError('Account locked after 5 failed attempts.', 403));
-      return next(new AppError(`Invalid credentials. ${5 - attempts} attempt(s) remaining.`, 401));
+      if (lock) return next(new AppError('Account locked after 4 failed attempts. Contact your academy super admin.', 403));
+      return next(new AppError(`Invalid credentials. ${4 - attempts} attempt(s) remaining.`, 401));
     }
 
-    // Reset failed attempts
+    // Reset failed attempts and lock fields on successful login
     await academyExec(
       academy.slug,
-      `UPDATE users SET failed_attempts=0, last_login=NOW() WHERE id=$1`,
+      `UPDATE users SET failed_attempts=0, last_login=NOW(), locked_at=NULL, locked_by=NULL WHERE id=$1`,
       [user.id]
     );
 
