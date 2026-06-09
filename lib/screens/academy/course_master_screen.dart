@@ -887,17 +887,18 @@ class _SubjectInfoTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme        = Theme.of(context);
-    final subjectCount = (course?['subject_count'] as num?)?.toInt() ?? 0;
+    final subjectCount = int.tryParse(course?['subject_count']?.toString() ?? '') ?? 0;
     final totalFee     = double.tryParse(course?['total_subject_fee']?.toString() ?? '0') ?? 0.0;
 
-    return Container(
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.45),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-            color: theme.colorScheme.outline.withValues(alpha: 0.3)),
-      ),
-      child: IntrinsicHeight(
+    return SizedBox(
+      height: 72,
+      child: Container(
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.45),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+              color: theme.colorScheme.outline.withValues(alpha: 0.3)),
+        ),
         child: Row(
           children: [
             Expanded(
@@ -918,9 +919,10 @@ class _SubjectInfoTile extends StatelessWidget {
                 ),
               ),
             ),
-            VerticalDivider(
-                width: 1,
-                color: theme.colorScheme.outline.withValues(alpha: 0.3)),
+            Container(
+              width: 1,
+              color: theme.colorScheme.outline.withValues(alpha: 0.3),
+            ),
             Expanded(
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),

@@ -54,6 +54,9 @@ class _AcademyStudentEditScreenState
   final Map<String, double> _selectedSubjectFees = {};
   // courseId → subjects list (lazy-loaded on first expand; pre-loaded for enrolled)
   final Map<String, List<Map<String, dynamic>>> _subjectsByCourse = {};
+  // Courses pre-populated from enrollment data only (not full subject list).
+  // These must be re-fetched on first expand so newly added subjects appear.
+  final Set<String> _enrollmentOnlyCourses = {};
   final Set<String> _expandedCourses = {};
   final Set<String> _subjectsLoadingFor = {};
   final Map<String, String> _subjectsError = {};
@@ -176,6 +179,14 @@ class _AcademyStudentEditScreenState
             enrolledByCourse[cid] = subs;
           } catch (_) {}
         }
+        // Legacy path fetches the full subject list — no re-fetch needed on expand.
+        _enrollmentOnlyCourses.clear();
+      } else {
+        // Non-legacy: subjectsByCourse has only enrolled subjects.
+        // Mark them so _loadSubjects fetches the full list on first expand.
+        _enrollmentOnlyCourses
+          ..clear()
+          ..addAll(enrolledByCourse.keys);
       }
 
       final embedding = studentData['face_embedding'];
@@ -227,8 +238,10 @@ class _AcademyStudentEditScreenState
   }
 
   Future<void> _loadSubjects(String courseId) async {
+    // Toggle collapse if already fully loaded (not enrollment-only).
     if (_subjectsByCourse.containsKey(courseId) &&
-        !_subjectsError.containsKey(courseId)) {
+        !_subjectsError.containsKey(courseId) &&
+        !_enrollmentOnlyCourses.contains(courseId)) {
       setState(() {
         if (_expandedCourses.contains(courseId)) {
           _expandedCourses.remove(courseId);
@@ -251,6 +264,7 @@ class _AcademyStudentEditScreenState
         _subjectsByCourse[courseId] = data;
         _subjectsLoadingFor.remove(courseId);
       });
+      _enrollmentOnlyCourses.remove(courseId); // now fully loaded
     } catch (e) {
       if (!mounted) return;
       setState(() {
