@@ -228,8 +228,8 @@ class _CourseMasterScreenState extends State<CourseMasterScreen> {
                                   const SizedBox(height: 8),
                               itemBuilder: (_, i) {
                                 final c            = _courses[i];
-                                final count        = (c['student_count'] as num?)?.toInt() ?? 0;
-                                final subjectCount = (c['subject_count'] as num?)?.toInt() ?? 0;
+                                final count        = int.tryParse(c['student_count']?.toString() ?? '') ?? 0;
+                                final subjectCount = int.tryParse(c['subject_count']?.toString() ?? '') ?? 0;
                                 final totalFee     = double.tryParse(c['total_subject_fee']?.toString() ?? '0') ?? 0.0;
                                 final yearName     = c['academic_year_name'] as String?;
                                 return Card(
