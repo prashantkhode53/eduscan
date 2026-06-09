@@ -21,15 +21,15 @@ export async function listFees(
       academySlug,
       `SELECT fr.*,
               s.first_name, s.last_name, s.mobile,
-              c.name  AS course_name,
+              c.name   AS course_name,
               sub.name AS subject_name,
               GREATEST(0, fr.amount_due - fr.amount_paid) AS balance,
               rcpt.receipt_number
        FROM fee_records fr
-       JOIN students s    ON s.id   = fr.student_id
-       LEFT JOIN courses c ON c.id  = fr.course_id
+       JOIN students s      ON s.id   = fr.student_id
+       LEFT JOIN courses c  ON c.id   = fr.course_id
        LEFT JOIN subjects sub ON sub.id = fr.subject_id
-       LEFT JOIN fee_receipts rcpt ON rcpt.fee_record_id = fr.id
+       LEFT JOIN fee_receipts rcpt ON rcpt.id = fr.receipt_id
        WHERE ($1::text IS NULL OR fr.status = $1)
          AND ($2::text IS NULL OR fr.student_id = $2)
          AND ($3::uuid IS NULL OR fr.course_id = $3::uuid)
@@ -44,7 +44,7 @@ export async function listFees(
          fr.due_date ASC
        LIMIT $5 OFFSET $6`,
       [
-        status  || null,
+        status     || null,
         student_id || null,
         course_id  || null,
         month      || null,
@@ -53,7 +53,6 @@ export async function listFees(
       ]
     );
 
-    // Summary totals
     const summary = await academyQueryOne<{
       total_due: string; total_paid: string;
       count_pending: string; count_overdue: string; count_paid: string;
@@ -88,147 +87,298 @@ export async function listFees(
   } catch (err) { next(err); }
 }
 
+// ── GET /api/academy/fees/students-summary ────────────────────────────────────
+// Returns all students with pending/overdue/partial fees, grouped with their
+// pending records. Drives the "Students" collection tab in the app.
+
+export async function listFeesStudentSummary(
+  req: Request, res: Response, next: NextFunction
+): Promise<void> {
+  try {
+    const { academySlug } = req.academyUser!;
+    const { month } = req.query as Record<string, string>;
+
+    // One query: all pending fee records joined to students/courses/subjects
+    const rows = await academyQuery<{
+      student_id: string; first_name: string; last_name: string; mobile: string;
+      record_id: string; course_id: string | null; subject_id: string | null;
+      amount_due: string; amount_paid: string; status: string; due_date: string;
+      course_name: string | null; subject_name: string | null;
+    }>(
+      academySlug,
+      `SELECT
+         s.id        AS student_id,
+         s.first_name, s.last_name, s.mobile,
+         fr.id       AS record_id,
+         fr.course_id, fr.subject_id,
+         fr.amount_due, fr.amount_paid, fr.status, fr.due_date,
+         c.name      AS course_name,
+         sub.name    AS subject_name
+       FROM students s
+       JOIN fee_records fr ON fr.student_id = s.id
+         AND fr.status IN ('pending', 'partial', 'overdue')
+         AND ($1::text IS NULL OR TO_CHAR(fr.due_date,'YYYY-MM') = $1)
+       LEFT JOIN courses c    ON c.id   = fr.course_id
+       LEFT JOIN subjects sub ON sub.id = fr.subject_id
+       WHERE s.status = 'active'
+       ORDER BY s.first_name, s.last_name, fr.due_date ASC`,
+      [month || null]
+    );
+
+    // Group by student
+    const map = new Map<string, {
+      student_id: string; first_name: string; last_name: string; mobile: string;
+      balance: number; pending_count: number;
+      pending_records: object[];
+    }>();
+
+    for (const row of rows) {
+      if (!map.has(row.student_id)) {
+        map.set(row.student_id, {
+          student_id:     row.student_id,
+          first_name:     row.first_name,
+          last_name:      row.last_name,
+          mobile:         row.mobile,
+          balance:        0,
+          pending_count:  0,
+          pending_records: [],
+        });
+      }
+      const student = map.get(row.student_id)!;
+      const due  = parseFloat(row.amount_due);
+      const paid = parseFloat(row.amount_paid);
+      const bal  = Math.max(0, due - paid);
+      student.balance       += bal;
+      student.pending_count += 1;
+      student.pending_records.push({
+        id:           row.record_id,
+        course_id:    row.course_id,
+        course_name:  row.course_name,
+        subject_id:   row.subject_id,
+        subject_name: row.subject_name,
+        amount_due:   due,
+        amount_paid:  paid,
+        balance:      bal,
+        status:       row.status,
+        due_date:     row.due_date,
+      });
+    }
+
+    // Sort descending by balance
+    const students = [...map.values()].sort((a, b) => b.balance - a.balance);
+
+    res.json({ success: true, data: { students } });
+  } catch (err) { next(err); }
+}
+
 // ── POST /api/academy/fees/collect ────────────────────────────────────────────
+// Accepts both:
+//   NEW format: { student_id, items: [{fee_record_id, amount_paid}], payment_mode, remarks }
+//   OLD format: { fee_record_id, amount_paid, payment_mode, remarks }
 
 export async function collectFee(
   req: Request, res: Response, next: NextFunction
 ): Promise<void> {
   try {
     const { academySlug, userId } = req.academyUser!;
-    const { fee_record_id, amount_paid, payment_mode = 'cash', remarks } =
-      req.body as {
-        fee_record_id: string;
-        amount_paid: number;
-        payment_mode?: string;
-        remarks?: string;
-      };
+    const { payment_mode = 'cash', remarks } = req.body as Record<string, unknown>;
 
-    if (!fee_record_id || !amount_paid || amount_paid <= 0) {
-      return next(new AppError('fee_record_id and amount_paid > 0 are required', 400));
+    // Normalize input
+    let items: Array<{ fee_record_id: string; amount_paid: number }>;
+    let studentIdArg: string | undefined;
+
+    if (Array.isArray(req.body.items)) {
+      items        = req.body.items as typeof items;
+      studentIdArg = req.body.student_id as string | undefined;
+      if (!items.length) return next(new AppError('items array must not be empty', 400));
+    } else if (req.body.fee_record_id) {
+      items        = [{ fee_record_id: req.body.fee_record_id as string, amount_paid: req.body.amount_paid as number }];
+      studentIdArg = undefined;
+    } else {
+      return next(new AppError('Provide either items[] or fee_record_id', 400));
     }
 
-    const record = await academyQueryOne<{
-      id: string; amount_due: number; amount_paid: number; status: string;
-    }>(
-      academySlug,
-      `SELECT id, amount_due, amount_paid, status FROM fee_records WHERE id = $1`,
-      [fee_record_id]
-    );
-    if (!record) return next(new AppError('Fee record not found', 404));
-    if (record.status === 'paid') return next(new AppError('Fee already fully paid', 409));
+    for (const item of items) {
+      if (!item.fee_record_id || !item.amount_paid || item.amount_paid <= 0) {
+        return next(new AppError('Each item requires fee_record_id and amount_paid > 0', 400));
+      }
+    }
 
-    const newPaid = parseFloat(record.amount_paid.toString()) + amount_paid;
-    const balance = parseFloat(record.amount_due.toString()) - newPaid;
-    const newStatus = balance <= 0 ? 'paid' : newPaid > 0 ? 'partial' : record.status;
-    const paidDate = newStatus === 'paid' ? new Date().toISOString().split('T')[0] : null;
+    // Fetch all fee records + enrichment in one query
+    const ids = items.map(i => i.fee_record_id);
+    type RecordRow = {
+      id: string; student_id: string; course_id: string | null; subject_id: string | null;
+      amount_due: string; amount_paid: string; status: string;
+      course_name: string | null; subject_name: string | null;
+    };
+    const records = await academyQuery<RecordRow>(
+      academySlug,
+      `SELECT fr.id, fr.student_id, fr.course_id, fr.subject_id,
+              fr.amount_due, fr.amount_paid, fr.status,
+              c.name   AS course_name,
+              sub.name AS subject_name
+       FROM fee_records fr
+       LEFT JOIN courses  c   ON c.id   = fr.course_id
+       LEFT JOIN subjects sub ON sub.id = fr.subject_id
+       WHERE fr.id = ANY($1::uuid[])`,
+      [ids]
+    );
+
+    if (records.length !== ids.length) {
+      return next(new AppError('One or more fee records not found', 404));
+    }
+
+    const studentId = studentIdArg ?? records[0].student_id;
+    for (const rec of records) {
+      if (rec.student_id !== studentId) {
+        return next(new AppError('All fee records must belong to the same student', 400));
+      }
+      if (rec.status === 'paid') {
+        return next(new AppError(`Fee record is already fully paid`, 409));
+      }
+    }
 
     const remarksFull = [
       payment_mode ? `Mode: ${payment_mode}` : null,
-      remarks || null,
+      (remarks as string) || null,
     ].filter(Boolean).join(' | ');
 
-    type _FeeRecord = {
-      id: string; student_id: string; course_id: string | null;
-      subject_id: string | null; amount_due: number; amount_paid: number;
-      status: string; paid_date: string | null; due_date: string; remarks: string | null;
+    type ItemUpdate = {
+      id: string; newPaid: number; newStatus: string; paidDate: string | null;
+      course_id: string | null; subject_id: string | null;
+      course_name: string | null; subject_name: string | null;
+      amountInReceipt: number;
     };
 
-    const txResult = {
-      updated: null as _FeeRecord | null,
-      receiptNumber: '',
-      receiptId: '',
-    };
+    const updates: ItemUpdate[] = records.map(rec => {
+      const item       = items.find(i => i.fee_record_id === rec.id)!;
+      const curPaid    = parseFloat(rec.amount_paid);
+      const newPaid    = curPaid + item.amount_paid;
+      const balance    = parseFloat(rec.amount_due) - newPaid;
+      const newStatus  = balance <= 0 ? 'paid' : newPaid > 0 ? 'partial' : rec.status;
+      const paidDate   = newStatus === 'paid' ? new Date().toISOString().split('T')[0] : null;
+      return {
+        id: rec.id, newPaid, newStatus, paidDate,
+        course_id: rec.course_id, subject_id: rec.subject_id,
+        course_name: rec.course_name, subject_name: rec.subject_name,
+        amountInReceipt: item.amount_paid,
+      };
+    });
 
-    // ── Atomic: update fee record + generate receipt in one transaction ───
+    const totalAmountPaid = items.reduce((s, i) => s + i.amount_paid, 0);
+    const txResult        = { receiptNumber: '', receiptId: '' };
+
     await academyTransaction(academySlug, async (client) => {
-      const { rows: uRows } = await client.query<_FeeRecord>(
-        `UPDATE fee_records
-         SET amount_paid   = $1,
-             status        = $2,
-             paid_date     = $3,
-             remarks       = $4,
-             collected_by  = $5,
-             updated_at    = NOW()
-         WHERE id = $6
-         RETURNING *`,
-        [newPaid, newStatus, paidDate, remarksFull || null, userId, fee_record_id]
-      );
-      txResult.updated = uRows[0] ?? null;
-      if (!txResult.updated) throw new Error('Fee record not found during update');
+      // Update each fee record
+      for (const u of updates) {
+        await client.query(
+          `UPDATE fee_records
+           SET amount_paid  = $1,
+               status       = $2,
+               paid_date    = $3,
+               remarks      = $4,
+               collected_by = $5,
+               updated_at   = NOW()
+           WHERE id = $6`,
+          [u.newPaid, u.newStatus, u.paidDate, remarksFull || null, userId, u.id]
+        );
+      }
 
+      // Generate receipt number
       const year = new Date().getFullYear();
       const { rows: seqRows } = await client.query<{ n: string }>(`SELECT nextval('fee_receipt_seq') AS n`);
       txResult.receiptNumber = `RCP-${year}-${String(seqRows[0].n).padStart(6, '0')}`;
+
+      // Keep fee_record_id on receipt for backward compat when single item
+      const legacyFeeRecordId = updates.length === 1 ? updates[0].id : null;
 
       const { rows: rcptRows } = await client.query<{ id: string }>(
         `INSERT INTO fee_receipts
            (receipt_number, fee_record_id, student_id, amount_paid, payment_mode, generated_by)
          VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING id`,
-        [txResult.receiptNumber, fee_record_id, txResult.updated.student_id, amount_paid, payment_mode, userId]
+        [txResult.receiptNumber, legacyFeeRecordId, studentId, totalAmountPaid, payment_mode, userId]
       );
       txResult.receiptId = rcptRows[0].id;
+
+      // Insert receipt items and update receipt_id on each fee_record
+      for (const u of updates) {
+        await client.query(
+          `INSERT INTO fee_receipt_items
+             (receipt_id, fee_record_id, subject_id, subject_name, course_id, course_name, amount_paid)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [txResult.receiptId, u.id, u.subject_id, u.subject_name, u.course_id, u.course_name, u.amountInReceipt]
+        );
+        await client.query(
+          `UPDATE fee_records SET receipt_id = $1 WHERE id = $2`,
+          [txResult.receiptId, u.id]
+        );
+      }
     });
 
-    const updated = txResult.updated;
     const { receiptNumber, receiptId } = txResult;
-    if (!updated) return next(new AppError('Fee record update failed unexpectedly', 500));
 
-    // ── Push notification to parent (fire-and-forget) ─────────────────────
+    // FCM notification (fire-and-forget)
     const student = await academyQueryOne<{
       first_name: string; last_name: string; parent_name: string | null;
       parent_fcm_token: string | null;
-      course_name: string | null; subject_name: string | null;
     }>(
       academySlug,
-      `SELECT s.first_name, s.last_name, s.parent_name, s.parent_fcm_token,
-              c.name   AS course_name,
-              sub.name AS subject_name
-       FROM students s
-       LEFT JOIN courses  c   ON c.id   = $2::uuid
-       LEFT JOIN subjects sub ON sub.id = $3::uuid
-       WHERE s.id = $1`,
-      [updated.student_id, updated.course_id, updated.subject_id]
+      `SELECT first_name, last_name, parent_name, parent_fcm_token FROM students WHERE id = $1`,
+      [studentId]
     );
 
     if (student?.parent_fcm_token) {
-      const balanceLine = balance <= 0
+      const coursesMap = new Map<string, string[]>();
+      for (const u of updates) {
+        const cName = u.course_name ?? 'Course';
+        if (!coursesMap.has(cName)) coursesMap.set(cName, []);
+        if (u.subject_name) coursesMap.get(cName)!.push(u.subject_name);
+      }
+      const subjectLine = [...coursesMap.entries()]
+        .map(([c, subs]) => (subs.length > 0 ? `${c}: ${subs.join(', ')}` : c))
+        .join('; ');
+
+      const allClear  = updates.every(u => u.newStatus === 'paid');
+      const statusLine = allClear
         ? 'All fees are now cleared.'
-        : `Remaining balance: ₹${Math.max(0, balance).toFixed(0)}`;
-      const subjectLine = [student.course_name, student.subject_name].filter(Boolean).join(' › ');
-      const sent = await sendFcm({
+        : `Payment of ₹${totalAmountPaid.toFixed(0)} recorded.`;
+
+      void sendFcm({
         token: student.parent_fcm_token,
         title: 'Fee Payment Received',
         body:
-          `Dear ${student.parent_name ?? 'Parent'}, ₹${amount_paid} received for ` +
+          `Dear ${student.parent_name ?? 'Parent'}, ` +
+          `₹${totalAmountPaid.toFixed(0)} received for ` +
           `${student.first_name} ${student.last_name}` +
           (subjectLine ? ` (${subjectLine})` : '') +
-          `. ${balanceLine} Receipt No: ${receiptNumber}.`,
+          `. ${statusLine} Receipt No: ${receiptNumber}.`,
         data: {
           type:           'fee_receipt',
           receipt_id:     receiptId,
           receipt_number: receiptNumber,
         },
+      }).then((sent: boolean) => {
+        if (sent) {
+          void academyExec(academySlug, `UPDATE fee_receipts SET fcm_sent = TRUE WHERE id = $1`, [receiptId]);
+        }
       });
-      if (sent) {
-        void academyExec(
-          academySlug,
-          `UPDATE fee_receipts SET fcm_sent = TRUE WHERE id = $1`,
-          [receiptId]
-        );
-      }
     }
 
     res.json({
       success: true,
       data: {
-        ...updated,
         receipt_number: receiptNumber,
-        receipt_id: receiptId,
+        receipt_id:     receiptId,
+        student_id:     studentId,
+        total_paid:     totalAmountPaid,
+        items: updates.map(u => ({
+          fee_record_id: u.id,
+          status:        u.newStatus,
+          amount_paid:   u.amountInReceipt,
+        })),
       },
-      message: newStatus === 'paid'
-        ? `Fee fully paid · Receipt ${receiptNumber}`
-        : `₹${amount_paid} collected · ₹${Math.max(0, balance).toFixed(0)} remaining · Receipt ${receiptNumber}`,
+      message: `₹${totalAmountPaid.toFixed(0)} collected · Receipt ${receiptNumber}`,
     });
   } catch (err) { next(err); }
 }
@@ -332,7 +482,7 @@ export async function getStudentFees(
        FROM fee_records fr
        LEFT JOIN courses c      ON c.id   = fr.course_id
        LEFT JOIN subjects sub   ON sub.id = fr.subject_id
-       LEFT JOIN fee_receipts rcpt ON rcpt.fee_record_id = fr.id
+       LEFT JOIN fee_receipts rcpt ON rcpt.id = fr.receipt_id
        WHERE fr.student_id = $1
        ORDER BY fr.due_date DESC`,
       [studentId]
@@ -342,8 +492,8 @@ export async function getStudentFees(
       total_due: string; total_paid: string; total_balance: string;
     }>(
       academySlug,
-      `SELECT COALESCE(SUM(amount_due),0)               AS total_due,
-              COALESCE(SUM(amount_paid),0)              AS total_paid,
+      `SELECT COALESCE(SUM(amount_due),0)                            AS total_due,
+              COALESCE(SUM(amount_paid),0)                           AS total_paid,
               COALESCE(SUM(GREATEST(0, amount_due - amount_paid)),0) AS total_balance
        FROM fee_records WHERE student_id = $1`,
       [studentId]
@@ -352,7 +502,7 @@ export async function getStudentFees(
     res.json({
       success: true,
       data: {
-        records: records,
+        records,
         totals: {
           total_due:     parseFloat(totals?.total_due     ?? '0'),
           total_paid:    parseFloat(totals?.total_paid    ?? '0'),
@@ -383,15 +533,24 @@ export async function listReceipts(
          r.id, r.receipt_number, r.amount_paid, r.payment_mode,
          r.generated_at, r.fcm_sent,
          s.id AS student_id, s.first_name, s.last_name, s.mobile,
-         c.name  AS course_name,
-         sub.name AS subject_name,
+         COALESCE(c.name,
+           (SELECT fri.course_name FROM fee_receipt_items fri
+            WHERE fri.receipt_id = r.id ORDER BY fri.course_name LIMIT 1)
+         ) AS course_name,
+         COALESCE(sub.name,
+           (SELECT CASE WHEN COUNT(*) > 1
+                        THEN COUNT(*)::TEXT || ' subjects'
+                        ELSE MAX(fri.subject_name)
+                   END
+            FROM fee_receipt_items fri WHERE fri.receipt_id = r.id)
+         ) AS subject_name,
          fr.amount_due, fr.amount_paid AS fr_amount_paid,
          fr.status AS fee_status, fr.due_date
        FROM fee_receipts r
-       JOIN students s        ON s.id   = r.student_id
-       LEFT JOIN fee_records fr ON fr.id = r.fee_record_id
-       LEFT JOIN courses c    ON c.id   = fr.course_id
-       LEFT JOIN subjects sub ON sub.id = fr.subject_id
+       JOIN students s          ON s.id   = r.student_id
+       LEFT JOIN fee_records fr ON fr.id  = r.fee_record_id
+       LEFT JOIN courses c      ON c.id   = fr.course_id
+       LEFT JOIN subjects sub   ON sub.id = fr.subject_id
        WHERE ($1::text IS NULL OR r.student_id = $1)
          AND ($2::date IS NULL OR r.generated_at::date >= $2::date)
          AND ($3::date IS NULL OR r.generated_at::date <= $3::date)
@@ -428,13 +587,12 @@ export async function getReceipt(
       academySlug,
       `SELECT
          r.*,
-         s.first_name, s.last_name, s.mobile,
-         s.parent_name, s.parent_mobile,
-         c.name  AS course_name,
+         s.first_name, s.last_name, s.mobile, s.parent_mobile,
+         c.name   AS course_name,
          sub.name AS subject_name,
          fr.amount_due, fr.amount_paid AS fr_amount_paid,
          fr.status AS fee_status, fr.due_date, fr.paid_date,
-         GREATEST(0, fr.amount_due - fr.amount_paid) AS balance,
+         GREATEST(0, COALESCE(fr.amount_due, 0) - COALESCE(fr.amount_paid, 0)) AS balance,
          u.name AS collected_by_name
        FROM fee_receipts r
        JOIN students s          ON s.id  = r.student_id
@@ -447,7 +605,18 @@ export async function getReceipt(
     );
 
     if (!receipt) return next(new AppError('Receipt not found', 404));
-    res.json({ success: true, data: receipt });
+
+    // Fetch line items for multi-subject receipts
+    const items = await academyQuery(
+      academySlug,
+      `SELECT course_name, subject_name, amount_paid
+       FROM fee_receipt_items
+       WHERE receipt_id = $1
+       ORDER BY course_name, subject_name`,
+      [id]
+    );
+
+    res.json({ success: true, data: { ...receipt, items: items.length > 0 ? items : null } });
   } catch (err) { next(err); }
 }
 
@@ -461,14 +630,22 @@ export async function resendReceipt(
     const { id } = req.params;
 
     const receipt = await academyQueryOne<{
-      id: string; receipt_number: string; amount_paid: number;
-      student_id: string;
+      id: string; receipt_number: string; amount_paid: string; student_id: string;
       course_name: string | null; subject_name: string | null;
     }>(
       academySlug,
       `SELECT r.id, r.receipt_number, r.amount_paid, r.student_id,
-              c.name   AS course_name,
-              sub.name AS subject_name
+              COALESCE(c.name,
+                (SELECT fri.course_name FROM fee_receipt_items fri
+                 WHERE fri.receipt_id = r.id ORDER BY fri.course_name LIMIT 1)
+              ) AS course_name,
+              COALESCE(sub.name,
+                (SELECT CASE WHEN COUNT(*) > 1
+                             THEN COUNT(*)::TEXT || ' subjects'
+                             ELSE MAX(fri.subject_name)
+                        END
+                 FROM fee_receipt_items fri WHERE fri.receipt_id = r.id)
+              ) AS subject_name
        FROM fee_receipts r
        LEFT JOIN fee_records fr ON fr.id  = r.fee_record_id
        LEFT JOIN courses  c     ON c.id   = fr.course_id
@@ -483,8 +660,7 @@ export async function resendReceipt(
       parent_fcm_token: string | null;
     }>(
       academySlug,
-      `SELECT first_name, last_name, parent_name, parent_fcm_token
-       FROM students WHERE id = $1`,
+      `SELECT first_name, last_name, parent_name, parent_fcm_token FROM students WHERE id = $1`,
       [receipt.student_id]
     );
 
@@ -492,7 +668,8 @@ export async function resendReceipt(
       return next(new AppError('No parent FCM token on file for this student', 422));
     }
 
-    const subLine = [receipt.course_name, receipt.subject_name].filter(Boolean).join(' › ');
+    const subLine    = [receipt.course_name, receipt.subject_name].filter(Boolean).join(' › ');
+    const amountStr  = parseFloat(receipt.amount_paid.toString()).toFixed(0);
     const sent = await sendFcm({
       token: student.parent_fcm_token,
       title: 'Fee Payment Receipt',
@@ -500,17 +677,12 @@ export async function resendReceipt(
         `Dear ${student.parent_name ?? 'Parent'}, fee receipt for ` +
         `${student.first_name} ${student.last_name}` +
         (subLine ? ` (${subLine})` : '') +
-        ` ready. Amount: ₹${parseFloat(receipt.amount_paid.toString()).toFixed(0)}. ` +
-        `Receipt No: ${receipt.receipt_number}.`,
+        ` ready. Amount: ₹${amountStr}. Receipt No: ${receipt.receipt_number}.`,
       data: { type: 'fee_receipt', receipt_id: receipt.id, receipt_number: receipt.receipt_number },
     });
 
     if (sent) {
-      await academyExec(
-        academySlug,
-        `UPDATE fee_receipts SET fcm_sent = TRUE WHERE id = $1`,
-        [id]
-      );
+      await academyExec(academySlug, `UPDATE fee_receipts SET fcm_sent = TRUE WHERE id = $1`, [id]);
     }
 
     res.json({

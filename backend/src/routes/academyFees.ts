@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import { academyAuthMiddleware, requireRole } from '../middleware/academyAuth';
 import {
-  listFees, collectFee, generateMonthlyFees,
-  markOverdueFees, getStudentFees,
+  listFees, listFeesStudentSummary, collectFee,
+  generateMonthlyFees, markOverdueFees, getStudentFees,
   listReceipts, getReceipt, resendReceipt,
 } from '../controllers/academy/feeController';
 
@@ -10,6 +10,7 @@ const router = Router();
 router.use(academyAuthMiddleware);
 
 router.get ('/',                          listFees);
+router.get ('/students-summary',          listFeesStudentSummary);
 router.post('/collect',  requireRole('admin', 'teacher'), collectFee);
 router.post('/generate', requireRole('admin'), generateMonthlyFees);
 router.post('/mark-overdue', requireRole('admin'), markOverdueFees);

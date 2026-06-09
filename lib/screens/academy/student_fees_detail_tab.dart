@@ -43,6 +43,7 @@ class _StudentFeesDetailTabState extends State<StudentFeesDetailTab>
   void initState() {
     super.initState();
     _loadCourses();
+    _loadStudents(); // load all students immediately; course picker is optional filter
   }
 
   @override
@@ -83,7 +84,6 @@ class _StudentFeesDetailTabState extends State<StudentFeesDetailTab>
   }
 
   Future<void> _loadStudents() async {
-    if (_courseId == null) return;
     if (!mounted) return;
     setState(() { _loadingStudents = true; _studentsError = null; });
     try {
@@ -167,47 +167,39 @@ class _StudentFeesDetailTabState extends State<StudentFeesDetailTab>
           ),
         ),
 
-        // ── Student list / placeholder ───────────────────────────────────────
+        // ── Student list ─────────────────────────────────────────────────────
         Expanded(
-          child: _courseId == null
-              ? _Hint(
-                  icon: Icons.touch_app_outlined,
-                  title: 'Select a course',
-                  message:
-                      'Choose a course above to see the students enrolled in it.',
-                )
-              : Column(
-                  children: [
-                    // Search
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-                      child: TextField(
-                        controller: _searchCtrl,
-                        onChanged: (v) => setState(() => _query = v),
-                        decoration: InputDecoration(
-                          hintText: 'Search students by name, ID or mobile',
-                          prefixIcon: const Icon(Icons.search, size: 20),
-                          suffixIcon: _query.isNotEmpty
-                              ? IconButton(
-                                  icon: const Icon(Icons.clear, size: 18),
-                                  onPressed: () {
-                                    _searchCtrl.clear();
-                                    setState(() => _query = '');
-                                  })
-                              : null,
-                          isDense: true,
-                          filled: true,
-                          fillColor: theme.colorScheme.surfaceContainerLow,
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide.none,
-                          ),
-                        ),
-                      ),
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                child: TextField(
+                  controller: _searchCtrl,
+                  onChanged: (v) => setState(() => _query = v),
+                  decoration: InputDecoration(
+                    hintText: 'Search students by name, ID or mobile',
+                    prefixIcon: const Icon(Icons.search, size: 20),
+                    suffixIcon: _query.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.clear, size: 18),
+                            onPressed: () {
+                              _searchCtrl.clear();
+                              setState(() => _query = '');
+                            })
+                        : null,
+                    isDense: true,
+                    filled: true,
+                    fillColor: theme.colorScheme.surfaceContainerLow,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide.none,
                     ),
-                    Expanded(child: _buildStudentList(theme)),
-                  ],
+                  ),
                 ),
+              ),
+              Expanded(child: _buildStudentList(theme)),
+            ],
+          ),
         ),
       ],
     );
@@ -223,8 +215,10 @@ class _StudentFeesDetailTabState extends State<StudentFeesDetailTab>
     if (_students.isEmpty) {
       return _Hint(
         icon: Icons.people_outline,
-        title: 'No students enrolled',
-        message: 'No active students are enrolled in $_courseName yet.',
+        title: 'No students found',
+        message: _courseName != null
+            ? 'No active students are enrolled in $_courseName yet.'
+            : 'No active students found.',
       );
     }
     final list = _filteredStudents;

@@ -24,10 +24,11 @@ class _FeesScreenState extends State<FeesScreen>
     _Tab('Paid',    'paid'),
   ];
 
-  List<Map<String, dynamic>> _all      = [];
-  Map<String, dynamic>       _summary  = {};
-  bool   _loading = true;
-  String _month   = _currentMonth();
+  List<Map<String, dynamic>> _all     = [];
+  Map<String, dynamic>       _summary = {};
+  bool   _loading      = true;
+  String _month        = _currentMonth();
+  int    _reloadTrigger = 0;
 
   static String _currentMonth() =>
       DateTime.now().toIso8601String().substring(0, 7);
@@ -35,7 +36,7 @@ class _FeesScreenState extends State<FeesScreen>
   @override
   void initState() {
     super.initState();
-    // +2: one for "By Student" tab, one for "Receipts" tab.
+    // Tabs: Students + 5 status tabs + Receipts = 7
     _tabCtrl = TabController(length: _tabs.length + 2, vsync: this);
     _tabCtrl.addListener(() { if (mounted) setState(() {}); });
     _load();
@@ -62,6 +63,11 @@ class _FeesScreenState extends State<FeesScreen>
       if (!mounted) return;
       setState(() => _loading = false);
     }
+  }
+
+  void _onPaymentMade() {
+    setState(() => _reloadTrigger++);
+    _load();
   }
 
   List<Map<String, dynamic>> _filtered(String? status) => status == null
@@ -122,8 +128,8 @@ class _FeesScreenState extends State<FeesScreen>
     }
   }
 
-  // True when the current tab is one of the status-filtered tabs (shows month strip)
-  bool get _showMonthStrip => _tabCtrl.index < _tabs.length;
+  // True for Students tab (0) and status tabs (1–5) — not Receipts (6)
+  bool get _showMonthStrip => _tabCtrl.index <= _tabs.length;
 
   @override
   Widget build(BuildContext context) {
@@ -164,6 +170,7 @@ class _FeesScreenState extends State<FeesScreen>
           controller: _tabCtrl,
           isScrollable: true,
           tabs: [
+            const Tab(text: 'Students'),
             ..._tabs.map((t) => Tab(
                   child: Text(
                     t.status == null
@@ -171,7 +178,6 @@ class _FeesScreenState extends State<FeesScreen>
                         : '${t.label} (${_filtered(t.status).length})',
                   ),
                 )),
-            const Tab(text: 'By Student'),
             const Tab(text: 'Receipts'),
           ],
         ),
@@ -180,57 +186,64 @@ class _FeesScreenState extends State<FeesScreen>
         children: [
           if (_showMonthStrip)
             Container(
-            color: theme.colorScheme.surfaceContainerLow,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            child: Column(
-              children: [
-                Row(
-                  children: [
-                    Icon(Icons.calendar_today_outlined,
-                        size: 16, color: theme.colorScheme.primary),
-                    const SizedBox(width: 6),
-                    Text(
-                      _formatMonth(_month),
-                      style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: theme.colorScheme.primary),
-                    ),
-                    const Spacer(),
-                    if (_loading)
-                      const SizedBox(
-                          width: 16, height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2)),
-                  ],
-                ),
-                if (!_loading && _summary.isNotEmpty) ...[
-                  const SizedBox(height: 8),
+              color: theme.colorScheme.surfaceContainerLow,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              child: Column(
+                children: [
                   Row(
                     children: [
-                      _SummaryChip(
-                          label: 'Collected',
-                          value: '₹${_fmt(_summary['total_paid'])}',
-                          color: Colors.green),
-                      const SizedBox(width: 8),
-                      _SummaryChip(
-                          label: 'Pending',
-                          value: '${_summary['count_pending']}',
-                          color: Colors.orange),
-                      const SizedBox(width: 8),
-                      _SummaryChip(
-                          label: 'Overdue',
-                          value: '${_summary['count_overdue']}',
-                          color: Colors.red),
+                      Icon(Icons.calendar_today_outlined,
+                          size: 16, color: theme.colorScheme.primary),
+                      const SizedBox(width: 6),
+                      Text(
+                        _formatMonth(_month),
+                        style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: theme.colorScheme.primary),
+                      ),
+                      const Spacer(),
+                      if (_loading)
+                        const SizedBox(
+                            width: 16, height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2)),
                     ],
                   ),
+                  if (!_loading && _summary.isNotEmpty && _tabCtrl.index > 0) ...[
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        _SummaryChip(
+                            label: 'Collected',
+                            value: '₹${_fmt(_summary['total_paid'])}',
+                            color: Colors.green),
+                        const SizedBox(width: 8),
+                        _SummaryChip(
+                            label: 'Pending',
+                            value: '${_summary['count_pending']}',
+                            color: Colors.orange),
+                        const SizedBox(width: 8),
+                        _SummaryChip(
+                            label: 'Overdue',
+                            value: '${_summary['count_overdue']}',
+                            color: Colors.red),
+                      ],
+                    ),
+                  ],
                 ],
-              ],
+              ),
             ),
-          ),
 
           Expanded(
             child: TabBarView(
               controller: _tabCtrl,
               children: [
+                // Tab 0: Students — collect fees
+                _StudentsTab(
+                  month: _month,
+                  reloadTrigger: _reloadTrigger,
+                  onPaymentMade: _onPaymentMade,
+                ),
+                // Tabs 1–5: flat status lists
                 ..._tabs.map((t) => _FeeList(
                       records: _filtered(t.status),
                       loading: _loading,
@@ -242,12 +255,19 @@ class _FeesScreenState extends State<FeesScreen>
                           shape: const RoundedRectangleBorder(
                               borderRadius: BorderRadius.vertical(
                                   top: Radius.circular(20))),
-                          builder: (_) => FeeCollectionSheet(record: record),
+                          builder: (_) => FeeCollectionSheet(
+                            studentId: record['student_id'] as String? ?? '',
+                            studentName:
+                                '${record['first_name'] ?? ''} ${record['last_name'] ?? ''}'
+                                    .trim(),
+                            mobile: record['mobile'] as String? ?? '',
+                            pendingRecords: [record],
+                          ),
                         );
-                        if (ok == true) _load();
+                        if (ok == true) _onPaymentMade();
                       },
                     )),
-                const StudentFeesDetailTab(),
+                // Tab 6: Receipts
                 const _ReceiptsTab(),
               ],
             ),
@@ -273,6 +293,347 @@ class _FeesScreenState extends State<FeesScreen>
   }
 }
 
+// ── Students tab ─────────────────────────────────────────────────────────────
+
+class _StudentsTab extends StatefulWidget {
+  final String month;
+  final int reloadTrigger;
+  final VoidCallback onPaymentMade;
+
+  const _StudentsTab({
+    required this.month,
+    required this.reloadTrigger,
+    required this.onPaymentMade,
+  });
+
+  @override
+  State<_StudentsTab> createState() => _StudentsTabState();
+}
+
+class _StudentsTabState extends State<_StudentsTab>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  List<Map<String, dynamic>> _students = [];
+  bool    _loading = false;
+  String? _error;
+  final _searchCtrl = TextEditingController();
+  String _q = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(_StudentsTab old) {
+    super.didUpdateWidget(old);
+    if (old.month != widget.month || old.reloadTrigger != widget.reloadTrigger) {
+      _load();
+    }
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    if (!mounted) return;
+    setState(() { _loading = true; _error = null; });
+    try {
+      final data = await AcademyApiService.getFeesStudentSummary(month: widget.month);
+      if (!mounted) return;
+      setState(() {
+        _students = (data['students'] as List? ?? []).cast<Map<String, dynamic>>();
+        _loading  = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error   = e.toString().replaceFirst('Exception: ', '');
+        _loading = false;
+      });
+    }
+  }
+
+  List<Map<String, dynamic>> get _filtered {
+    if (_q.isEmpty) return _students;
+    final q = _q.toLowerCase();
+    return _students.where((s) {
+      final name   = '${s['first_name'] ?? ''} ${s['last_name'] ?? ''}'.toLowerCase();
+      final mobile = (s['mobile'] as String? ?? '').toLowerCase();
+      return name.contains(q) || mobile.contains(q);
+    }).toList();
+  }
+
+  void _openCollect(Map<String, dynamic> student) {
+    final records = (student['pending_records'] as List? ?? [])
+        .cast<Map<String, dynamic>>();
+    if (records.isEmpty) return;
+    showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => FeeCollectionSheet(
+        studentId:      student['student_id'] as String,
+        studentName:    '${student['first_name'] ?? ''} ${student['last_name'] ?? ''}'.trim(),
+        mobile:         student['mobile'] as String? ?? '',
+        pendingRecords: records,
+      ),
+    ).then((ok) { if (ok == true) widget.onPaymentMade(); });
+  }
+
+  void _openHistory(Map<String, dynamic> student) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => StudentFeeDetailScreen(
+          studentId:   student['student_id'] as String,
+          studentName: '${student['first_name'] ?? ''} ${student['last_name'] ?? ''}'.trim(),
+          mobile:      student['mobile'] as String? ?? '',
+        ),
+      ),
+    ).then((_) => _load());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    final theme = Theme.of(context);
+
+    if (_loading) return const Center(child: CircularProgressIndicator());
+
+    if (_error != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.cloud_off_outlined, size: 56, color: theme.colorScheme.error),
+              const SizedBox(height: 12),
+              Text(_error!, textAlign: TextAlign.center),
+              const SizedBox(height: 16),
+              FilledButton.icon(
+                  onPressed: _load,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Retry')),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
+          child: TextField(
+            controller: _searchCtrl,
+            onChanged: (v) => setState(() => _q = v),
+            decoration: InputDecoration(
+              hintText: 'Search by student name or mobile',
+              prefixIcon: const Icon(Icons.search, size: 20),
+              suffixIcon: _q.isNotEmpty
+                  ? IconButton(
+                      icon: const Icon(Icons.clear, size: 18),
+                      onPressed: () { _searchCtrl.clear(); setState(() => _q = ''); })
+                  : null,
+              isDense: true,
+              filled: true,
+              fillColor: theme.colorScheme.surfaceContainerLow,
+              border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide.none),
+            ),
+          ),
+        ),
+        Expanded(
+          child: _filtered.isEmpty
+              ? Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.check_circle_outline,
+                          size: 56,
+                          color: theme.colorScheme.onSurface.withValues(alpha: 0.25)),
+                      const SizedBox(height: 12),
+                      Text(
+                        _q.isEmpty
+                            ? 'No pending fees this month'
+                            : 'No students match "$_q"',
+                        style: theme.textTheme.bodyMedium,
+                      ),
+                    ],
+                  ),
+                )
+              : RefreshIndicator(
+                  onRefresh: _load,
+                  child: ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
+                    itemCount: _filtered.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    itemBuilder: (_, i) {
+                      final s = _filtered[i];
+                      return _StudentFeeCard(
+                        student:     s,
+                        onCollect:   () => _openCollect(s),
+                        onHistory:   () => _openHistory(s),
+                      );
+                    },
+                  ),
+                ),
+        ),
+      ],
+    );
+  }
+}
+
+// ── Student fee card (for Students tab) ──────────────────────────────────────
+
+class _StudentFeeCard extends StatelessWidget {
+  final Map<String, dynamic> student;
+  final VoidCallback onCollect;
+  final VoidCallback onHistory;
+
+  const _StudentFeeCard({
+    required this.student,
+    required this.onCollect,
+    required this.onHistory,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme   = Theme.of(context);
+    final name    = '${student['first_name'] ?? ''} ${student['last_name'] ?? ''}'.trim();
+    final mobile  = student['mobile'] as String? ?? '';
+    final balance = double.tryParse(student['balance']?.toString() ?? '') ?? 0.0;
+    final count   = int.tryParse(student['pending_count']?.toString() ?? '') ?? 0;
+
+    final initials = name
+        .split(' ')
+        .where((p) => p.isNotEmpty)
+        .take(2)
+        .map((p) => p[0].toUpperCase())
+        .join();
+
+    // Build compact subject list grouped by course
+    final records = (student['pending_records'] as List? ?? [])
+        .cast<Map<String, dynamic>>();
+    final coursesMap = <String, List<String>>{};
+    for (final r in records) {
+      final cName = (r['course_name'] as String?) ?? 'Course';
+      final sName = r['subject_name'] as String?;
+      coursesMap.putIfAbsent(cName, () => []);
+      if (sName != null && sName.isNotEmpty) coursesMap[cName]!.add(sName);
+    }
+    final subjectSummary = coursesMap.entries
+        .map((e) => e.value.isEmpty ? e.key : '${e.key}: ${e.value.join(', ')}')
+        .join(' · ');
+
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                CircleAvatar(
+                  backgroundColor: theme.colorScheme.primary.withValues(alpha: 0.12),
+                  child: Text(
+                    initials.isEmpty ? '?' : initials,
+                    style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: theme.colorScheme.primary),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(name.isEmpty ? 'Unnamed' : name,
+                          style: const TextStyle(fontWeight: FontWeight.w600)),
+                      if (mobile.isNotEmpty)
+                        Text(mobile,
+                            style: TextStyle(
+                                fontSize: 12,
+                                color: theme.colorScheme.onSurface
+                                    .withValues(alpha: 0.6))),
+                      if (subjectSummary.isNotEmpty)
+                        Text(
+                          subjectSummary,
+                          style: TextStyle(
+                              fontSize: 12,
+                              color: theme.colorScheme.primary
+                                  .withValues(alpha: 0.8)),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      '₹${balance.toStringAsFixed(0)}',
+                      style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                          color: Colors.orange),
+                    ),
+                    Text(
+                      '$count pending',
+                      style: TextStyle(
+                          fontSize: 11,
+                          color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  flex: 3,
+                  child: FilledButton.icon(
+                    onPressed: onCollect,
+                    icon: const Icon(Icons.payments_outlined, size: 16),
+                    label: Text('Collect  ₹${balance.toStringAsFixed(0)}'),
+                    style: FilledButton.styleFrom(minimumSize: const Size(0, 40)),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  flex: 2,
+                  child: OutlinedButton.icon(
+                    onPressed: onHistory,
+                    icon: const Icon(Icons.history, size: 16),
+                    label: const Text('History'),
+                    style: OutlinedButton.styleFrom(
+                        minimumSize: const Size(0, 40)),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 // ── Receipts admin tab ────────────────────────────────────────────────────────
 
 class _ReceiptsTab extends StatefulWidget {
@@ -288,7 +649,7 @@ class _ReceiptsTabState extends State<_ReceiptsTab>
   bool get wantKeepAlive => true;
 
   List<Map<String, dynamic>> _receipts = [];
-  bool   _loading = true;
+  bool    _loading = true;
   String? _error;
   final _searchCtrl = TextEditingController();
   String _q = '';
@@ -421,33 +782,22 @@ class _ReceiptAdminCard extends StatefulWidget {
 }
 
 class _ReceiptAdminCardState extends State<_ReceiptAdminCard> {
-  bool _resending = false;
+  bool _resending     = false;
   bool _generatingPdf = false;
 
   Future<void> _downloadPdf() async {
     if (_generatingPdf) return;
     final id = widget.receipt['id'] as String?;
-    if (id == null || id.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Receipt not found.'), backgroundColor: Colors.red));
-      }
-      return;
-    }
+    if (id == null || id.isEmpty) return;
     setState(() => _generatingPdf = true);
-    print('[Receipt] Download Started');
-    print('[Receipt] Receipt No: ${widget.receipt['receipt_number'] ?? 'unknown'}');
-    print('[Receipt] Student Id: ${widget.receipt['student_id'] ?? 'unknown'}');
     try {
-      final detail = await AcademyApiService.getReceipt(id);
+      final detail     = await AcademyApiService.getReceipt(id);
       if (!mounted) return;
       final academyName =
           context.read<AuthProvider>().academyUser?.academyName ?? 'Academy';
       await FeePdfService.generateReceiptPdf(
           context: context, academyName: academyName, receipt: detail);
-      print('[Receipt] PDF Generated Successfully');
     } catch (e) {
-      print('[Receipt] Validation Failed: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text(e.toString().replaceFirst('Exception: ', '')),
@@ -461,30 +811,20 @@ class _ReceiptAdminCardState extends State<_ReceiptAdminCard> {
   Future<void> _resend() async {
     if (_resending) return;
     final id = widget.receipt['id'] as String?;
-    if (id == null || id.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Receipt not found.'), backgroundColor: Colors.red));
-      }
-      return;
-    }
+    if (id == null || id.isEmpty) return;
     setState(() => _resending = true);
-    print('[Receipt] Resend Started');
-    print('[Receipt] Receipt No: ${widget.receipt['receipt_number'] ?? 'unknown'}');
     try {
-      final res = await AcademyApiService.resendReceipt(id);
-      print('[Receipt] Notification Sent');
+      final res  = await AcademyApiService.resendReceipt(id);
       if (mounted) {
         final sent = res['sent'] as bool? ?? false;
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(sent
               ? 'Notification sent to parent'
-              : 'Could not send — no device registered for this student'),
+              : 'Could not send — no device registered'),
           backgroundColor: sent ? Colors.green : Colors.orange,
         ));
       }
     } catch (e) {
-      print('[Receipt] Validation Failed: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text(e.toString().replaceFirst('Exception: ', '')),
@@ -497,13 +837,13 @@ class _ReceiptAdminCardState extends State<_ReceiptAdminCard> {
 
   @override
   Widget build(BuildContext context) {
-    final theme  = Theme.of(context);
-    final r      = widget.receipt;
-    final name   = '${r['first_name'] ?? ''} ${r['last_name'] ?? ''}'.trim();
-    final amount = double.tryParse(r['amount_paid']?.toString() ?? '') ?? 0.0;
-    final date   = _fmtDate(r['generated_at']);
-    final rcptNo = r['receipt_number'] as String? ?? '—';
-    final course = r['course_name'] as String? ?? '';
+    final theme   = Theme.of(context);
+    final r       = widget.receipt;
+    final name    = '${r['first_name'] ?? ''} ${r['last_name'] ?? ''}'.trim();
+    final amount  = double.tryParse(r['amount_paid']?.toString() ?? '') ?? 0.0;
+    final date    = _fmtDate(r['generated_at']);
+    final rcptNo  = r['receipt_number'] as String? ?? '—';
+    final course  = r['course_name'] as String? ?? '';
     final subject = r['subject_name'] as String?;
     final fcmSent = r['fcm_sent'] as bool? ?? false;
 
@@ -525,8 +865,7 @@ class _ReceiptAdminCardState extends State<_ReceiptAdminCard> {
                               color: theme.colorScheme.primary,
                               fontSize: 13)),
                       const SizedBox(height: 2),
-                      Text(name,
-                          style: const TextStyle(fontWeight: FontWeight.w600)),
+                      Text(name, style: const TextStyle(fontWeight: FontWeight.w600)),
                       if (course.isNotEmpty)
                         Text(
                           subject != null && subject.isNotEmpty
@@ -534,8 +873,7 @@ class _ReceiptAdminCardState extends State<_ReceiptAdminCard> {
                               : course,
                           style: TextStyle(
                               fontSize: 12,
-                              color: theme.colorScheme.onSurface
-                                  .withValues(alpha: 0.6)),
+                              color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
                         ),
                     ],
                   ),
@@ -551,8 +889,7 @@ class _ReceiptAdminCardState extends State<_ReceiptAdminCard> {
                     Text(date,
                         style: TextStyle(
                             fontSize: 11,
-                            color: theme.colorScheme.onSurface
-                                .withValues(alpha: 0.6))),
+                            color: theme.colorScheme.onSurface.withValues(alpha: 0.6))),
                     if (fcmSent)
                       Row(
                         mainAxisSize: MainAxisSize.min,
@@ -561,9 +898,7 @@ class _ReceiptAdminCardState extends State<_ReceiptAdminCard> {
                               size: 12, color: Colors.green),
                           const SizedBox(width: 3),
                           Text('Notified',
-                              style: TextStyle(
-                                  fontSize: 10,
-                                  color: Colors.green.shade700)),
+                              style: TextStyle(fontSize: 10, color: Colors.green.shade700)),
                         ],
                       ),
                   ],
@@ -577,14 +912,11 @@ class _ReceiptAdminCardState extends State<_ReceiptAdminCard> {
                   child: OutlinedButton.icon(
                     onPressed: _generatingPdf ? null : _downloadPdf,
                     icon: _generatingPdf
-                        ? const SizedBox(
-                            width: 14, height: 14,
+                        ? const SizedBox(width: 14, height: 14,
                             child: CircularProgressIndicator(strokeWidth: 2))
                         : const Icon(Icons.picture_as_pdf_outlined, size: 16),
-                    label: Text(
-                      _generatingPdf ? 'Generating...' : 'PDF',
-                      style: const TextStyle(fontSize: 12),
-                    ),
+                    label: Text(_generatingPdf ? 'Generating...' : 'PDF',
+                        style: const TextStyle(fontSize: 12)),
                     style: OutlinedButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 6)),
                   ),
@@ -594,14 +926,11 @@ class _ReceiptAdminCardState extends State<_ReceiptAdminCard> {
                   child: OutlinedButton.icon(
                     onPressed: _resending ? null : _resend,
                     icon: _resending
-                        ? const SizedBox(
-                            width: 14, height: 14,
+                        ? const SizedBox(width: 14, height: 14,
                             child: CircularProgressIndicator(strokeWidth: 2))
                         : const Icon(Icons.send_outlined, size: 16),
-                    label: Text(
-                      _resending ? 'Sending...' : 'Resend',
-                      style: const TextStyle(fontSize: 12),
-                    ),
+                    label: Text(_resending ? 'Sending...' : 'Resend',
+                        style: const TextStyle(fontSize: 12)),
                     style: OutlinedButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 6)),
                   ),
@@ -615,7 +944,7 @@ class _ReceiptAdminCardState extends State<_ReceiptAdminCard> {
   }
 }
 
-// ── Fee list ──────────────────────────────────────────────────────────────────
+// ── Fee list (status tabs) ────────────────────────────────────────────────────
 
 class _FeeList extends StatelessWidget {
   final List<Map<String, dynamic>> records;
@@ -647,7 +976,6 @@ class _FeeList extends StatelessWidget {
         ),
       );
     }
-
     return ListView.separated(
       padding: const EdgeInsets.all(12),
       itemCount: records.length,
@@ -658,7 +986,7 @@ class _FeeList extends StatelessWidget {
   }
 }
 
-// ── Fee card ──────────────────────────────────────────────────────────────────
+// ── Fee card (status tabs) ────────────────────────────────────────────────────
 
 class _FeeCard extends StatelessWidget {
   final Map<String, dynamic> record;
@@ -705,15 +1033,13 @@ class _FeeCard extends StatelessWidget {
                             : record['course_name'] as String? ?? 'Course',
                         style: TextStyle(
                             fontSize: 12,
-                            color: theme.colorScheme.onSurface
-                                .withValues(alpha: 0.6)),
+                            color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
                         overflow: TextOverflow.ellipsis,
                       ),
                       if (rcptNo != null)
                         Text(rcptNo,
                             style: TextStyle(
-                                fontSize: 11,
-                                color: theme.colorScheme.primary)),
+                                fontSize: 11, color: theme.colorScheme.primary)),
                     ],
                   ),
                 ),
@@ -736,20 +1062,16 @@ class _FeeCard extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text('Due: ₹${due.toStringAsFixed(0)}',
-                    style: const TextStyle(
-                        fontSize: 13, fontWeight: FontWeight.w600)),
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
                 if (paid > 0)
                   Text('Paid: ₹${paid.toStringAsFixed(0)}',
                       style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.green))
+                          fontSize: 13, fontWeight: FontWeight.w600, color: Colors.green))
                 else
                   Text('By ${_fmtDate(record['due_date'])}',
                       style: TextStyle(
                           fontSize: 12,
-                          color: theme.colorScheme.onSurface
-                              .withValues(alpha: 0.55))),
+                          color: theme.colorScheme.onSurface.withValues(alpha: 0.55))),
               ],
             ),
             const SizedBox(height: 10),
@@ -760,15 +1082,13 @@ class _FeeCard extends StatelessWidget {
                   Icon(Icons.check_circle, color: Colors.green, size: 28),
                   SizedBox(width: 6),
                   Text('Paid',
-                      style: TextStyle(
-                          color: Colors.green, fontWeight: FontWeight.w600)),
+                      style: TextStyle(color: Colors.green, fontWeight: FontWeight.w600)),
                 ],
               )
             else
               FilledButton.tonal(
                 onPressed: onCollect,
-                style: FilledButton.styleFrom(
-                    minimumSize: const Size.fromHeight(40)),
+                style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(40)),
                 child: Text('Collect  ₹${balance.toStringAsFixed(0)}'),
               ),
           ],
@@ -779,10 +1099,10 @@ class _FeeCard extends StatelessWidget {
 
   Color _statusColor(String s) {
     switch (s) {
-      case 'paid':     return Colors.green;
-      case 'overdue':  return Colors.red;
-      case 'partial':  return Colors.blue;
-      default:         return Colors.orange;
+      case 'paid':    return Colors.green;
+      case 'overdue': return Colors.red;
+      case 'partial': return Colors.blue;
+      default:        return Colors.orange;
     }
   }
 }
@@ -803,10 +1123,7 @@ class _StatusBadge extends StatelessWidget {
         ),
         child: Text(
           status.toUpperCase(),
-          style: TextStyle(
-              fontSize: 10,
-              fontWeight: FontWeight.bold,
-              color: color),
+          style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: color),
         ),
       );
 }
@@ -816,8 +1133,7 @@ class _StatusBadge extends StatelessWidget {
 class _SummaryChip extends StatelessWidget {
   final String label, value;
   final Color color;
-  const _SummaryChip(
-      {required this.label, required this.value, required this.color});
+  const _SummaryChip({required this.label, required this.value, required this.color});
 
   @override
   Widget build(BuildContext context) => Container(
@@ -833,64 +1149,98 @@ class _SummaryChip extends StatelessWidget {
             const SizedBox(width: 4),
             Text(value,
                 style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 12,
-                    color: color)),
+                    fontWeight: FontWeight.bold, fontSize: 12, color: color)),
           ],
         ),
       );
 }
 
-// ── Fee collection sheet ──────────────────────────────────────────────────────
+// ── Fee collection sheet (multi-subject) ─────────────────────────────────────
 
 class FeeCollectionSheet extends StatefulWidget {
-  final Map<String, dynamic> record;
-  const FeeCollectionSheet({super.key, required this.record});
+  final String studentId;
+  final String studentName;
+  final String mobile;
+  final List<Map<String, dynamic>> pendingRecords;
+
+  const FeeCollectionSheet({
+    super.key,
+    required this.studentId,
+    required this.studentName,
+    required this.mobile,
+    required this.pendingRecords,
+  });
 
   @override
   State<FeeCollectionSheet> createState() => _FeeCollectionSheetState();
 }
 
 class _FeeCollectionSheetState extends State<FeeCollectionSheet> {
-  final _amountCtrl  = TextEditingController();
-  final _remarksCtrl = TextEditingController();
+  late Map<String, bool> _selected;
   String _paymentMode = 'cash';
-  bool _saving = false;
-
-  // After success, store receipt info for download option
+  final _remarksCtrl  = TextEditingController();
+  bool    _saving     = false;
   String? _receiptNumber;
   String? _receiptId;
 
   @override
   void initState() {
     super.initState();
-    final due     = double.tryParse(widget.record['amount_due']?.toString()  ?? '0') ?? 0.0;
-    final paid    = double.tryParse(widget.record['amount_paid']?.toString() ?? '0') ?? 0.0;
-    final balance = (due - paid).clamp(0.0, double.infinity);
-    _amountCtrl.text = balance.toStringAsFixed(0);
+    _selected = { for (final r in widget.pendingRecords) r['id'] as String: true };
   }
 
   @override
   void dispose() {
-    _amountCtrl.dispose();
     _remarksCtrl.dispose();
     super.dispose();
   }
 
+  double get _totalSelected {
+    double total = 0;
+    for (final r in widget.pendingRecords) {
+      final id = r['id'] as String;
+      if (_selected[id] == true) {
+        total += double.tryParse(r['balance']?.toString() ?? '') ?? 0.0;
+      }
+    }
+    return total;
+  }
+
+  int get _selectedCount =>
+      _selected.values.where((v) => v).length;
+
+  // Group pending records by course
+  Map<String, List<Map<String, dynamic>>> get _byCourse {
+    final map = <String, List<Map<String, dynamic>>>{};
+    for (final r in widget.pendingRecords) {
+      final key = (r['course_name'] as String?) ?? 'Course';
+      map.putIfAbsent(key, () => []).add(r);
+    }
+    return map;
+  }
+
   Future<void> _collect() async {
-    final amount = double.tryParse(_amountCtrl.text);
-    if (amount == null || amount <= 0) {
+    final selectedItems = widget.pendingRecords
+        .where((r) => _selected[r['id']] == true)
+        .map((r) => {
+              'fee_record_id': r['id'] as String,
+              'amount_paid': double.tryParse(r['balance']?.toString() ?? '') ?? 0.0,
+            })
+        .toList();
+
+    if (selectedItems.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Enter a valid amount')));
+          const SnackBar(content: Text('Select at least one subject to collect')));
       return;
     }
+
     setState(() => _saving = true);
     try {
-      final result = await AcademyApiService.collectFee(
-        feeRecordId:  widget.record['id'] as String,
-        amountPaid:   amount,
-        paymentMode:  _paymentMode,
-        remarks:      _remarksCtrl.text.trim().isNotEmpty
+      final result = await AcademyApiService.collectFeeBulk(
+        studentId:   widget.studentId,
+        items:       selectedItems,
+        paymentMode: _paymentMode,
+        remarks:     _remarksCtrl.text.trim().isNotEmpty
             ? _remarksCtrl.text.trim()
             : null,
       );
@@ -898,37 +1248,29 @@ class _FeeCollectionSheetState extends State<FeeCollectionSheet> {
         final data = result['data'] as Map<String, dynamic>? ?? result;
         setState(() {
           _receiptNumber = data['receipt_number'] as String?;
-          _receiptId     = data['receipt_id'] as String?;
+          _receiptId     = data['receipt_id']     as String?;
         });
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(result['message']?.toString() ?? 'Payment recorded'),
-          backgroundColor: Colors.green,
-        ));
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text(e.toString()), backgroundColor: Colors.red));
       }
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
-    if (mounted) setState(() => _saving = false);
   }
 
   Future<void> _downloadReceipt() async {
     final id = _receiptId;
     if (id == null || id.isEmpty) return;
-    print('[Receipt] Download Started');
-    print('[Receipt] Receipt No: ${_receiptNumber ?? 'unknown'}');
     try {
-      final detail = await AcademyApiService.getReceipt(id);
+      final detail      = await AcademyApiService.getReceipt(id);
       if (!mounted) return;
-      final academyName =
-          context.read<AuthProvider>().academyUser?.academyName ?? 'Academy';
+      final academyName = context.read<AuthProvider>().academyUser?.academyName ?? 'Academy';
       await FeePdfService.generateReceiptPdf(
           context: context, academyName: academyName, receipt: detail);
-      print('[Receipt] PDF Generated Successfully');
     } catch (e) {
-      print('[Receipt] Validation Failed: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text(e.toString().replaceFirst('Exception: ', '')),
@@ -939,14 +1281,10 @@ class _FeeCollectionSheetState extends State<FeeCollectionSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final theme   = Theme.of(context);
-    final due     = double.tryParse(widget.record['amount_due']?.toString()  ?? '0') ?? 0.0;
-    final paid    = double.tryParse(widget.record['amount_paid']?.toString() ?? '0') ?? 0.0;
-    final balance = (due - paid).clamp(0.0, double.infinity);
+    final theme = Theme.of(context);
+    final mq    = MediaQuery.of(context);
 
-    final mq = MediaQuery.of(context);
-
-    // ── Success state after payment ───────────────────────────────────────────
+    // ── Success state ─────────────────────────────────────────────────────────
     if (_receiptNumber != null) {
       return SafeArea(
         child: Padding(
@@ -966,7 +1304,7 @@ class _FeeCollectionSheetState extends State<FeeCollectionSheet> {
               Text('Payment Recorded',
                   style: theme.textTheme.titleLarge
                       ?.copyWith(fontWeight: FontWeight.bold)),
-              const SizedBox(height: 8),
+              const SizedBox(height: 12),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                 decoration: BoxDecoration(
@@ -988,25 +1326,9 @@ class _FeeCollectionSheetState extends State<FeeCollectionSheet> {
                 ),
               ),
               const SizedBox(height: 8),
-              if (((widget.record['course_name'] as String?)?.isNotEmpty ?? false) ||
-                  ((widget.record['subject_name'] as String?)?.isNotEmpty ?? false))
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
-                  child: Text(
-                    [
-                      if ((widget.record['course_name'] as String?)?.isNotEmpty ?? false)
-                        widget.record['course_name'] as String,
-                      if ((widget.record['subject_name'] as String?)?.isNotEmpty ?? false)
-                        widget.record['subject_name'] as String,
-                    ].join(' · '),
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: theme.colorScheme.primary,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                ),
+              Text(widget.studentName,
+                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+              const SizedBox(height: 4),
               Text('A notification has been sent to the parent.',
                   style: TextStyle(
                       fontSize: 12,
@@ -1039,7 +1361,7 @@ class _FeeCollectionSheetState extends State<FeeCollectionSheet> {
     // ── Input form ────────────────────────────────────────────────────────────
     return SingleChildScrollView(
       padding: EdgeInsets.fromLTRB(
-          24, 24, 24,
+          24, 16, 24,
           mq.viewInsets.bottom + mq.padding.bottom + 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1054,74 +1376,56 @@ class _FeeCollectionSheetState extends State<FeeCollectionSheet> {
           ),
           const SizedBox(height: 16),
 
-          Text('Collect Fee',
-              style: theme.textTheme.titleLarge
-                  ?.copyWith(fontWeight: FontWeight.bold)),
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerLow,
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _FeeInfoRow(
-                  icon: Icons.person_outline,
-                  label: 'Student',
-                  value: '${widget.record['first_name'] ?? ''} ${widget.record['last_name'] ?? ''}'.trim(),
+          // Header
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Collect Fees',
+                        style: theme.textTheme.titleLarge
+                            ?.copyWith(fontWeight: FontWeight.bold)),
+                    Text(widget.studentName,
+                        style: TextStyle(
+                            fontSize: 14,
+                            color: theme.colorScheme.onSurface.withValues(alpha: 0.7))),
+                    if (widget.mobile.isNotEmpty)
+                      Text(widget.mobile,
+                          style: TextStyle(
+                              fontSize: 12,
+                              color: theme.colorScheme.onSurface.withValues(alpha: 0.55))),
+                  ],
                 ),
-                if ((widget.record['course_name'] as String?)?.isNotEmpty ?? false) ...[
-                  const SizedBox(height: 6),
-                  _FeeInfoRow(
-                    icon: Icons.menu_book_outlined,
-                    label: 'Course',
-                    value: widget.record['course_name'] as String,
-                  ),
-                ],
-                if ((widget.record['subject_name'] as String?)?.isNotEmpty ?? false) ...[
-                  const SizedBox(height: 6),
-                  _FeeInfoRow(
-                    icon: Icons.science_outlined,
-                    label: 'Subject',
-                    value: widget.record['subject_name'] as String,
-                  ),
-                ],
-              ],
-            ),
+              ),
+              // Select all / deselect all
+              TextButton(
+                onPressed: () {
+                  final allSelected = _selectedCount == widget.pendingRecords.length;
+                  setState(() {
+                    for (final k in _selected.keys) {
+                      _selected[k] = !allSelected;
+                    }
+                  });
+                },
+                child: Text(_selectedCount == widget.pendingRecords.length
+                    ? 'Deselect All'
+                    : 'Select All'),
+              ),
+            ],
           ),
           const SizedBox(height: 16),
 
-          // Balance summary
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerLow,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: [
-                _BalanceTile('Total Due', '₹${due.toStringAsFixed(0)}'),
-                _BalanceTile('Paid',      '₹${paid.toStringAsFixed(0)}', color: Colors.green),
-                _BalanceTile('Balance',   '₹${balance.toStringAsFixed(0)}', color: Colors.orange),
-              ],
-            ),
-          ),
+          // Subjects grouped by course
+          ..._byCourse.entries.map((entry) => _CourseSubjectGroup(
+                courseName: entry.key,
+                records:    entry.value,
+                selected:   _selected,
+                onToggle:   (id, val) => setState(() => _selected[id] = val),
+              )),
           const SizedBox(height: 16),
 
-          TextFormField(
-            controller: _amountCtrl,
-            keyboardType: TextInputType.number,
-            decoration: const InputDecoration(
-              labelText: 'Amount to Collect (₹)',
-              prefixText: '₹ ',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 12),
-
+          // Payment mode
           DropdownButtonFormField<String>(
             value: _paymentMode,
             decoration: const InputDecoration(
@@ -1143,17 +1447,42 @@ class _FeeCollectionSheetState extends State<FeeCollectionSheet> {
           ),
           const SizedBox(height: 20),
 
+          // Total + confirm
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.primaryContainer.withValues(alpha: 0.4),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('$_selectedCount subject${_selectedCount == 1 ? '' : 's'} selected',
+                    style: TextStyle(
+                        fontSize: 13,
+                        color: theme.colorScheme.onSurface.withValues(alpha: 0.7))),
+                Text('₹${_totalSelected.toStringAsFixed(0)}',
+                    style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: theme.colorScheme.primary)),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+
           FilledButton.icon(
-            onPressed: _saving ? null : _collect,
+            onPressed: (_saving || _selectedCount == 0) ? null : _collect,
             icon: _saving
                 ? const SizedBox(
                     width: 18, height: 18,
                     child: CircularProgressIndicator(
                         strokeWidth: 2, color: Colors.white))
-                : const Icon(Icons.check),
-            label: const Text('Confirm Payment'),
-            style: FilledButton.styleFrom(
-                minimumSize: const Size.fromHeight(50)),
+                : const Icon(Icons.payments_outlined),
+            label: Text(_saving
+                ? 'Processing...'
+                : 'Confirm Payment  ₹${_totalSelected.toStringAsFixed(0)}'),
+            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(50)),
           ),
         ],
       ),
@@ -1161,28 +1490,105 @@ class _FeeCollectionSheetState extends State<FeeCollectionSheet> {
   }
 }
 
-class _BalanceTile extends StatelessWidget {
-  final String label, value;
-  final Color? color;
-  const _BalanceTile(this.label, this.value, {this.color});
+// ── Course + subject group in collection sheet ────────────────────────────────
+
+class _CourseSubjectGroup extends StatelessWidget {
+  final String courseName;
+  final List<Map<String, dynamic>> records;
+  final Map<String, bool> selected;
+  final void Function(String id, bool val) onToggle;
+
+  const _CourseSubjectGroup({
+    required this.courseName,
+    required this.records,
+    required this.selected,
+    required this.onToggle,
+  });
 
   @override
-  Widget build(BuildContext context) => Column(
-        children: [
-          Text(value,
-              style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                  color: color)),
-          Text(label,
-              style: TextStyle(
-                  fontSize: 11,
-                  color: Theme.of(context)
-                      .colorScheme
-                      .onSurface
-                      .withValues(alpha: 0.6))),
-        ],
-      );
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // Course header
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Row(
+            children: [
+              Icon(Icons.menu_book_outlined,
+                  size: 15, color: theme.colorScheme.primary),
+              const SizedBox(width: 6),
+              Text(courseName,
+                  style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                      color: theme.colorScheme.primary)),
+            ],
+          ),
+        ),
+        Container(
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerLow,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Column(
+            children: records.asMap().entries.map((entry) {
+              final i = entry.key;
+              final r = entry.value;
+              final id      = r['id'] as String;
+              final subject = (r['subject_name'] as String?) ?? 'Subject';
+              final balance = double.tryParse(r['balance']?.toString() ?? '') ?? 0.0;
+              final status  = r['status'] as String? ?? 'pending';
+              final isSelected = selected[id] ?? true;
+
+              return Column(
+                children: [
+                  if (i > 0)
+                    Divider(height: 1,
+                        color: theme.colorScheme.outline.withValues(alpha: 0.2)),
+                  CheckboxListTile(
+                    value: isSelected,
+                    onChanged: (v) => onToggle(id, v ?? false),
+                    title: Row(
+                      children: [
+                        Expanded(
+                          child: Text(subject,
+                              style: const TextStyle(fontWeight: FontWeight.w500)),
+                        ),
+                        Text('₹${balance.toStringAsFixed(0)}',
+                            style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: isSelected
+                                    ? theme.colorScheme.primary
+                                    : theme.colorScheme.onSurface.withValues(alpha: 0.5))),
+                      ],
+                    ),
+                    subtitle: _statusBadge(status),
+                    dense: true,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+                  ),
+                ],
+              );
+            }).toList(),
+          ),
+        ),
+        const SizedBox(height: 12),
+      ],
+    );
+  }
+
+  Widget? _statusBadge(String s) {
+    Color c;
+    switch (s) {
+      case 'overdue': c = Colors.red;    break;
+      case 'partial': c = Colors.blue;   break;
+      default:        c = Colors.orange; break;
+    }
+    return Text(s.toUpperCase(),
+        style: TextStyle(fontSize: 10, color: c, fontWeight: FontWeight.bold));
+  }
 }
 
 class _Tab {
@@ -1193,48 +1599,16 @@ class _Tab {
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
-class _FeeInfoRow extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String value;
-  const _FeeInfoRow({required this.icon, required this.label, required this.value});
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Row(
-      children: [
-        Icon(icon, size: 15, color: theme.colorScheme.primary),
-        const SizedBox(width: 8),
-        Text(
-          '$label: ',
-          style: TextStyle(
-              fontSize: 12,
-              color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
-        ),
-        Expanded(
-          child: Text(
-            value,
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
 String _fmtDate(dynamic raw) {
-  final s = raw?.toString() ?? '';
+  final s     = raw?.toString() ?? '';
   final clean = s.contains('T') ? s.split('T')[0] : s;
   if (clean.isEmpty) return '—';
   try {
     final d = DateTime.parse(clean);
     const months = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     return '${d.day.toString().padLeft(2, '0')} ${months[d.month]} ${d.year}';
   } catch (_) {
     return clean;
   }
 }
-

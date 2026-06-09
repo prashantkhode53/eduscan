@@ -173,6 +173,35 @@ export async function reconcileAcademySchemas(): Promise<void> {
         CREATE INDEX IF NOT EXISTS idx_receipts_student ON fee_receipts(student_id);
         CREATE INDEX IF NOT EXISTS idx_receipts_gendate ON fee_receipts(generated_at)
       `);
+      // Multi-subject receipt support: receipt_id on fee_records + items table
+      await academyExec(slug, `
+        ALTER TABLE IF EXISTS fee_records
+          ADD COLUMN IF NOT EXISTS receipt_id UUID REFERENCES fee_receipts(id) ON DELETE SET NULL
+      `);
+      await academyExec(slug, `
+        UPDATE fee_records fr
+        SET receipt_id = rcpt.id
+        FROM fee_receipts rcpt
+        WHERE rcpt.fee_record_id = fr.id
+          AND fr.receipt_id IS NULL
+      `);
+      await academyExec(slug, `
+        CREATE TABLE IF NOT EXISTS fee_receipt_items (
+          id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          receipt_id    UUID NOT NULL REFERENCES fee_receipts(id) ON DELETE CASCADE,
+          fee_record_id UUID NOT NULL REFERENCES fee_records(id),
+          subject_id    UUID,
+          subject_name  TEXT,
+          course_id     UUID,
+          course_name   TEXT,
+          amount_paid   NUMERIC(10,2) NOT NULL,
+          created_at    TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+      await academyExec(slug, `
+        CREATE INDEX IF NOT EXISTS idx_fri_receipt ON fee_receipt_items(receipt_id);
+        CREATE INDEX IF NOT EXISTS idx_fri_record  ON fee_receipt_items(fee_record_id)
+      `);
       ok++;
     } catch (err) {
       console.error(`[Reconcile] schema "${slug}" failed:`, err);
@@ -491,6 +520,27 @@ export async function runAcademyMigrations(
     `);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_receipts_student ON fee_receipts(student_id)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_receipts_gendate ON fee_receipts(generated_at)`);
+
+    // Multi-subject receipt support
+    await client.query(`
+      ALTER TABLE IF EXISTS fee_records
+        ADD COLUMN IF NOT EXISTS receipt_id UUID REFERENCES fee_receipts(id) ON DELETE SET NULL
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS fee_receipt_items (
+        id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        receipt_id    UUID NOT NULL REFERENCES fee_receipts(id) ON DELETE CASCADE,
+        fee_record_id UUID NOT NULL REFERENCES fee_records(id),
+        subject_id    UUID,
+        subject_name  TEXT,
+        course_id     UUID,
+        course_name   TEXT,
+        amount_paid   NUMERIC(10,2) NOT NULL,
+        created_at    TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_fri_receipt ON fee_receipt_items(receipt_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_fri_record  ON fee_receipt_items(fee_record_id)`);
 
     await client.query('COMMIT');
     console.log(`[Migration] Schema "${slug}" created successfully`);

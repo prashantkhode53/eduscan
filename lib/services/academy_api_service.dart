@@ -352,6 +352,36 @@ class AcademyApiService {
     return _parse(res) as Map<String, dynamic>;
   }
 
+  static Future<Map<String, dynamic>> collectFeeBulk({
+    required String studentId,
+    required List<Map<String, dynamic>> items,
+    String paymentMode = 'cash',
+    String? remarks,
+  }) async {
+    final res = await _http.post(
+          Uri.parse('${ApiEndpoints.academyFees}/collect'),
+          headers: await _headers(),
+          body: jsonEncode({
+            'student_id':   studentId,
+            'items':        items,
+            'payment_mode': paymentMode,
+            if (remarks != null) 'remarks': remarks,
+          }),
+        )
+        .timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
+  static Future<Map<String, dynamic>> getFeesStudentSummary({String? month}) async {
+    final params = <String, String>{
+      if (month != null) 'month': month,
+    };
+    final uri = Uri.parse('${ApiEndpoints.academyFees}/students-summary')
+        .replace(queryParameters: params.isEmpty ? null : params);
+    final res = await _http.get(uri, headers: await _headers()).timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
   static Future<Map<String, dynamic>> generateMonthlyFees({String? month}) async {
     final res = await _http.post(
           Uri.parse('${ApiEndpoints.academyFees}/generate'),
