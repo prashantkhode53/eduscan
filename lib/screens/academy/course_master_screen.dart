@@ -14,7 +14,8 @@ class _CourseMasterScreenState extends State<CourseMasterScreen> {
   List<Map<String, dynamic>> _courses      = [];
   List<Map<String, dynamic>> _academicYears = [];
   String? _filterYearId; // null = all years
-  bool _loading = true;
+  bool    _loading   = true;
+  String? _loadError;
 
   @override
   void initState() {
@@ -26,7 +27,7 @@ class _CourseMasterScreenState extends State<CourseMasterScreen> {
 
   Future<void> _loadAll() async {
     if (!mounted) return;
-    setState(() => _loading = true);
+    setState(() { _loading = true; _loadError = null; });
     try {
       final results = await Future.wait([
         AcademyApiService.getAcademicYears(),
@@ -40,27 +41,30 @@ class _CourseMasterScreenState extends State<CourseMasterScreen> {
       });
     } catch (e) {
       if (!mounted) return;
-      setState(() => _loading = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(e.toString().replaceFirst('Exception: ', '')),
-        backgroundColor: Colors.red,
-      ));
+      setState(() {
+        _loading   = false;
+        _loadError = e.toString().replaceFirst('Exception: ', '');
+      });
     }
   }
 
   Future<void> _loadCourses() async {
+    if (!mounted) return;
+    setState(() { _loading = true; _loadError = null; });
     try {
       final data =
           await AcademyApiService.getCourses(academicYearId: _filterYearId);
       if (!mounted) return;
-      setState(() => _courses = data.cast<Map<String, dynamic>>());
+      setState(() {
+        _courses  = data.cast<Map<String, dynamic>>();
+        _loading  = false;
+      });
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(e.toString().replaceFirst('Exception: ', '')),
-          backgroundColor: Colors.red,
-        ));
-      }
+      if (!mounted) return;
+      setState(() {
+        _loading   = false;
+        _loadError = e.toString().replaceFirst('Exception: ', '');
+      });
     }
   }
 
@@ -168,114 +172,131 @@ class _CourseMasterScreenState extends State<CourseMasterScreen> {
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
-                : _courses.isEmpty
+                : _loadError != null
                     ? Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.menu_book_outlined,
-                                size: 64,
-                                color: theme.colorScheme.onSurface
-                                    .withValues(alpha: 0.3)),
-                            const SizedBox(height: 12),
-                            const Text('No courses yet'),
-                            const SizedBox(height: 8),
-                            FilledButton.icon(
-                              onPressed: () => _showForm(),
-                              icon: const Icon(Icons.add),
-                              label: const Text('Add First Course'),
-                            ),
-                          ],
+                        child: Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.cloud_off_outlined,
+                                  size: 56,
+                                  color: theme.colorScheme.error
+                                      .withValues(alpha: 0.7)),
+                              const SizedBox(height: 12),
+                              Text(_loadError!,
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                      color: theme.colorScheme.error,
+                                      fontSize: 13)),
+                              const SizedBox(height: 16),
+                              FilledButton.icon(
+                                onPressed: _loadAll,
+                                icon: const Icon(Icons.refresh),
+                                label: const Text('Retry'),
+                              ),
+                            ],
+                          ),
                         ),
                       )
-                    : RefreshIndicator(
-                        onRefresh: _loadAll,
-                        child: ListView.separated(
-                          padding: const EdgeInsets.all(16),
-                          itemCount: _courses.length,
-                          separatorBuilder: (_, __) =>
-                              const SizedBox(height: 8),
-                          itemBuilder: (_, i) {
-                            final c            = _courses[i];
-                            final count        = (c['student_count'] as num?)?.toInt() ?? 0;
-                            final subjectCount = (c['subject_count'] as num?)?.toInt() ?? 0;
-                            final totalFee     = double.tryParse(c['total_subject_fee']?.toString() ?? '0') ?? 0.0;
-                            final yearName     = c['academic_year_name'] as String?;
-                            return Card(
-                              child: ListTile(
-                                leading: CircleAvatar(
-                                  backgroundColor: theme.colorScheme.primary
-                                      .withValues(alpha: 0.1),
-                                  child: Icon(Icons.menu_book,
-                                      color: theme.colorScheme.primary),
+                    : _courses.isEmpty
+                        ? Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.menu_book_outlined,
+                                    size: 64,
+                                    color: theme.colorScheme.onSurface
+                                        .withValues(alpha: 0.3)),
+                                const SizedBox(height: 12),
+                                const Text('No courses yet'),
+                                const SizedBox(height: 8),
+                                FilledButton.icon(
+                                  onPressed: () => _showForm(),
+                                  icon: const Icon(Icons.add),
+                                  label: const Text('Add First Course'),
                                 ),
-                                title: Text(c['name'] as String,
-                                    style: const TextStyle(
-                                        fontWeight: FontWeight.bold)),
-                                subtitle: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    if (yearName != null)
-                                      Container(
-                                        margin:
-                                            const EdgeInsets.only(top: 3, bottom: 2),
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 6, vertical: 1),
-                                        decoration: BoxDecoration(
-                                          color: theme.colorScheme.primary
-                                              .withValues(alpha: 0.1),
-                                          borderRadius:
-                                              BorderRadius.circular(6),
+                              ],
+                            ),
+                          )
+                        : RefreshIndicator(
+                            onRefresh: _loadAll,
+                            child: ListView.separated(
+                              padding: const EdgeInsets.all(16),
+                              itemCount: _courses.length,
+                              separatorBuilder: (_, __) =>
+                                  const SizedBox(height: 8),
+                              itemBuilder: (_, i) {
+                                final c            = _courses[i];
+                                final count        = (c['student_count'] as num?)?.toInt() ?? 0;
+                                final subjectCount = (c['subject_count'] as num?)?.toInt() ?? 0;
+                                final totalFee     = double.tryParse(c['total_subject_fee']?.toString() ?? '0') ?? 0.0;
+                                final yearName     = c['academic_year_name'] as String?;
+                                return Card(
+                                  child: ListTile(
+                                    onTap: () => _showSubjects(c),
+                                    leading: CircleAvatar(
+                                      backgroundColor: theme.colorScheme.primary
+                                          .withValues(alpha: 0.1),
+                                      child: Icon(Icons.menu_book,
+                                          color: theme.colorScheme.primary),
+                                    ),
+                                    title: Text(c['name'] as String,
+                                        style: const TextStyle(
+                                            fontWeight: FontWeight.bold)),
+                                    subtitle: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        if (yearName != null)
+                                          Container(
+                                            margin: const EdgeInsets.only(top: 3, bottom: 2),
+                                            padding: const EdgeInsets.symmetric(
+                                                horizontal: 6, vertical: 1),
+                                            decoration: BoxDecoration(
+                                              color: theme.colorScheme.primary
+                                                  .withValues(alpha: 0.1),
+                                              borderRadius: BorderRadius.circular(6),
+                                            ),
+                                            child: Text(yearName,
+                                                style: TextStyle(
+                                                    fontSize: 10,
+                                                    color: theme.colorScheme.primary,
+                                                    fontWeight: FontWeight.w600)),
+                                          ),
+                                        Text(
+                                          '$subjectCount subject${subjectCount == 1 ? '' : 's'}'
+                                          ' · ₹${totalFee.toStringAsFixed(0)} total'
+                                          ' · $count student${count == 1 ? '' : 's'}'
+                                          ' · tap to manage subjects',
+                                          style: const TextStyle(fontSize: 12),
                                         ),
-                                        child: Text(yearName,
-                                            style: TextStyle(
-                                                fontSize: 10,
-                                                color:
-                                                    theme.colorScheme.primary,
-                                                fontWeight: FontWeight.w600)),
-                                      ),
-                                    Text(
-                                      [
-                                        '$subjectCount subject${subjectCount == 1 ? '' : 's'}',
-                                        '₹${totalFee.toStringAsFixed(0)} total',
-                                        '$count student${count == 1 ? '' : 's'}',
-                                      ].join(' · '),
-                                      style: const TextStyle(fontSize: 12),
+                                      ],
                                     ),
-                                  ],
-                                ),
-                                trailing: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    TextButton.icon(
-                                      onPressed: () => _showSubjects(c),
-                                      icon: const Icon(Icons.list_alt_outlined, size: 18),
-                                      label: const Text('Subjects', style: TextStyle(fontSize: 12)),
-                                      style: TextButton.styleFrom(
-                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
-                                        visualDensity: VisualDensity.compact,
-                                      ),
+                                    trailing: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        IconButton(
+                                            icon: const Icon(Icons.edit_outlined),
+                                            tooltip: 'Edit',
+                                            onPressed: () => _showForm(course: c)),
+                                        IconButton(
+                                            icon: const Icon(
+                                                Icons.delete_outline,
+                                                color: Colors.red),
+                                            tooltip: 'Delete',
+                                            onPressed: () => _delete(c)),
+                                      ],
                                     ),
-                                    IconButton(
-                                        icon: const Icon(Icons.edit_outlined),
-                                        onPressed: () =>
-                                            _showForm(course: c)),
-                                    IconButton(
-                                        icon: const Icon(
-                                            Icons.delete_outline,
-                                            color: Colors.red),
-                                        onPressed: () => _delete(c)),
-                                  ],
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                      ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
           ),
         ],
       ),
-      floatingActionButton: _courses.isNotEmpty
+      floatingActionButton: !_loading
           ? FloatingActionButton.extended(
               onPressed: () => _showForm(),
               icon: const Icon(Icons.add),

@@ -80,10 +80,12 @@ class FeePdfService {
     try {
       final regularData = await rootBundle.load('assets/fonts/NotoSans-Regular.ttf');
       final boldData    = await rootBundle.load('assets/fonts/NotoSans-Bold.ttf');
-      final base = pw.Font.ttf(regularData.buffer.asByteData());
-      final bold = pw.Font.ttf(boldData.buffer.asByteData());
+      final base = pw.Font.ttf(regularData);
+      final bold = pw.Font.ttf(boldData);
+      debugPrint('[PDF] fonts loaded: regular=${regularData.lengthInBytes}b bold=${boldData.lengthInBytes}b');
       return pw.ThemeData.withFont(base: base, bold: bold);
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[PDF] font load failed, falling back to Helvetica: $e');
       return pw.ThemeData();
     }
   }
@@ -634,7 +636,7 @@ class FeePdfService {
                 ),
               ),
             ),
-            pw.Expanded(child: pw.SizedBox()),
+            pw.SizedBox(height: 20),
 
             // ── Footer ───────────────────────────────────────────────────────
             pw.Container(
@@ -675,7 +677,7 @@ class FeePdfService {
       bytes = await pdf.save();
     } catch (e, st) {
       debugPrint('[PDF] pdf.save() failed: $e\n$st');
-      throw Exception('PDF generation failed — please try again.');
+      throw Exception('PDF generation failed: $e');
     }
     await file.writeAsBytes(bytes);
     debugPrint('[PDF] Wrote ${bytes.length} bytes');

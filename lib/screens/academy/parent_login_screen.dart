@@ -44,6 +44,7 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
   bool _autoCapturing   = false;
   bool _faceDone        = false;
   bool _submittingFace  = false;
+  bool _noFaceDetected  = false;
   double _holdProgress  = 0.0;
   double _qualityScore  = 0.0;
   String _qualityHint   = '';
@@ -122,6 +123,10 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
       _qualityScore      = 0;
       _holdProgress      = 0;
       _overlayState      = FaceOverlayState.idle;
+      _noFaceDetected    = false;
+      _qualityHint       = '';
+      _autoCapturing     = false;
+      _processingFrame   = false;
     });
     _pageCtrl.animateToPage(0,
         duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
@@ -174,18 +179,21 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
 
         if (faces.isEmpty) {
           setState(() {
-            _overlayState = FaceOverlayState.idle;
-            _qualityScore = 0;
-            _qualityHint  = '';
+            _overlayState   = FaceOverlayState.idle;
+            _qualityScore   = 0;
+            _qualityHint    = '';
+            _noFaceDetected = true;
           });
           _cancelHold();
           return;
         }
 
+        setState(() => _noFaceDetected = false);
+
         if (faces.length > 1) {
           setState(() {
             _overlayState = FaceOverlayState.unknown;
-            _qualityHint  = 'Multiple faces — stand alone';
+            _qualityHint  = 'Multiple faces — please stand alone';
           });
           _cancelHold();
           return;
@@ -214,9 +222,30 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
         } else if (quality < 0.55) {
           _cancelHold();
         }
-      } catch (_) {}
-      _processingFrame = false;
+      } catch (_) {
+      } finally {
+        // Always reset so the next frame is not blocked.
+        _processingFrame = false;
+      }
     });
+  }
+
+  void _tryAgain() {
+    _processingFrame = false;
+    setState(() {
+      _faceError      = null;
+      _faceDone       = false;
+      _overlayState   = FaceOverlayState.idle;
+      _holdProgress   = 0.0;
+      _qualityScore   = 0.0;
+      _qualityHint    = '';
+      _autoCapturing  = false;
+      _noFaceDetected = false;
+    });
+    if (_camCtrl != null && _camCtrl!.value.isInitialized &&
+        !_camCtrl!.value.isStreamingImages) {
+      _startStream();
+    }
   }
 
   double _computeQuality(dynamic face) {
@@ -225,10 +254,11 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
     final pitch = (face.headEulerAngleX as double? ?? 0).abs();
     if (yaw > 25)  { _qualityHint = 'Look straight ahead'; return 0.0; }
     if (roll > 20) { _qualityHint = 'Hold your head level'; return 0.0; }
-    if (pitch > 20){ _qualityHint = 'Look directly at camera'; return 0.0; }
-    final sizeScore =
-        (((face.boundingBox.width as num).toDouble() - 80) / 120).clamp(0.0, 1.0);
-    if (sizeScore < 0.05) { _qualityHint = 'Move closer'; return 0.0; }
+    if (pitch > 20){ _qualityHint = 'Look directly at the camera'; return 0.0; }
+    final w = (face.boundingBox.width as num).toDouble();
+    if (w > 280)   { _qualityHint = 'Move slightly back'; return 0.0; }
+    final sizeScore = ((w - 80) / 120).clamp(0.0, 1.0);
+    if (sizeScore < 0.05) { _qualityHint = 'Move closer to the camera'; return 0.0; }
     final eyeScore =
         ((face.leftEyeOpenProbability  as double? ?? 1.0) +
          (face.rightEyeOpenProbability as double? ?? 1.0)) / 2.0;
@@ -236,7 +266,11 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
         (1 - yaw / 25) * 0.25 + (1 - roll / 20) * 0.15 +
         (1 - pitch / 20) * 0.15 + eyeScore * 0.10).clamp(0.0, 1.0);
     _qualityHint = score < 0.55
-        ? (sizeScore < 0.3 ? 'Move closer to camera' : 'Face the camera directly')
+        ? (sizeScore < 0.3
+            ? 'Move closer to the camera'
+            : eyeScore < 0.35
+                ? 'Improve lighting and look directly at the camera'
+                : 'Face the camera directly')
         : '';
     return score;
   }
@@ -278,7 +312,8 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
       // Auto-submit face for verification
       await _submitFace(imageBase64);
     } catch (e) {
-      _autoCapturing = false;
+      _autoCapturing   = false;
+      _processingFrame = false;
       if (mounted) {
         setState(() { _faceDone = false; _faceError = 'Capture failed: $e'; });
         _startStream();
@@ -320,8 +355,10 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
           _overlayState   = FaceOverlayState.idle;
           _holdProgress   = 0;
           _qualityScore   = 0;
+          _noFaceDetected = false;
         });
-        _startStream(); // let user retry
+        _processingFrame = false;
+        _startStream();
       }
     }
   }
@@ -561,6 +598,30 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
               ),
             ),
 
+          // Instruction banner
+          Container(
+            width: double.infinity,
+            margin: const EdgeInsets.only(bottom: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: Colors.blue.shade50,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.blue.shade200),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.face_outlined, size: 18, color: Colors.blue.shade700),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Please scan your son/daughter\'s registered face to continue.',
+                    style: TextStyle(fontSize: 13, color: Colors.blue.shade700),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
           // Camera
           Expanded(
             child: ClipRRect(
@@ -585,14 +646,18 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
                             ),
                             child: Text(
                               _submittingFace
-                                  ? 'Verifying your identity...'
+                                  ? 'Face detected. Verifying...'
                                   : _faceDone
                                       ? 'Face captured!'
                                       : _autoCapturing
                                           ? 'Hold still...'
-                                          : _qualityHint.isNotEmpty
-                                              ? _qualityHint
-                                              : 'Position your face in the oval',
+                                          : _overlayState == FaceOverlayState.detected
+                                              ? 'Face detected. Verifying...'
+                                              : _qualityHint.isNotEmpty
+                                                  ? _qualityHint
+                                                  : _noFaceDetected
+                                                      ? 'No face detected — position your face in the frame'
+                                                      : 'Position your face in the oval',
                               style: TextStyle(
                                 color: _overlayState == FaceOverlayState.successCheckin
                                     ? Colors.greenAccent
@@ -613,12 +678,11 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
           ),
           const SizedBox(height: 12),
 
-          // Error message
-          if (_faceError != null)
+          // Error banner + Try Again button
+          if (_faceError != null) ...[
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(12),
-              margin: const EdgeInsets.only(bottom: 8),
               decoration: BoxDecoration(
                 color: Colors.red.shade50,
                 borderRadius: BorderRadius.circular(10),
@@ -636,6 +700,18 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
                 ],
               ),
             ),
+            const SizedBox(height: 8),
+            FilledButton.icon(
+              onPressed: _tryAgain,
+              icon: const Icon(Icons.refresh, size: 18),
+              label: const Text('Try Again'),
+              style: FilledButton.styleFrom(
+                minimumSize: const Size.fromHeight(44),
+                backgroundColor: Colors.blue.shade600,
+              ),
+            ),
+            const SizedBox(height: 4),
+          ],
 
           // Quality indicator
           if (_qualityScore > 0 && !_submittingFace)
