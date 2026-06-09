@@ -34,6 +34,7 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
   String? _studentName;
   String? _academyName;
   bool    _hasMasterPassword = false;
+  bool    _hasFace           = false;
 
   // ── Step 1: face scan ──────────────────────────────────────────────────────
   CameraController? _camCtrl;
@@ -76,6 +77,21 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
       _studentName       = data['student_name']        as String? ?? '';
       _academyName       = data['academy_name']        as String? ?? '';
       _hasMasterPassword = data['has_master_password'] as bool?   ?? false;
+      _hasFace           = data['has_face']            as bool?   ?? false;
+
+      // No face registered but password is set → show password dialog directly.
+      // The session token is valid for 5 minutes regardless of which path is used.
+      if (!_hasFace && _hasMasterPassword) {
+        setState(() { _verifying = false; });
+        if (mounted && _sessionToken != null) {
+          showDialog<void>(
+            context: context,
+            barrierDismissible: false,
+            builder: (_) => InstitutePasswordDialog(sessionToken: _sessionToken!),
+          );
+        }
+        return;
+      }
 
       setState(() { _verifying = false; _step = 1; });
       _pageCtrl.animateToPage(1,
@@ -102,6 +118,7 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
       _faceError         = null;
       _sessionToken      = null;
       _hasMasterPassword = false;
+      _hasFace           = false;
       _qualityScore      = 0;
       _holdProgress      = 0;
       _overlayState      = FaceOverlayState.idle;
@@ -656,26 +673,52 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
             const SizedBox(height: 8),
           ],
 
-          // Password fallback — only shown when admin has enabled it for this student
+          // Password fallback — shown when admin has enabled it for this student
           if (_hasMasterPassword && !_submittingFace) ...[
             const SizedBox(height: 8),
-            OutlinedButton.icon(
-              onPressed: () {
-                if (_sessionToken == null) return;
-                showDialog<void>(
-                  context: context,
-                  barrierDismissible: false,
-                  builder: (_) => InstitutePasswordDialog(
-                    sessionToken: _sessionToken!,
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.orange.shade50,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.orange.shade200),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(children: [
+                    Icon(Icons.lock_outline,
+                        size: 15, color: Colors.orange.shade700),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Can\'t use face scan?',
+                      style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.orange.shade700),
+                    ),
+                  ]),
+                  const SizedBox(height: 6),
+                  OutlinedButton(
+                    onPressed: () {
+                      if (_sessionToken == null) return;
+                      showDialog<void>(
+                        context: context,
+                        barrierDismissible: false,
+                        builder: (_) => InstitutePasswordDialog(
+                          sessionToken: _sessionToken!,
+                        ),
+                      );
+                    },
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size.fromHeight(40),
+                      foregroundColor: Colors.orange.shade700,
+                      side: BorderSide(color: Colors.orange.shade400),
+                      backgroundColor: Colors.white,
+                    ),
+                    child: const Text('Login with Institute Password'),
                   ),
-                );
-              },
-              icon: const Icon(Icons.lock_outline, size: 18),
-              label: const Text('Use Institute Password'),
-              style: OutlinedButton.styleFrom(
-                minimumSize: const Size.fromHeight(44),
-                foregroundColor: Colors.orange.shade700,
-                side: BorderSide(color: Colors.orange.shade300),
+                ],
               ),
             ),
           ],
@@ -708,11 +751,10 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
   }
 }
 
-/// Allows only a–z, A–Z, and underscore.
-/// Spaces are automatically converted to underscores; all other characters
-/// (digits, punctuation, etc.) are silently dropped.
+/// Allows a–z, A–Z, 0–9, underscore, and hyphen.
+/// Spaces are converted to underscores; all other characters are dropped.
 class _AcademyCodeFormatter extends TextInputFormatter {
-  static final _invalid = RegExp(r'[^a-zA-Z_]');
+  static final _invalid = RegExp(r'[^a-zA-Z0-9_\-]');
 
   @override
   TextEditingValue formatEditUpdate(

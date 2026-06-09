@@ -1,8 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show FilteringTextInputFormatter, TextInputFormatter;
+import 'package:flutter/services.dart' show FilteringTextInputFormatter, TextInputFormatter, Clipboard, ClipboardData;
 import '../../services/academy_api_service.dart';
 import '../../services/face_service.dart';
 import '../../widgets/face_overlay_painter.dart';
@@ -93,6 +94,10 @@ class _AcademyStudentEditScreenState
   bool   _newPasswordObscure    = true;
   String? _masterPasswordError;
 
+  // ── Login status (read-only display) ──────────────────────────────────────
+  String? _studentStatus;
+  String? _lastLogin;
+
   // ── Scroll controller for step-0 form ─────────────────────────────────────
   final _step0ScrollCtrl = ScrollController();
 
@@ -130,6 +135,8 @@ class _AcademyStudentEditScreenState
       _dobCtrl.text = rawDob.contains('T') ? rawDob.split('T')[0] : rawDob;
       _gender                = studentData['gender'] as String?;
       _masterPasswordEnabled = studentData['fallback_password_enabled'] as bool? ?? false;
+      _studentStatus         = studentData['status'] as String? ?? 'active';
+      _lastLogin             = studentData['last_login'] as String?;
 
       // Restore subject-level enrollments from enrolled_subjects (new API field).
       final rawSubjects = studentData['enrolled_subjects'] as List?;
@@ -340,6 +347,85 @@ class _AcademyStudentEditScreenState
         setState(() {
           _revokingPassword     = false;
           _masterPasswordError  = e.toString().replaceFirst('Exception: ', '');
+        });
+      }
+    }
+  }
+
+  Future<void> _generatePassword() async {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+    final rng = Random.secure();
+    final pwd = List.generate(8, (_) => chars[rng.nextInt(chars.length)]).join();
+
+    setState(() { _settingPassword = true; _masterPasswordError = null; });
+    try {
+      await AcademyApiService.setStudentMasterPassword(widget.studentId, pwd);
+      if (!mounted) return;
+      setState(() {
+        _settingPassword       = false;
+        _masterPasswordEnabled = true;
+      });
+      // Show the generated password once so admin can share it
+      showDialog<void>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Password Generated'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Share this password with the parent. It will not be shown again.',
+                style: TextStyle(fontSize: 13),
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                decoration: BoxDecoration(
+                  color: Colors.orange.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.orange.shade300),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        pwd,
+                        style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 4,
+                            color: Colors.orange.shade800),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Copy',
+                      icon: const Icon(Icons.copy_outlined, size: 20),
+                      onPressed: () {
+                        Clipboard.setData(ClipboardData(text: pwd));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Password copied')),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Done'),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _settingPassword     = false;
+          _masterPasswordError = e.toString().replaceFirst('Exception: ', '');
         });
       }
     }
@@ -932,6 +1018,15 @@ class _AcademyStudentEditScreenState
             ),
             const SizedBox(height: 24),
 
+            // ── Login status (read-only) ───────────────────────────────────
+            _LoginStatusCard(
+              hasFace:          _hasFaceData,
+              passwordEnabled:  _masterPasswordEnabled,
+              accountStatus:    _studentStatus ?? 'active',
+              lastLogin:        _lastLogin,
+            ),
+            const SizedBox(height: 16),
+
             // ── Fallback login password (admin-only) ───────────────────────
             Container(
               padding: const EdgeInsets.all(16),
@@ -1043,6 +1138,18 @@ class _AcademyStudentEditScreenState
                           : Text(_masterPasswordEnabled ? 'Update' : 'Set'),
                     ),
                   ]),
+
+                  const SizedBox(height: 8),
+                  // Generate random password button
+                  OutlinedButton.icon(
+                    onPressed: _settingPassword ? null : _generatePassword,
+                    icon: const Icon(Icons.shuffle_outlined, size: 16),
+                    label: const Text('Generate Password'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.orange.shade700,
+                      side: BorderSide(color: Colors.orange.shade300),
+                    ),
+                  ),
 
                   // Revoke button — only visible when password is active
                   if (_masterPasswordEnabled) ...[
@@ -1365,6 +1472,146 @@ class _FaceStep extends StatelessWidget {
           ],
         ],
       ),
+    );
+  }
+}
+
+// ── Login Status Card ──────────────────────────────────────────────────────────
+
+class _LoginStatusCard extends StatelessWidget {
+  final bool hasFace;
+  final bool passwordEnabled;
+  final String accountStatus;
+  final String? lastLogin;
+
+  const _LoginStatusCard({
+    required this.hasFace,
+    required this.passwordEnabled,
+    required this.accountStatus,
+    this.lastLogin,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    String _formatDate(String? iso) {
+      if (iso == null || iso.isEmpty) return 'Never';
+      try {
+        final dt = DateTime.parse(iso).toLocal();
+        final d  = dt.day.toString().padLeft(2, '0');
+        final mo = dt.month.toString().padLeft(2, '0');
+        final yr = dt.year.toString();
+        final h  = dt.hour.toString().padLeft(2, '0');
+        final mi = dt.minute.toString().padLeft(2, '0');
+        return '$d/$mo/$yr $h:$mi';
+      } catch (_) {
+        return 'Unknown';
+      }
+    }
+
+    final isActive = accountStatus == 'active';
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: theme.colorScheme.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Icon(Icons.verified_user_outlined,
+                size: 16, color: theme.colorScheme.primary),
+            const SizedBox(width: 6),
+            Text('Login Status',
+                style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                    color: theme.colorScheme.primary)),
+          ]),
+          const SizedBox(height: 12),
+          _StatusRow(
+            label: 'Face Login',
+            value: hasFace ? 'Registered' : 'Not Registered',
+            icon: hasFace
+                ? Icons.face_retouching_natural
+                : Icons.face_retouching_off_outlined,
+            ok: hasFace,
+          ),
+          const SizedBox(height: 8),
+          _StatusRow(
+            label: 'Password Login',
+            value: passwordEnabled ? 'Enabled' : 'Disabled',
+            icon: passwordEnabled ? Icons.lock_outlined : Icons.lock_open_outlined,
+            ok: passwordEnabled,
+          ),
+          const SizedBox(height: 8),
+          _StatusRow(
+            label: 'Account Status',
+            value: isActive ? 'Active' : accountStatus[0].toUpperCase() + accountStatus.substring(1),
+            icon: isActive ? Icons.check_circle_outline : Icons.block_outlined,
+            ok: isActive,
+          ),
+          const SizedBox(height: 8),
+          _StatusRow(
+            label: 'Last Login',
+            value: _formatDate(lastLogin),
+            icon: Icons.access_time_outlined,
+            ok: lastLogin != null,
+            neutral: true,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatusRow extends StatelessWidget {
+  final String label;
+  final String value;
+  final IconData icon;
+  final bool ok;
+  final bool neutral;
+
+  const _StatusRow({
+    required this.label,
+    required this.value,
+    required this.icon,
+    required this.ok,
+    this.neutral = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = neutral
+        ? Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6)
+        : ok
+            ? Colors.green.shade700
+            : Colors.red.shade600;
+
+    return Row(
+      children: [
+        Icon(icon, size: 15, color: color),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 110,
+          child: Text(label,
+              style: TextStyle(
+                  fontSize: 12,
+                  color: Theme.of(context)
+                      .colorScheme
+                      .onSurface
+                      .withValues(alpha: 0.7))),
+        ),
+        Text(value,
+            style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: color)),
+      ],
     );
   }
 }

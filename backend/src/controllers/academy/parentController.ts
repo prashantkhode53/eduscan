@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
-import { academyQuery, academyQueryOne } from '../../db/poolManager';
+import { academyQuery, academyQueryOne, academyExec } from '../../db/poolManager';
 import { queryOne } from '../../db/pool';
 import { AppError } from '../../middleware/errorHandler';
 import { batchEmbed } from '../../utils/insightface';
@@ -183,6 +183,10 @@ export async function verifyFace(
     );
 
     console.log(`[parent/verify-face] LOGIN SUCCESS: ${studentId} @ ${academySlug} score=${score.toFixed(4)}`);
+
+    // Record login time (fire-and-forget — don't block the response)
+    academyExec(academySlug, `UPDATE students SET last_login = NOW() WHERE id = $1`, [studentId])
+      .catch((e) => console.error('[parent/verify-face] last_login update failed:', e));
 
     res.json({
       success: true,
@@ -413,6 +417,9 @@ export async function verifyPassword(
     );
 
     console.log(`[parent/verify-password] LOGIN SUCCESS (password): ${studentId} @ ${academySlug}`);
+
+    academyExec(academySlug, `UPDATE students SET last_login = NOW() WHERE id = $1`, [studentId])
+      .catch((e) => console.error('[parent/verify-password] last_login update failed:', e));
 
     res.json({
       success: true,
