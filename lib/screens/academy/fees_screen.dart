@@ -1018,9 +1018,9 @@ class _FeeCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme        = Theme.of(context);
     final status       = (record['status'] as String?) ?? 'pending';
-    final due          = (record['amount_due']  as num?)?.toDouble() ?? 0.0;
-    final paid         = (record['amount_paid'] as num?)?.toDouble() ?? 0.0;
-    final balance      = (record['balance']     as num?)?.toDouble()
+    final due          = double.tryParse(record['amount_due']?.toString()  ?? '') ?? 0.0;
+    final paid         = double.tryParse(record['amount_paid']?.toString() ?? '') ?? 0.0;
+    final balance      = double.tryParse(record['balance']?.toString()     ?? '')
         ?? (due - paid).clamp(0.0, double.infinity);
     final isPaid       = status == 'paid';
     final color        = _statusColor(status);
@@ -1275,7 +1275,7 @@ class _FeeCollectionSheetState extends State<FeeCollectionSheet> {
   }
 
   double get _totalOutstanding => widget.pendingRecords.fold(
-      0.0, (s, r) => s + ((r['balance'] as num?)?.toDouble() ?? 0.0));
+      0.0, (s, r) => s + (double.tryParse(r['balance']?.toString() ?? '') ?? 0.0));
 
   double get _installmentAmount =>
       double.tryParse(_installmentCtrl.text.trim()) ?? 0.0;
@@ -1313,7 +1313,7 @@ class _FeeCollectionSheetState extends State<FeeCollectionSheet> {
     final items = <Map<String, dynamic>>[];
     double remaining = installment;
     for (final r in sorted) {
-      final balance = (r['balance'] as num?)?.toDouble() ?? 0.0;
+      final balance = double.tryParse(r['balance']?.toString() ?? '') ?? 0.0;
       if (balance <= 0 || remaining <= 0) continue;
       final payment = remaining < balance ? remaining : balance;
       items.add({'fee_record_id': r['id'] as String, 'amount_paid': payment});
@@ -1592,8 +1592,8 @@ class _CourseInfoCard extends StatelessWidget {
     final subjects = <String>[];
 
     for (final r in records) {
-      totalDue  += (r['amount_due']  as num?)?.toDouble() ?? 0.0;
-      totalPaid += (r['amount_paid'] as num?)?.toDouble() ?? 0.0;
+      totalDue  += double.tryParse(r['amount_due']?.toString()  ?? '') ?? 0.0;
+      totalPaid += double.tryParse(r['amount_paid']?.toString() ?? '') ?? 0.0;
       final subName = r['subject_name'] as String?;
       if (subName != null && subName.isNotEmpty && !subjects.contains(subName)) {
         subjects.add(subName);

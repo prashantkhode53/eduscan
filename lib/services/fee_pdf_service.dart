@@ -471,15 +471,12 @@ class FeePdfService {
     final mobile         = receipt['mobile']      as String? ?? '—';
     final courseName     = receipt['course_name'] as String? ?? '';
     final subjectNames   = receipt['subject_names'] as String?;
-    final currentPayment = (receipt['amount_paid'] as num?)?.toDouble()
-        ?? double.tryParse(receipt['amount_paid']?.toString() ?? '') ?? 0;
-    final totalCourseFee = (receipt['total_course_fee'] as num?)?.toDouble()
-        ?? double.tryParse(receipt['total_course_fee']?.toString() ?? '') ?? 0;
-    final previousPaid   = (receipt['previous_paid'] as num?)?.toDouble()
-        ?? double.tryParse(receipt['previous_paid']?.toString() ?? '') ?? 0;
-    final totalPaid      = (receipt['total_paid'] as num?)?.toDouble()
+    final currentPayment   = double.tryParse(receipt['amount_paid']?.toString()       ?? '') ?? 0.0;
+    final totalCourseFee   = double.tryParse(receipt['total_course_fee']?.toString() ?? '') ?? 0.0;
+    final previousPaid     = double.tryParse(receipt['previous_paid']?.toString()    ?? '') ?? 0.0;
+    final totalPaid        = double.tryParse(receipt['total_paid']?.toString()       ?? '')
         ?? previousPaid + currentPayment;
-    final remainingBalance = (receipt['remaining_balance'] as num?)?.toDouble()
+    final remainingBalance = double.tryParse(receipt['remaining_balance']?.toString() ?? '')
         ?? (totalCourseFee - totalPaid).clamp(0.0, double.infinity);
     final paymentMode  = _parseMode(receipt['payment_mode'] as String?);
     final generatedAt  = _fmtDate(receipt['generated_at']);
