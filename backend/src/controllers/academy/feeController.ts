@@ -17,31 +17,65 @@ export async function listFees(
 
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
+    // Course-level aggregation: one row per (student, course)
     const rows = await academyQuery(
       academySlug,
-      `SELECT fr.*,
-              s.first_name, s.last_name, s.mobile,
-              c.name   AS course_name,
-              sub.name AS subject_name,
-              GREATEST(0, fr.amount_due - fr.amount_paid) AS balance,
-              rcpt.receipt_number
-       FROM fee_records fr
-       JOIN students s      ON s.id   = fr.student_id
-       LEFT JOIN courses c  ON c.id   = fr.course_id
-       LEFT JOIN subjects sub ON sub.id = fr.subject_id
-       LEFT JOIN fee_receipts rcpt ON rcpt.id = fr.receipt_id
-       WHERE ($1::text IS NULL OR fr.status = $1)
-         AND ($2::text IS NULL OR fr.student_id = $2)
-         AND ($3::uuid IS NULL OR fr.course_id = $3::uuid)
-         AND ($4::text IS NULL OR TO_CHAR(fr.due_date,'YYYY-MM') = $4)
+      `WITH course_fees AS (
+         SELECT
+           s.id          AS student_id,
+           s.first_name, s.last_name, s.mobile,
+           c.id          AS course_id,
+           c.name        AS course_name,
+           STRING_AGG(DISTINCT sub.name, ', ' ORDER BY sub.name)
+             FILTER (WHERE sub.name IS NOT NULL)       AS subject_names,
+           SUM(fr.amount_due)                          AS amount_due,
+           SUM(fr.amount_paid)                         AS amount_paid,
+           SUM(GREATEST(0, fr.amount_due - fr.amount_paid)) AS balance,
+           MAX(fr.due_date)                            AS due_date,
+           CASE
+             WHEN SUM(GREATEST(0, fr.amount_due - fr.amount_paid)) <= 0
+               THEN 'paid'
+             WHEN CURRENT_DATE > MAX(fr.due_date)
+              AND SUM(GREATEST(0, fr.amount_due - fr.amount_paid)) > 0
+               THEN 'overdue'
+             WHEN SUM(fr.amount_paid) > 0
+              AND SUM(GREATEST(0, fr.amount_due - fr.amount_paid)) > 0
+               THEN 'partial'
+             ELSE 'pending'
+           END           AS status,
+           JSON_AGG(
+             JSON_BUILD_OBJECT(
+               'id',           fr.id,
+               'course_id',    fr.course_id,
+               'course_name',  c.name,
+               'subject_id',   fr.subject_id,
+               'subject_name', sub.name,
+               'amount_due',   fr.amount_due,
+               'amount_paid',  fr.amount_paid,
+               'balance',      GREATEST(0, fr.amount_due - fr.amount_paid),
+               'status',       fr.status,
+               'due_date',     fr.due_date
+             ) ORDER BY fr.due_date
+           )               AS fee_records
+         FROM fee_records fr
+         JOIN students s      ON s.id  = fr.student_id
+         LEFT JOIN courses c  ON c.id  = fr.course_id
+         LEFT JOIN subjects sub ON sub.id = fr.subject_id
+         WHERE ($2::text IS NULL OR fr.student_id = $2)
+           AND ($3::uuid IS NULL OR fr.course_id  = $3::uuid)
+           AND ($4::text IS NULL OR TO_CHAR(fr.due_date,'YYYY-MM') = $4)
+         GROUP BY s.id, s.first_name, s.last_name, s.mobile, c.id, c.name
+       )
+       SELECT * FROM course_fees
+       WHERE ($1::text IS NULL OR status = $1)
        ORDER BY
-         CASE fr.status
+         CASE status
            WHEN 'overdue'  THEN 1
            WHEN 'pending'  THEN 2
            WHEN 'partial'  THEN 3
            ELSE 4
          END,
-         fr.due_date ASC
+         due_date ASC
        LIMIT $5 OFFSET $6`,
       [
         status     || null,
@@ -53,19 +87,40 @@ export async function listFees(
       ]
     );
 
+    // Course-level summary statistics
     const summary = await academyQueryOne<{
       total_due: string; total_paid: string;
-      count_pending: string; count_overdue: string; count_paid: string;
+      count_pending: string; count_overdue: string;
+      count_partial: string; count_paid: string;
     }>(
       academySlug,
-      `SELECT
-         COALESCE(SUM(amount_due),  0) AS total_due,
-         COALESCE(SUM(amount_paid), 0) AS total_paid,
+      `WITH course_fees AS (
+         SELECT
+           SUM(fr.amount_due)   AS total_due,
+           SUM(fr.amount_paid)  AS total_paid,
+           CASE
+             WHEN SUM(GREATEST(0, fr.amount_due - fr.amount_paid)) <= 0
+               THEN 'paid'
+             WHEN CURRENT_DATE > MAX(fr.due_date)
+              AND SUM(GREATEST(0, fr.amount_due - fr.amount_paid)) > 0
+               THEN 'overdue'
+             WHEN SUM(fr.amount_paid) > 0
+              AND SUM(GREATEST(0, fr.amount_due - fr.amount_paid)) > 0
+               THEN 'partial'
+             ELSE 'pending'
+           END AS status
+         FROM fee_records fr
+         WHERE ($1::text IS NULL OR TO_CHAR(fr.due_date,'YYYY-MM') = $1)
+         GROUP BY fr.student_id, fr.course_id
+       )
+       SELECT
+         COALESCE(SUM(total_due),  0) AS total_due,
+         COALESCE(SUM(total_paid), 0) AS total_paid,
          COUNT(*) FILTER (WHERE status='pending')  AS count_pending,
          COUNT(*) FILTER (WHERE status='overdue')  AS count_overdue,
+         COUNT(*) FILTER (WHERE status='partial')  AS count_partial,
          COUNT(*) FILTER (WHERE status='paid')     AS count_paid
-       FROM fee_records
-       WHERE ($1::text IS NULL OR TO_CHAR(due_date,'YYYY-MM') = $1)`,
+       FROM course_fees`,
       [month || null]
     );
 
@@ -78,6 +133,7 @@ export async function listFees(
           total_paid:    parseFloat(summary?.total_paid    ?? '0'),
           count_pending: parseInt(summary?.count_pending   ?? '0'),
           count_overdue: parseInt(summary?.count_overdue   ?? '0'),
+          count_partial: parseInt(summary?.count_partial   ?? '0'),
           count_paid:    parseInt(summary?.count_paid      ?? '0'),
         },
         page: parseInt(page),
@@ -531,24 +587,15 @@ export async function listReceipts(
          r.id, r.receipt_number, r.amount_paid, r.payment_mode,
          r.generated_at, r.fcm_sent,
          s.id AS student_id, s.first_name, s.last_name, s.mobile,
-         COALESCE(c.name,
-           (SELECT fri.course_name FROM fee_receipt_items fri
-            WHERE fri.receipt_id = r.id ORDER BY fri.course_name LIMIT 1)
-         ) AS course_name,
-         COALESCE(sub.name,
-           (SELECT CASE WHEN COUNT(*) > 1
-                        THEN COUNT(*)::TEXT || ' subjects'
-                        ELSE MAX(fri.subject_name)
-                   END
-            FROM fee_receipt_items fri WHERE fri.receipt_id = r.id)
-         ) AS subject_name,
-         fr.amount_due, fr.amount_paid AS fr_amount_paid,
-         fr.status AS fee_status, fr.due_date
+         (SELECT fri.course_name FROM fee_receipt_items fri
+          WHERE fri.receipt_id = r.id
+          ORDER BY fri.course_name LIMIT 1)      AS course_name,
+         (SELECT STRING_AGG(DISTINCT fri.subject_name, ', ' ORDER BY fri.subject_name)
+          FROM fee_receipt_items fri
+          WHERE fri.receipt_id = r.id
+            AND fri.subject_name IS NOT NULL)     AS subject_names
        FROM fee_receipts r
-       JOIN students s          ON s.id   = r.student_id
-       LEFT JOIN fee_records fr ON fr.id  = r.fee_record_id
-       LEFT JOIN courses c      ON c.id   = fr.course_id
-       LEFT JOIN subjects sub   ON sub.id = fr.subject_id
+       JOIN students s ON s.id = r.student_id
        WHERE ($1::text IS NULL OR r.student_id = $1)
          AND ($2::date IS NULL OR r.generated_at::date >= $2::date)
          AND ($3::date IS NULL OR r.generated_at::date <= $3::date)
@@ -586,35 +633,102 @@ export async function getReceipt(
       `SELECT
          r.*,
          s.first_name, s.last_name, s.mobile, s.parent_mobile,
-         c.name   AS course_name,
-         sub.name AS subject_name,
-         fr.amount_due, fr.amount_paid AS fr_amount_paid,
-         fr.status AS fee_status, fr.due_date, fr.paid_date,
-         GREATEST(0, COALESCE(fr.amount_due, 0) - COALESCE(fr.amount_paid, 0)) AS balance,
          u.name AS collected_by_name
        FROM fee_receipts r
-       JOIN students s          ON s.id  = r.student_id
-       LEFT JOIN fee_records fr ON fr.id = r.fee_record_id
-       LEFT JOIN courses c      ON c.id  = fr.course_id
-       LEFT JOIN subjects sub   ON sub.id = fr.subject_id
-       LEFT JOIN users u        ON u.id  = r.generated_by
+       JOIN students s ON s.id = r.student_id
+       LEFT JOIN users u ON u.id = r.generated_by
        WHERE r.id = $1`,
       [id]
     );
 
     if (!receipt) return next(new AppError('Receipt not found', 404));
 
-    // Fetch line items for multi-subject receipts
-    const items = await academyQuery(
+    // Fetch receipt items (all records paid in this receipt)
+    const items = await academyQuery<{
+      fee_record_id: string; course_id: string | null; course_name: string | null;
+      subject_id: string | null; subject_name: string | null; amount_paid: string;
+    }>(
       academySlug,
-      `SELECT course_name, subject_name, amount_paid
-       FROM fee_receipt_items
-       WHERE receipt_id = $1
-       ORDER BY course_name, subject_name`,
+      `SELECT fri.fee_record_id, fri.course_id, fri.course_name,
+              fri.subject_id, fri.subject_name, fri.amount_paid
+       FROM fee_receipt_items fri
+       WHERE fri.receipt_id = $1
+       ORDER BY fri.course_name, fri.subject_name`,
       [id]
     );
 
-    res.json({ success: true, data: { ...receipt, items: items.length > 0 ? items : null } });
+    // Compute course-level totals from the underlying fee_records
+    const recordIds = items.map(i => i.fee_record_id).filter(Boolean);
+    let courseTotals: {
+      course_id: string | null; course_name: string | null;
+      subject_names: string | null;
+      total_course_fee: string; total_paid_now: string; remaining_balance: string;
+    }[] = [];
+
+    if (recordIds.length > 0) {
+      // Get all fee_records for the same student+course combinations
+      const relatedCourses = await academyQuery<{
+        course_id: string | null; course_name: string | null;
+        student_id: string;
+      }>(
+        academySlug,
+        `SELECT DISTINCT fr.course_id, c.name AS course_name, fr.student_id
+         FROM fee_records fr
+         LEFT JOIN courses c ON c.id = fr.course_id
+         WHERE fr.id = ANY($1::uuid[])`,
+        [recordIds]
+      );
+
+      for (const rc of relatedCourses) {
+        const totalsRow = await academyQueryOne<{
+          total_course_fee: string; total_paid_now: string; subject_names: string | null;
+        }>(
+          academySlug,
+          `SELECT
+             SUM(fr.amount_due)  AS total_course_fee,
+             SUM(fr.amount_paid) AS total_paid_now,
+             STRING_AGG(DISTINCT sub.name, ', ' ORDER BY sub.name)
+               FILTER (WHERE sub.name IS NOT NULL) AS subject_names
+           FROM fee_records fr
+           LEFT JOIN subjects sub ON sub.id = fr.subject_id
+           WHERE fr.student_id = $1
+             AND ($2::uuid IS NULL OR fr.course_id = $2::uuid)`,
+          [rc.student_id, rc.course_id]
+        );
+        const totalCourseFee = parseFloat(totalsRow?.total_course_fee ?? '0');
+        const totalPaidNow   = parseFloat(totalsRow?.total_paid_now   ?? '0');
+        courseTotals.push({
+          course_id:         rc.course_id,
+          course_name:       rc.course_name,
+          subject_names:     totalsRow?.subject_names ?? null,
+          total_course_fee:  totalCourseFee.toString(),
+          total_paid_now:    totalPaidNow.toString(),
+          remaining_balance: Math.max(0, totalCourseFee - totalPaidNow).toString(),
+        });
+      }
+    }
+
+    // Primary course info (first course in the receipt)
+    const primaryCourse = courseTotals[0] ?? null;
+    const currentPayment = parseFloat((receipt as Record<string, unknown>)['amount_paid']?.toString() ?? '0');
+    const previousPaid   = primaryCourse
+      ? Math.max(0, parseFloat(primaryCourse.total_paid_now) - currentPayment)
+      : 0;
+
+    res.json({
+      success: true,
+      data: {
+        ...receipt,
+        course_name:       primaryCourse?.course_name       ?? null,
+        subject_names:     primaryCourse?.subject_names     ?? null,
+        total_course_fee:  primaryCourse ? parseFloat(primaryCourse.total_course_fee) : null,
+        previous_paid:     primaryCourse ? previousPaid : null,
+        total_paid:        primaryCourse ? parseFloat(primaryCourse.total_paid_now) : null,
+        remaining_balance: primaryCourse ? parseFloat(primaryCourse.remaining_balance) : null,
+        items:             items.length > 0 ? items : null,
+        course_totals:     courseTotals.length > 1 ? courseTotals : null,
+      },
+    });
   } catch (err) { next(err); }
 }
 

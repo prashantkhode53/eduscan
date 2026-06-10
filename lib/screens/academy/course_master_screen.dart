@@ -911,24 +911,58 @@ class _CourseFormState extends State<_CourseForm> {
             const SizedBox(height: 12),
             _SubjectInfoTile(course: widget.course),
             const SizedBox(height: 12),
-            // Fee due day
-            DropdownButtonFormField<int?>(
-              value: _feeDueDay,
-              decoration: const InputDecoration(
-                labelText: 'Fee Due Day',
-                helperText: 'Day of month when fee is due',
-                border: OutlineInputBorder(),
+            // Fee due date picker
+            TextFormField(
+              readOnly: true,
+              decoration: InputDecoration(
+                labelText: 'Fee Due Date',
+                helperText: 'Day of month when fee is due each cycle',
+                border: const OutlineInputBorder(),
+                suffixIcon: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_feeDueDay != null)
+                      IconButton(
+                        icon: const Icon(Icons.clear, size: 18),
+                        tooltip: 'Reset to last day of month',
+                        onPressed: () => setState(() => _feeDueDay = null),
+                      ),
+                    const Padding(
+                      padding: EdgeInsets.only(right: 10),
+                      child: Icon(Icons.calendar_today, size: 18),
+                    ),
+                  ],
+                ),
               ),
-              items: [
-                const DropdownMenuItem<int?>(
-                    value: null, child: Text('Last day of month')),
-                ...List.generate(28, (i) => i + 1).map((d) =>
-                    DropdownMenuItem<int?>(
-                      value: d,
-                      child: Text('$d${_ordinal(d)} of each month'),
-                    )),
-              ],
-              onChanged: (v) => setState(() => _feeDueDay = v),
+              controller: TextEditingController(
+                text: _feeDueDay != null
+                    ? '$_feeDueDay${_ordinal(_feeDueDay!)} of each month'
+                    : 'Last day of month',
+              ),
+              onTap: () async {
+                final now = DateTime.now();
+                // If a day is already set, try to show it in the current/next
+                // month so it's visible; fall back to today if it's in the past.
+                DateTime initial = now;
+                if (_feeDueDay != null) {
+                  final candidate = DateTime(now.year, now.month, _feeDueDay!);
+                  initial = candidate.isBefore(now)
+                      ? DateTime(now.year, now.month + 1, _feeDueDay!)
+                      : candidate;
+                }
+                final picked = await showDatePicker(
+                  context: context,
+                  initialDate: initial,
+                  firstDate: now,
+                  lastDate: DateTime(now.year + 5, 12, 31),
+                  helpText: 'Select fee due day',
+                  fieldLabelText: 'Due Day',
+                );
+                if (picked != null) {
+                  // Clamp to 28 — safe for all months including February
+                  setState(() => _feeDueDay = picked.day > 28 ? 28 : picked.day);
+                }
+              },
             ),
             const SizedBox(height: 12),
             TextFormField(

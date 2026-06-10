@@ -210,23 +210,31 @@ class _FeesScreenState extends State<FeesScreen>
                   ),
                   if (!_loading && _summary.isNotEmpty && _tabCtrl.index > 0) ...[
                     const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        _SummaryChip(
-                            label: 'Collected',
-                            value: '₹${_fmt(_summary['total_paid'])}',
-                            color: Colors.green),
-                        const SizedBox(width: 8),
-                        _SummaryChip(
-                            label: 'Pending',
-                            value: '${_summary['count_pending']}',
-                            color: Colors.orange),
-                        const SizedBox(width: 8),
-                        _SummaryChip(
-                            label: 'Overdue',
-                            value: '${_summary['count_overdue']}',
-                            color: Colors.red),
-                      ],
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          _SummaryChip(
+                              label: 'Collected',
+                              value: '₹${_fmt(_summary['total_paid'])}',
+                              color: Colors.green),
+                          const SizedBox(width: 8),
+                          _SummaryChip(
+                              label: 'Pending',
+                              value: '${_summary['count_pending'] ?? 0}',
+                              color: Colors.orange),
+                          const SizedBox(width: 8),
+                          _SummaryChip(
+                              label: 'Partial',
+                              value: '${_summary['count_partial'] ?? 0}',
+                              color: Colors.blue),
+                          const SizedBox(width: 8),
+                          _SummaryChip(
+                              label: 'Overdue',
+                              value: '${_summary['count_overdue'] ?? 0}',
+                              color: Colors.red),
+                        ],
+                      ),
                     ),
                   ],
                 ],
@@ -248,6 +256,10 @@ class _FeesScreenState extends State<FeesScreen>
                       records: _filtered(t.status),
                       loading: _loading,
                       onCollect: (record) async {
+                        // Pass the individual fee_records inside this course aggregate
+                        final pendingRecords =
+                            (record['fee_records'] as List? ?? [record])
+                                .cast<Map<String, dynamic>>();
                         final ok = await showModalBottomSheet<bool>(
                           context: context,
                           isScrollControlled: true,
@@ -261,7 +273,7 @@ class _FeesScreenState extends State<FeesScreen>
                                 '${record['first_name'] ?? ''} ${record['last_name'] ?? ''}'
                                     .trim(),
                             mobile: record['mobile'] as String? ?? '',
-                            pendingRecords: [record],
+                            pendingRecords: pendingRecords,
                           ),
                         );
                         if (ok == true) _onPaymentMade();
@@ -689,9 +701,13 @@ class _ReceiptsTabState extends State<_ReceiptsTab>
     if (_q.isEmpty) return _receipts;
     final q = _q.toLowerCase();
     return _receipts.where((r) {
-      final num  = (r['receipt_number'] as String? ?? '').toLowerCase();
-      final name = '${r['first_name'] ?? ''} ${r['last_name'] ?? ''}'.toLowerCase();
-      return num.contains(q) || name.contains(q);
+      final num     = (r['receipt_number'] as String? ?? '').toLowerCase();
+      final name    = '${r['first_name'] ?? ''} ${r['last_name'] ?? ''}'.toLowerCase();
+      final mobile  = (r['mobile']        as String? ?? '').toLowerCase();
+      final course  = (r['course_name']   as String? ?? '').toLowerCase();
+      final subs    = (r['subject_names'] as String? ?? '').toLowerCase();
+      return num.contains(q) || name.contains(q) ||
+             mobile.contains(q) || course.contains(q) || subs.contains(q);
     }).toList();
   }
 
@@ -837,15 +853,15 @@ class _ReceiptAdminCardState extends State<_ReceiptAdminCard> {
 
   @override
   Widget build(BuildContext context) {
-    final theme   = Theme.of(context);
-    final r       = widget.receipt;
-    final name    = '${r['first_name'] ?? ''} ${r['last_name'] ?? ''}'.trim();
-    final amount  = double.tryParse(r['amount_paid']?.toString() ?? '') ?? 0.0;
-    final date    = _fmtDate(r['generated_at']);
-    final rcptNo  = r['receipt_number'] as String? ?? '—';
-    final course  = r['course_name'] as String? ?? '';
-    final subject = r['subject_name'] as String?;
-    final fcmSent = r['fcm_sent'] as bool? ?? false;
+    final theme        = Theme.of(context);
+    final r            = widget.receipt;
+    final name         = '${r['first_name'] ?? ''} ${r['last_name'] ?? ''}'.trim();
+    final amount       = double.tryParse(r['amount_paid']?.toString() ?? '') ?? 0.0;
+    final date         = _fmtDate(r['generated_at']);
+    final rcptNo       = r['receipt_number'] as String? ?? '—';
+    final course       = r['course_name']   as String? ?? '';
+    final subjectNames = r['subject_names'] as String?;
+    final fcmSent      = r['fcm_sent'] as bool? ?? false;
 
     return Card(
       child: Padding(
@@ -867,14 +883,19 @@ class _ReceiptAdminCardState extends State<_ReceiptAdminCard> {
                       const SizedBox(height: 2),
                       Text(name, style: const TextStyle(fontWeight: FontWeight.w600)),
                       if (course.isNotEmpty)
-                        Text(
-                          subject != null && subject.isNotEmpty
-                              ? '$course · $subject'
-                              : course,
-                          style: TextStyle(
-                              fontSize: 12,
-                              color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
-                        ),
+                        Text(course,
+                            style: TextStyle(
+                                fontSize: 12,
+                                color: theme.colorScheme.onSurface
+                                    .withValues(alpha: 0.6))),
+                      if (subjectNames != null && subjectNames.isNotEmpty)
+                        Text(subjectNames,
+                            style: TextStyle(
+                                fontSize: 11,
+                                color: theme.colorScheme.onSurface
+                                    .withValues(alpha: 0.5)),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis),
                     ],
                   ),
                 ),
@@ -986,29 +1007,30 @@ class _FeeList extends StatelessWidget {
   }
 }
 
-// ── Fee card (status tabs) ────────────────────────────────────────────────────
+// ── Fee card (status tabs — course-level) ─────────────────────────────────────
 
 class _FeeCard extends StatelessWidget {
   final Map<String, dynamic> record;
   final VoidCallback onCollect;
   const _FeeCard({required this.record, required this.onCollect});
 
-  String _fmtDate(dynamic raw) {
-    final s = raw?.toString() ?? '';
-    return s.contains('T') ? s.split('T')[0] : s;
-  }
-
   @override
   Widget build(BuildContext context) {
-    final theme   = Theme.of(context);
-    final status  = (record['status'] as String?) ?? 'pending';
-    final due     = double.tryParse(record['amount_due']?.toString()  ?? '0') ?? 0.0;
-    final paid    = double.tryParse(record['amount_paid']?.toString() ?? '0') ?? 0.0;
-    final balance = (due - paid).clamp(0.0, double.infinity);
-    final isPaid  = status == 'paid';
-    final color   = _statusColor(status);
-    final rcptNo  = record['receipt_number'] as String?;
-    final subject = record['subject_name'] as String?;
+    final theme        = Theme.of(context);
+    final status       = (record['status'] as String?) ?? 'pending';
+    final due          = (record['amount_due']  as num?)?.toDouble() ?? 0.0;
+    final paid         = (record['amount_paid'] as num?)?.toDouble() ?? 0.0;
+    final balance      = (record['balance']     as num?)?.toDouble()
+        ?? (due - paid).clamp(0.0, double.infinity);
+    final isPaid       = status == 'paid';
+    final color        = _statusColor(status);
+    final courseName   = record['course_name']  as String? ?? 'Course';
+    final subjectNames = record['subject_names'] as String?;
+    final mobile       = record['mobile'] as String? ?? '';
+    final dueDate      = _fmtDate(record['due_date']);
+
+    final studentName =
+        '${record['first_name'] ?? ''} ${record['last_name'] ?? ''}'.trim();
 
     return Card(
       child: Padding(
@@ -1016,38 +1038,71 @@ class _FeeCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // ── Header row ───────────────────────────────────────────────────
             Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        '${record['first_name']} ${record['last_name']}',
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      Text(
-                        subject != null && subject.isNotEmpty
-                            ? '${record['course_name'] ?? ''} · $subject'
-                            : record['course_name'] as String? ?? 'Course',
-                        style: TextStyle(
-                            fontSize: 12,
-                            color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      if (rcptNo != null)
-                        Text(rcptNo,
+                      Text(studentName.isEmpty ? 'Unnamed' : studentName,
+                          style: const TextStyle(fontWeight: FontWeight.bold)),
+                      if (mobile.isNotEmpty)
+                        Text(mobile,
                             style: TextStyle(
-                                fontSize: 11, color: theme.colorScheme.primary)),
+                                fontSize: 12,
+                                color: theme.colorScheme.onSurface
+                                    .withValues(alpha: 0.6))),
                     ],
                   ),
                 ),
-                const SizedBox(width: 8),
                 _StatusBadge(status: status, color: color),
               ],
             ),
+            const SizedBox(height: 8),
+
+            // ── Course + subjects ────────────────────────────────────────────
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainerLow,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.menu_book_outlined,
+                          size: 13, color: theme.colorScheme.primary),
+                      const SizedBox(width: 5),
+                      Expanded(
+                        child: Text(courseName,
+                            style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: theme.colorScheme.primary),
+                            overflow: TextOverflow.ellipsis),
+                      ),
+                    ],
+                  ),
+                  if (subjectNames != null && subjectNames.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(subjectNames,
+                        style: TextStyle(
+                            fontSize: 11,
+                            color: theme.colorScheme.onSurface
+                                .withValues(alpha: 0.55)),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis),
+                  ],
+                ],
+              ),
+            ),
             const SizedBox(height: 10),
+
+            // ── Progress bar ─────────────────────────────────────────────────
             ClipRRect(
               borderRadius: BorderRadius.circular(3),
               child: LinearProgressIndicator(
@@ -1058,31 +1113,45 @@ class _FeeCard extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 10),
+
+            // ── Fee breakdown ────────────────────────────────────────────────
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('Due: ₹${due.toStringAsFixed(0)}',
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                if (paid > 0)
-                  Text('Paid: ₹${paid.toStringAsFixed(0)}',
-                      style: const TextStyle(
-                          fontSize: 13, fontWeight: FontWeight.w600, color: Colors.green))
-                else
-                  Text('By ${_fmtDate(record['due_date'])}',
-                      style: TextStyle(
-                          fontSize: 12,
-                          color: theme.colorScheme.onSurface.withValues(alpha: 0.55))),
+                Expanded(
+                  child: _feeCell('Course Fee', '₹${due.toStringAsFixed(0)}',
+                      theme.colorScheme.onSurface),
+                ),
+                Expanded(
+                  child: _feeCell('Paid', '₹${paid.toStringAsFixed(0)}',
+                      Colors.green),
+                ),
+                Expanded(
+                  child: _feeCell(
+                    'Balance',
+                    '₹${balance.toStringAsFixed(0)}',
+                    balance > 0 ? color : Colors.green,
+                    bold: true,
+                  ),
+                ),
               ],
             ),
+            const SizedBox(height: 4),
+            Text('Due by $dueDate',
+                style: TextStyle(
+                    fontSize: 11,
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.5))),
             const SizedBox(height: 10),
+
+            // ── Action ───────────────────────────────────────────────────────
             if (isPaid)
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: const [
-                  Icon(Icons.check_circle, color: Colors.green, size: 28),
+                  Icon(Icons.check_circle, color: Colors.green, size: 22),
                   SizedBox(width: 6),
-                  Text('Paid',
-                      style: TextStyle(color: Colors.green, fontWeight: FontWeight.w600)),
+                  Text('Fully Paid',
+                      style: TextStyle(
+                          color: Colors.green, fontWeight: FontWeight.w600)),
                 ],
               )
             else
@@ -1096,6 +1165,21 @@ class _FeeCard extends StatelessWidget {
       ),
     );
   }
+
+  Widget _feeCell(String label, String value, Color valueColor,
+      {bool bold = false}) =>
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label,
+              style: const TextStyle(fontSize: 10, color: Colors.grey)),
+          Text(value,
+              style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: bold ? FontWeight.bold : FontWeight.w600,
+                  color: valueColor)),
+        ],
+      );
 
   Color _statusColor(String s) {
     switch (s) {
@@ -1176,40 +1260,29 @@ class FeeCollectionSheet extends StatefulWidget {
 }
 
 class _FeeCollectionSheetState extends State<FeeCollectionSheet> {
-  late Map<String, bool> _selected;
-  String _paymentMode = 'cash';
-  final _remarksCtrl  = TextEditingController();
-  bool    _saving     = false;
+  final _installmentCtrl = TextEditingController();
+  String _paymentMode    = 'cash';
+  final _remarksCtrl     = TextEditingController();
+  bool    _saving        = false;
   String? _receiptNumber;
   String? _receiptId;
 
   @override
-  void initState() {
-    super.initState();
-    _selected = { for (final r in widget.pendingRecords) r['id'] as String: true };
-  }
-
-  @override
   void dispose() {
+    _installmentCtrl.dispose();
     _remarksCtrl.dispose();
     super.dispose();
   }
 
-  double get _totalSelected {
-    double total = 0;
-    for (final r in widget.pendingRecords) {
-      final id = r['id'] as String;
-      if (_selected[id] == true) {
-        total += double.tryParse(r['balance']?.toString() ?? '') ?? 0.0;
-      }
-    }
-    return total;
-  }
+  double get _totalOutstanding => widget.pendingRecords.fold(
+      0.0, (s, r) => s + ((r['balance'] as num?)?.toDouble() ?? 0.0));
 
-  int get _selectedCount =>
-      _selected.values.where((v) => v).length;
+  double get _installmentAmount =>
+      double.tryParse(_installmentCtrl.text.trim()) ?? 0.0;
 
-  // Group pending records by course
+  bool get _isValid =>
+      _installmentAmount > 0 && _installmentAmount <= _totalOutstanding + 0.01;
+
   Map<String, List<Map<String, dynamic>>> get _byCourse {
     final map = <String, List<Map<String, dynamic>>>{};
     for (final r in widget.pendingRecords) {
@@ -1220,17 +1293,37 @@ class _FeeCollectionSheetState extends State<FeeCollectionSheet> {
   }
 
   Future<void> _collect() async {
-    final selectedItems = widget.pendingRecords
-        .where((r) => _selected[r['id']] == true)
-        .map((r) => {
-              'fee_record_id': r['id'] as String,
-              'amount_paid': double.tryParse(r['balance']?.toString() ?? '') ?? 0.0,
-            })
-        .toList();
-
-    if (selectedItems.isEmpty) {
+    final installment = _installmentAmount;
+    if (installment <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Select at least one subject to collect')));
+          const SnackBar(content: Text('Enter a valid installment amount')));
+      return;
+    }
+    if (installment > _totalOutstanding + 0.01) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Amount exceeds outstanding balance')));
+      return;
+    }
+
+    // Distribute installment sequentially by due_date (oldest first)
+    final sorted = [...widget.pendingRecords]
+      ..sort((a, b) => (a['due_date']?.toString() ?? '')
+          .compareTo(b['due_date']?.toString() ?? ''));
+
+    final items = <Map<String, dynamic>>[];
+    double remaining = installment;
+    for (final r in sorted) {
+      final balance = (r['balance'] as num?)?.toDouble() ?? 0.0;
+      if (balance <= 0 || remaining <= 0) continue;
+      final payment = remaining < balance ? remaining : balance;
+      items.add({'fee_record_id': r['id'] as String, 'amount_paid': payment});
+      remaining -= payment;
+      if (remaining < 0.01) break;
+    }
+
+    if (items.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No records to collect')));
       return;
     }
 
@@ -1238,7 +1331,7 @@ class _FeeCollectionSheetState extends State<FeeCollectionSheet> {
     try {
       final result = await AcademyApiService.collectFeeBulk(
         studentId:   widget.studentId,
-        items:       selectedItems,
+        items:       items,
         paymentMode: _paymentMode,
         remarks:     _remarksCtrl.text.trim().isNotEmpty
             ? _remarksCtrl.text.trim()
@@ -1377,53 +1470,69 @@ class _FeeCollectionSheetState extends State<FeeCollectionSheet> {
           const SizedBox(height: 16),
 
           // Header
-          Row(
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Collect Fees',
-                        style: theme.textTheme.titleLarge
-                            ?.copyWith(fontWeight: FontWeight.bold)),
-                    Text(widget.studentName,
-                        style: TextStyle(
-                            fontSize: 14,
-                            color: theme.colorScheme.onSurface.withValues(alpha: 0.7))),
-                    if (widget.mobile.isNotEmpty)
-                      Text(widget.mobile,
-                          style: TextStyle(
-                              fontSize: 12,
-                              color: theme.colorScheme.onSurface.withValues(alpha: 0.55))),
-                  ],
-                ),
-              ),
-              // Select all / deselect all
-              TextButton(
-                onPressed: () {
-                  final allSelected = _selectedCount == widget.pendingRecords.length;
-                  setState(() {
-                    for (final k in _selected.keys) {
-                      _selected[k] = !allSelected;
-                    }
-                  });
-                },
-                child: Text(_selectedCount == widget.pendingRecords.length
-                    ? 'Deselect All'
-                    : 'Select All'),
-              ),
+              Text('Collect Fees',
+                  style: theme.textTheme.titleLarge
+                      ?.copyWith(fontWeight: FontWeight.bold)),
+              Text(widget.studentName,
+                  style: TextStyle(
+                      fontSize: 14,
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.7))),
+              if (widget.mobile.isNotEmpty)
+                Text(widget.mobile,
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: theme.colorScheme.onSurface.withValues(alpha: 0.55))),
             ],
           ),
           const SizedBox(height: 16),
 
-          // Subjects grouped by course
-          ..._byCourse.entries.map((entry) => _CourseSubjectGroup(
+          // Course info cards (read-only)
+          ..._byCourse.entries.map((entry) => _CourseInfoCard(
                 courseName: entry.key,
                 records:    entry.value,
-                selected:   _selected,
-                onToggle:   (id, val) => setState(() => _selected[id] = val),
               )),
+
+          // Outstanding balance summary
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.errorContainer.withValues(alpha: 0.3),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('Outstanding Course Balance',
+                    style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: theme.colorScheme.onSurface.withValues(alpha: 0.8))),
+                Text('₹${_totalOutstanding.toStringAsFixed(0)}',
+                    style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: theme.colorScheme.error)),
+              ],
+            ),
+          ),
           const SizedBox(height: 16),
+
+          // Installment amount input
+          TextFormField(
+            controller: _installmentCtrl,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: InputDecoration(
+              labelText: 'Installment Amount *',
+              border: const OutlineInputBorder(),
+              prefixText: '₹ ',
+              helperText: 'Max ₹${_totalOutstanding.toStringAsFixed(0)}',
+            ),
+            onChanged: (_) => setState(() {}),
+          ),
+          const SizedBox(height: 12),
 
           // Payment mode
           DropdownButtonFormField<String>(
@@ -1447,32 +1556,8 @@ class _FeeCollectionSheetState extends State<FeeCollectionSheet> {
           ),
           const SizedBox(height: 20),
 
-          // Total + confirm
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.primaryContainer.withValues(alpha: 0.4),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text('$_selectedCount subject${_selectedCount == 1 ? '' : 's'} selected',
-                    style: TextStyle(
-                        fontSize: 13,
-                        color: theme.colorScheme.onSurface.withValues(alpha: 0.7))),
-                Text('₹${_totalSelected.toStringAsFixed(0)}',
-                    style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: theme.colorScheme.primary)),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-
           FilledButton.icon(
-            onPressed: (_saving || _selectedCount == 0) ? null : _collect,
+            onPressed: (_saving || !_isValid) ? null : _collect,
             icon: _saving
                 ? const SizedBox(
                     width: 18, height: 18,
@@ -1481,7 +1566,7 @@ class _FeeCollectionSheetState extends State<FeeCollectionSheet> {
                 : const Icon(Icons.payments_outlined),
             label: Text(_saving
                 ? 'Processing...'
-                : 'Confirm Payment  ₹${_totalSelected.toStringAsFixed(0)}'),
+                : 'Confirm Payment  ₹${_installmentAmount > 0 ? _installmentAmount.toStringAsFixed(0) : '0'}'),
             style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(50)),
           ),
         ],
@@ -1490,28 +1575,36 @@ class _FeeCollectionSheetState extends State<FeeCollectionSheet> {
   }
 }
 
-// ── Course + subject group in collection sheet ────────────────────────────────
+// ── Course info card in collection sheet (read-only) ─────────────────────────
 
-class _CourseSubjectGroup extends StatelessWidget {
+class _CourseInfoCard extends StatelessWidget {
   final String courseName;
   final List<Map<String, dynamic>> records;
-  final Map<String, bool> selected;
-  final void Function(String id, bool val) onToggle;
 
-  const _CourseSubjectGroup({
-    required this.courseName,
-    required this.records,
-    required this.selected,
-    required this.onToggle,
-  });
+  const _CourseInfoCard({required this.courseName, required this.records});
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+
+    double totalDue  = 0;
+    double totalPaid = 0;
+    final subjects = <String>[];
+
+    for (final r in records) {
+      totalDue  += (r['amount_due']  as num?)?.toDouble() ?? 0.0;
+      totalPaid += (r['amount_paid'] as num?)?.toDouble() ?? 0.0;
+      final subName = r['subject_name'] as String?;
+      if (subName != null && subName.isNotEmpty && !subjects.contains(subName)) {
+        subjects.add(subName);
+      }
+    }
+
+    final outstanding = totalDue - totalPaid;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Course header
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 6),
           child: Row(
@@ -1528,50 +1621,38 @@ class _CourseSubjectGroup extends StatelessWidget {
           ),
         ),
         Container(
+          padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
             color: theme.colorScheme.surfaceContainerLow,
             borderRadius: BorderRadius.circular(10),
           ),
           child: Column(
-            children: records.asMap().entries.map((entry) {
-              final i = entry.key;
-              final r = entry.value;
-              final id      = r['id'] as String;
-              final subject = (r['subject_name'] as String?) ?? 'Subject';
-              final balance = double.tryParse(r['balance']?.toString() ?? '') ?? 0.0;
-              final status  = r['status'] as String? ?? 'pending';
-              final isSelected = selected[id] ?? true;
-
-              return Column(
-                children: [
-                  if (i > 0)
-                    Divider(height: 1,
-                        color: theme.colorScheme.outline.withValues(alpha: 0.2)),
-                  CheckboxListTile(
-                    value: isSelected,
-                    onChanged: (v) => onToggle(id, v ?? false),
-                    title: Row(
-                      children: [
-                        Expanded(
-                          child: Text(subject,
-                              style: const TextStyle(fontWeight: FontWeight.w500)),
-                        ),
-                        Text('₹${balance.toStringAsFixed(0)}',
-                            style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                color: isSelected
-                                    ? theme.colorScheme.primary
-                                    : theme.colorScheme.onSurface.withValues(alpha: 0.5))),
-                      ],
-                    ),
-                    subtitle: _statusBadge(status),
-                    dense: true,
-                    controlAffinity: ListTileControlAffinity.leading,
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+            children: [
+              _statRow(theme, 'Total Course Fee',
+                  '₹${totalDue.toStringAsFixed(0)}'),
+              const SizedBox(height: 6),
+              _statRow(theme, 'Paid Till Date',
+                  '₹${totalPaid.toStringAsFixed(0)}', muted: true),
+              const SizedBox(height: 6),
+              _statRow(theme, 'Outstanding Balance',
+                  '₹${outstanding.toStringAsFixed(0)}',
+                  bold: true, color: theme.colorScheme.error),
+              if (subjects.isNotEmpty) ...[
+                Divider(
+                    height: 16,
+                    color: theme.colorScheme.outline.withValues(alpha: 0.2)),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    subjects.join('  •  '),
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: theme.colorScheme.onSurface
+                            .withValues(alpha: 0.55)),
                   ),
-                ],
-              );
-            }).toList(),
+                ),
+              ],
+            ],
           ),
         ),
         const SizedBox(height: 12),
@@ -1579,15 +1660,27 @@ class _CourseSubjectGroup extends StatelessWidget {
     );
   }
 
-  Widget? _statusBadge(String s) {
-    Color c;
-    switch (s) {
-      case 'overdue': c = Colors.red;    break;
-      case 'partial': c = Colors.blue;   break;
-      default:        c = Colors.orange; break;
-    }
-    return Text(s.toUpperCase(),
-        style: TextStyle(fontSize: 10, color: c, fontWeight: FontWeight.bold));
+  Widget _statRow(ThemeData theme, String label, String value,
+      {bool bold = false, bool muted = false, Color? color}) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(label,
+            style: TextStyle(
+                fontSize: 12,
+                color: muted
+                    ? theme.colorScheme.onSurface.withValues(alpha: 0.55)
+                    : theme.colorScheme.onSurface.withValues(alpha: 0.75))),
+        Text(value,
+            style: TextStyle(
+                fontSize: 13,
+                fontWeight: bold ? FontWeight.bold : FontWeight.w500,
+                color: color ??
+                    (muted
+                        ? theme.colorScheme.onSurface.withValues(alpha: 0.55)
+                        : theme.colorScheme.onSurface))),
+      ],
+    );
   }
 }
 

@@ -202,6 +202,12 @@ export async function reconcileAcademySchemas(): Promise<void> {
         CREATE INDEX IF NOT EXISTS idx_fri_receipt ON fee_receipt_items(receipt_id);
         CREATE INDEX IF NOT EXISTS idx_fri_record  ON fee_receipt_items(fee_record_id)
       `);
+      // Per-course configurable due day (1-28 = that day of month; NULL = last day of month)
+      await academyExec(slug, `
+        ALTER TABLE IF EXISTS courses
+          ADD COLUMN IF NOT EXISTS fee_due_day INT DEFAULT NULL
+            CHECK (fee_due_day IS NULL OR (fee_due_day >= 1 AND fee_due_day <= 28))
+      `);
       ok++;
     } catch (err) {
       console.error(`[Reconcile] schema "${slug}" failed:`, err);
