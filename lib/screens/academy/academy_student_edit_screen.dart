@@ -58,6 +58,8 @@ class _AcademyStudentEditScreenState
   // These must be re-fetched on first expand so newly added subjects appear.
   final Set<String> _enrollmentOnlyCourses = {};
   final Set<String> _expandedCourses = {};
+  // Subject IDs permanently enrolled — cannot be deselected in the edit flow.
+  final Set<String> _lockedSubjectIds = {};
   final Set<String> _subjectsLoadingFor = {};
   final Map<String, String> _subjectsError = {};
   bool _loadingCourses = false;
@@ -199,6 +201,9 @@ class _AcademyStudentEditScreenState
         _selectedSubjectFees
           ..clear()
           ..addAll(subjectFees);
+        _lockedSubjectIds
+          ..clear()
+          ..addAll(subjectFees.keys);
         _subjectsByCourse
           ..clear()
           ..addAll(enrolledByCourse);
@@ -837,8 +842,10 @@ class _AcademyStudentEditScreenState
             expandedCourses:     _expandedCourses,
             subjectsLoadingFor:  _subjectsLoadingFor,
             subjectsError:       _subjectsError,
+            lockedSubjectIds:    _lockedSubjectIds,
             onCourseExpand:      _loadSubjects,
             onSubjectToggle: (subjectId, defaultFee, selected) {
+              if (!selected && _lockedSubjectIds.contains(subjectId)) return;
               setState(() {
                 if (selected) {
                   _selectedSubjectFees[subjectId] = defaultFee;

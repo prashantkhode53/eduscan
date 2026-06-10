@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { academyQuery, academyQueryOne } from '../../db/poolManager';
+import { academyQuery, academyQueryOne, academyExec, academyTransaction } from '../../db/poolManager';
 import { AppError } from '../../middleware/errorHandler';
 
 interface CourseRow {
@@ -12,6 +12,7 @@ interface CourseRow {
   duration_months: number | null;
   default_fee: number;
   schedule: string;
+  fee_due_day: number | null;
   is_active: boolean;
   created_at: string;
   student_count?: number;
@@ -58,19 +59,19 @@ export async function createCourse(
     const { academySlug } = req.academyUser!;
     const {
       academic_year_id, name, description, subject,
-      duration_months, default_fee, schedule,
+      duration_months, default_fee, schedule, fee_due_day,
     } = req.body as {
       academic_year_id?: string; name: string; description?: string;
       subject?: string; duration_months?: number; default_fee?: number;
-      schedule?: 'monthly' | 'quarterly' | 'onetime';
+      schedule?: 'monthly' | 'quarterly' | 'onetime'; fee_due_day?: number | null;
     };
 
     if (!name?.trim()) return next(new AppError('Course name is required', 400));
 
     const course = await academyQueryOne<CourseRow>(
       academySlug,
-      `INSERT INTO courses (academic_year_id, name, description, subject, duration_months, default_fee, schedule)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)
+      `INSERT INTO courses (academic_year_id, name, description, subject, duration_months, default_fee, schedule, fee_due_day)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
        RETURNING *`,
       [
         academic_year_id ?? null,
@@ -80,6 +81,7 @@ export async function createCourse(
         duration_months ?? null,
         default_fee ?? 0,
         schedule ?? 'monthly',
+        fee_due_day ?? null,
       ]
     );
     res.status(201).json({ success: true, data: course, message: 'Course created' });
@@ -96,30 +98,61 @@ export async function updateCourse(
     const { id } = req.params;
     const {
       academic_year_id, name, description, subject,
-      duration_months, default_fee, schedule,
-    } = req.body as Partial<CourseRow> & { academic_year_id?: string | null };
+      duration_months, default_fee, schedule, fee_due_day,
+      update_pending_fees,
+    } = req.body as Partial<CourseRow> & {
+      academic_year_id?: string | null;
+      fee_due_day?: number | null;
+      update_pending_fees?: boolean;
+    };
 
-    const course = await academyQueryOne<CourseRow>(
-      academySlug,
-      `UPDATE courses
-       SET academic_year_id = CASE WHEN $1::boolean THEN $2::uuid ELSE academic_year_id END,
-           name             = COALESCE($3, name),
-           description      = COALESCE($4, description),
-           subject          = COALESCE($5, subject),
-           duration_months  = COALESCE($6, duration_months),
-           default_fee      = COALESCE($7, default_fee),
-           schedule         = COALESCE($8, schedule),
-           updated_at       = NOW()
-       WHERE id = $9 AND is_active = TRUE
-       RETURNING *`,
-      [
-        'academic_year_id' in req.body,  // $1: whether to update the field
-        academic_year_id ?? null,         // $2: new value (or null to clear)
-        name ?? null, description ?? null, subject ?? null,
-        duration_months ?? null, default_fee ?? null, schedule ?? null,
-        id,
-      ]
-    );
+    const feeDueDayInBody = 'fee_due_day' in req.body;
+
+    let course: CourseRow | null = null;
+
+    await academyTransaction(academySlug, async (client) => {
+      course = await client.query<CourseRow>(
+        `UPDATE courses
+         SET academic_year_id = CASE WHEN $1::boolean THEN $2::uuid   ELSE academic_year_id END,
+             name             = COALESCE($3, name),
+             description      = COALESCE($4, description),
+             subject          = COALESCE($5, subject),
+             duration_months  = COALESCE($6, duration_months),
+             default_fee      = COALESCE($7, default_fee),
+             schedule         = COALESCE($8, schedule),
+             fee_due_day      = CASE WHEN $10::boolean THEN $11::int  ELSE fee_due_day END,
+             updated_at       = NOW()
+         WHERE id = $9 AND is_active = TRUE
+         RETURNING *`,
+        [
+          'academic_year_id' in req.body,
+          academic_year_id ?? null,
+          name ?? null, description ?? null, subject ?? null,
+          duration_months ?? null, default_fee ?? null, schedule ?? null,
+          id,
+          feeDueDayInBody,
+          fee_due_day ?? null,
+        ]
+      ).then(r => r.rows[0] ?? null);
+
+      if (!course) return;
+
+      // If requested, bulk-update due_date on pending/overdue course-level fee records
+      if (update_pending_fees && feeDueDayInBody) {
+        await client.query(
+          `UPDATE fee_records
+           SET due_date   = CASE
+             WHEN $1::int IS NOT NULL
+             THEN (DATE_TRUNC('month', due_date) + ($1::int - 1) * INTERVAL '1 day')::date
+             ELSE (DATE_TRUNC('month', due_date) + INTERVAL '1 month - 1 day')::date
+           END,
+           updated_at = NOW()
+           WHERE course_id = $2 AND subject_id IS NULL AND status IN ('pending', 'overdue')`,
+          [fee_due_day ?? null, id]
+        );
+      }
+    });
+
     if (!course) return next(new AppError('Course not found', 404));
     res.json({ success: true, data: course, message: 'Course updated' });
   } catch (err) { next(err); }

@@ -396,42 +396,40 @@ export async function generateMonthlyFees(
     const [year, mon] = targetMonth.split('-').map(Number);
     const dueDate = new Date(year, mon, 0).toISOString().split('T')[0];
 
-    const { rowCount: subjectRows } = await academyExec(
-      academySlug,
-      `INSERT INTO fee_records (student_id, subject_id, course_id, amount_due, due_date, status)
-       SELECT ss.student_id, ss.subject_id, sub.course_id, ss.fee_amount,
-              $1::date, 'pending'
-       FROM student_subjects ss
-       JOIN subjects sub ON sub.id = ss.subject_id
-       WHERE ss.status = 'active'
-         AND NOT EXISTS (
-           SELECT 1 FROM fee_records fr
-           WHERE fr.student_id = ss.student_id
-             AND fr.subject_id = ss.subject_id
-             AND TO_CHAR(fr.due_date,'YYYY-MM') = $2
-         )`,
-      [dueDate, targetMonth]
-    );
-
-    const { rowCount: courseRows } = await academyExec(
+    // One fee record per student per course = sum of active subject fees.
+    // Due date uses the course's fee_due_day if set, otherwise last day of month.
+    const { rowCount } = await academyExec(
       academySlug,
       `INSERT INTO fee_records (student_id, course_id, amount_due, due_date, status)
-       SELECT sc.student_id, sc.course_id, sc.fee_amount,
-              $1::date, 'pending'
-       FROM student_courses sc
-       WHERE sc.status = 'active'
-         AND NOT EXISTS (SELECT 1 FROM student_subjects ss WHERE ss.student_id = sc.student_id AND ss.status = 'active')
-         AND NOT EXISTS (
-           SELECT 1 FROM fee_records fr
-           WHERE fr.student_id = sc.student_id
-             AND fr.course_id  = sc.course_id
-             AND fr.subject_id IS NULL
-             AND TO_CHAR(fr.due_date,'YYYY-MM') = $2
-         )`,
+       SELECT
+         t.student_id,
+         t.course_id,
+         t.total_fee,
+         CASE
+           WHEN c.fee_due_day IS NOT NULL
+           THEN (DATE_TRUNC('month', $1::date) + (c.fee_due_day - 1) * INTERVAL '1 day')::date
+           ELSE $1::date
+         END,
+         'pending'
+       FROM (
+         SELECT ss.student_id, sub.course_id, SUM(ss.fee_amount) AS total_fee
+         FROM student_subjects ss
+         JOIN subjects sub ON sub.id = ss.subject_id
+         WHERE ss.status = 'active'
+         GROUP BY ss.student_id, sub.course_id
+       ) t
+       JOIN courses c ON c.id = t.course_id
+       WHERE NOT EXISTS (
+         SELECT 1 FROM fee_records fr
+         WHERE fr.student_id = t.student_id
+           AND fr.course_id  = t.course_id
+           AND fr.subject_id IS NULL
+           AND TO_CHAR(fr.due_date, 'YYYY-MM') = $2
+       )`,
       [dueDate, targetMonth]
     );
 
-    const total = (subjectRows ?? 0) + (courseRows ?? 0);
+    const total = rowCount ?? 0;
     res.json({
       success: true,
       data: { generated: total, month: targetMonth },

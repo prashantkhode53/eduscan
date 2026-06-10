@@ -570,21 +570,20 @@ class FeePdfService {
                           ],
                         ),
                       ),
-                      if (items == null) // legacy single-subject: show course/subject
-                        pw.Expanded(
-                          child: pw.Column(
-                            crossAxisAlignment: pw.CrossAxisAlignment.start,
-                            children: [
-                              pw.Text('Course', style: labelStyle),
-                              pw.Text(courseName.isNotEmpty ? courseName : '—', style: valueStyle),
-                              if (subjectName != null && subjectName.isNotEmpty) ...[
-                                pw.SizedBox(height: 8),
-                                pw.Text('Subject', style: labelStyle),
-                                pw.Text(subjectName, style: valueStyle),
-                              ],
+                      pw.Expanded(
+                        child: pw.Column(
+                          crossAxisAlignment: pw.CrossAxisAlignment.start,
+                          children: [
+                            pw.Text('Course', style: labelStyle),
+                            pw.Text(courseName.isNotEmpty ? courseName : '—', style: valueStyle),
+                            if (items == null && subjectName != null && subjectName.isNotEmpty) ...[
+                              pw.SizedBox(height: 8),
+                              pw.Text('Subject', style: labelStyle),
+                              pw.Text(subjectName, style: valueStyle),
                             ],
-                          ),
+                          ],
                         ),
+                      ),
                     ],
                   ),
                 ],
@@ -757,7 +756,7 @@ class FeePdfService {
         ),
       ));
       for (final s in subjects) {
-        final subjectName = (s['subject_name'] as String?) ?? 'Subject';
+        final subjectName = (s['subject_name'] as String?) ?? 'Monthly Fee';
         final paid = double.tryParse(s['amount_paid']?.toString() ?? '') ?? 0;
         rows.add(pw.Container(
           color: PdfColors.white,

@@ -542,6 +542,13 @@ export async function runAcademyMigrations(
     await client.query(`CREATE INDEX IF NOT EXISTS idx_fri_receipt ON fee_receipt_items(receipt_id)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_fri_record  ON fee_receipt_items(fee_record_id)`);
 
+    // Per-course configurable due day (1-28 = that day of month; NULL = last day of month)
+    await client.query(`
+      ALTER TABLE IF EXISTS courses
+        ADD COLUMN IF NOT EXISTS fee_due_day INT DEFAULT NULL
+          CHECK (fee_due_day IS NULL OR (fee_due_day >= 1 AND fee_due_day <= 28))
+    `);
+
     await client.query('COMMIT');
     console.log(`[Migration] Schema "${slug}" created successfully`);
   } catch (err) {

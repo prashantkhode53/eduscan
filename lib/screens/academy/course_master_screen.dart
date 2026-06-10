@@ -232,6 +232,10 @@ class _CourseMasterScreenState extends State<CourseMasterScreen> {
                                 final subjectCount = int.tryParse(c['subject_count']?.toString() ?? '') ?? 0;
                                 final totalFee     = double.tryParse(c['total_subject_fee']?.toString() ?? '0') ?? 0.0;
                                 final yearName     = c['academic_year_name'] as String?;
+                                final feeDueDay    = c['fee_due_day'] as int?;
+                                final dueDayLabel  = feeDueDay == null
+                                    ? 'last day'
+                                    : '$feeDueDay${_CourseFormState._ordinal(feeDueDay)}';
                                 return Card(
                                   child: ListTile(
                                     onTap: () => _showSubjects(c),
@@ -268,7 +272,7 @@ class _CourseMasterScreenState extends State<CourseMasterScreen> {
                                           '$subjectCount subject${subjectCount == 1 ? '' : 's'}'
                                           ' · ₹${totalFee.toStringAsFixed(0)} total'
                                           ' · $count student${count == 1 ? '' : 's'}'
-                                          ' · tap to manage subjects',
+                                          ' · due $dueDayLabel',
                                           style: const TextStyle(fontSize: 12),
                                         ),
                                       ],
@@ -708,8 +712,11 @@ class _CourseFormState extends State<_CourseForm> {
   final _nameCtrl      = TextEditingController();
   final _descCtrl      = TextEditingController();
   final _durationCtrl  = TextEditingController();
-  String  _schedule    = 'monthly';
+  String  _schedule        = 'monthly';
   String? _academicYearId;
+  // null = last day of month; 1-28 = specific day
+  int?    _feeDueDay;
+  int?    _originalFeeDueDay;
   bool    _saving      = false;
 
   bool get _isEdit => widget.course != null;
@@ -724,6 +731,8 @@ class _CourseFormState extends State<_CourseForm> {
       _durationCtrl.text = c['duration_months']?.toString() ?? '';
       _schedule          = c['schedule'] ?? 'monthly';
       _academicYearId    = c['academic_year_id'] as String?;
+      _feeDueDay         = c['fee_due_day'] as int?;
+      _originalFeeDueDay = _feeDueDay;
     } else {
       _academicYearId = widget.defaultYearId;
     }
@@ -738,14 +747,53 @@ class _CourseFormState extends State<_CourseForm> {
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _saving = true);
+
+    bool updatePendingFees = false;
+
+    // If due day changed on an existing course, ask whether to also update
+    // pending/overdue fee records for this course.
+    if (_isEdit && _feeDueDay != _originalFeeDueDay) {
+      final label = _feeDueDay == null
+          ? 'last day of month'
+          : '${_feeDueDay!}${_ordinal(_feeDueDay!)} of each month';
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Update Existing Fees?'),
+          content: Text(
+            'Due date changed to $label.\n\n'
+            'Also update due dates on all existing pending / overdue fee records for this course?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('No, only save course'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Yes, update fees too'),
+            ),
+          ],
+        ),
+      );
+      if (confirm == null) {
+        if (mounted) setState(() => _saving = false);
+        return;
+      }
+      updatePendingFees = confirm;
+    }
+
     try {
       final body = <String, dynamic>{
         'name':             _nameCtrl.text.trim(),
         'description':      _descCtrl.text.trim(),
         'schedule':         _schedule,
         'academic_year_id': _academicYearId,
+        'fee_due_day':      _feeDueDay,
         if (_durationCtrl.text.isNotEmpty)
           'duration_months': int.tryParse(_durationCtrl.text),
+        if (_isEdit && updatePendingFees)
+          'update_pending_fees': true,
       };
       if (_isEdit) {
         await AcademyApiService.updateCourse(
@@ -762,6 +810,16 @@ class _CourseFormState extends State<_CourseForm> {
       }
     }
     if (mounted) setState(() => _saving = false);
+  }
+
+  static String _ordinal(int n) {
+    if (n >= 11 && n <= 13) return 'th';
+    switch (n % 10) {
+      case 1: return 'st';
+      case 2: return 'nd';
+      case 3: return 'rd';
+      default: return 'th';
+    }
   }
 
   @override
@@ -852,6 +910,26 @@ class _CourseFormState extends State<_CourseForm> {
             ),
             const SizedBox(height: 12),
             _SubjectInfoTile(course: widget.course),
+            const SizedBox(height: 12),
+            // Fee due day
+            DropdownButtonFormField<int?>(
+              value: _feeDueDay,
+              decoration: const InputDecoration(
+                labelText: 'Fee Due Day',
+                helperText: 'Day of month when fee is due',
+                border: OutlineInputBorder(),
+              ),
+              items: [
+                const DropdownMenuItem<int?>(
+                    value: null, child: Text('Last day of month')),
+                ...List.generate(28, (i) => i + 1).map((d) =>
+                    DropdownMenuItem<int?>(
+                      value: d,
+                      child: Text('$d${_ordinal(d)} of each month'),
+                    )),
+              ],
+              onChanged: (v) => setState(() => _feeDueDay = v),
+            ),
             const SizedBox(height: 12),
             TextFormField(
               controller: _descCtrl,

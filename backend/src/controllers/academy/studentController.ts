@@ -180,11 +180,8 @@ export async function registerStudent(
     // 4 — Generate student ID + persist in academy schema
     const studentId = await generateStudentId(academySlug);
 
-    // First fee is due at the end of the current month.
-    const month   = new Date().toISOString().substring(0, 7);
-    const dueDate = new Date(
-      new Date().getFullYear(), new Date().getMonth() + 1, 0
-    ).toISOString().split('T')[0];
+    // First fee is due based on the course's fee_due_day (or last day of current month).
+    const month = new Date().toISOString().substring(0, 7);
 
     // Unique course_ids derived from resolved subjects (for student_courses aggregate)
     const uniqueCourseEnrollments = new Map<string, number>();
@@ -194,6 +191,28 @@ export async function registerStudent(
         (uniqueCourseEnrollments.get(s.course_id) ?? 0) + s.fee_amount
       );
     }
+
+    // Resolve per-course due dates from each course's fee_due_day setting.
+    const courseIds = Array.from(uniqueCourseEnrollments.keys());
+    const courseRows = await academyQuery<{ id: string; fee_due_day: number | null }>(
+      academySlug,
+      `SELECT id, fee_due_day FROM courses WHERE id = ANY($1::uuid[])`,
+      [courseIds]
+    );
+    const courseDueDayMap = new Map<string, number | null>(
+      courseRows.map(r => [r.id, r.fee_due_day])
+    );
+
+    const now = new Date();
+    const getCourseDueDate = (courseId: string): string => {
+      const feeDueDay = courseDueDayMap.get(courseId) ?? null;
+      if (feeDueDay != null && feeDueDay > 0) {
+        return new Date(now.getFullYear(), now.getMonth(), feeDueDay)
+          .toISOString().split('T')[0];
+      }
+      return new Date(now.getFullYear(), now.getMonth() + 1, 0)
+        .toISOString().split('T')[0];
+    };
 
     await academyTransaction(academySlug, async (client) => {
       await client.query(
@@ -213,7 +232,7 @@ export async function registerStudent(
         ]
       );
 
-      // Enrol in each subject + generate first fee record per subject
+      // Enrol in each subject
       for (const sel of resolvedSubjects) {
         await client.query(
           `INSERT INTO student_subjects (student_id, subject_id, fee_amount, start_date)
@@ -221,22 +240,24 @@ export async function registerStudent(
            ON CONFLICT (student_id, subject_id) DO NOTHING`,
           [studentId, sel.subject_id, sel.fee_amount]
         );
+      }
 
+      // One fee record per course = sum of enrolled subject fees
+      for (const [courseId, totalFee] of uniqueCourseEnrollments) {
+        const dueDate = getCourseDueDate(courseId);
         await client.query(
-          `INSERT INTO fee_records (student_id, subject_id, course_id, amount_due, due_date, status)
-           SELECT $1::varchar, $2::uuid, $3::uuid, $4::numeric, $5::date, 'pending'
+          `INSERT INTO fee_records (student_id, course_id, amount_due, due_date, status)
+           SELECT $1::varchar, $2::uuid, $3::numeric, $4::date, 'pending'
            WHERE NOT EXISTS (
              SELECT 1 FROM fee_records fr
              WHERE fr.student_id = $1
-               AND fr.subject_id = $2
-               AND TO_CHAR(fr.due_date, 'YYYY-MM') = $6::text
+               AND fr.course_id  = $2
+               AND fr.subject_id IS NULL
+               AND TO_CHAR(fr.due_date, 'YYYY-MM') = $5::text
            )`,
-          [studentId, sel.subject_id, sel.course_id, sel.fee_amount, dueDate, month]
+          [studentId, courseId, totalFee, dueDate, month]
         );
-      }
-
-      // Maintain student_courses aggregate (for backward-compat course-level queries)
-      for (const [courseId, totalFee] of uniqueCourseEnrollments) {
+        // Maintain student_courses aggregate (for backward-compat)
         await client.query(
           `INSERT INTO student_courses (student_id, course_id, fee_amount, start_date)
            VALUES ($1,$2,$3,CURRENT_DATE)
@@ -892,14 +913,6 @@ export async function updateStudent(
       newQuality   = embed.quality ?? null;
     }
 
-    const uniqueCourseEnrollments = new Map<string, number>();
-    for (const s of resolvedSubjects) {
-      uniqueCourseEnrollments.set(
-        s.course_id,
-        (uniqueCourseEnrollments.get(s.course_id) ?? 0) + s.fee_amount
-      );
-    }
-
     const month   = new Date().toISOString().substring(0, 7);
     const dueDate = new Date(
       new Date().getFullYear(),
@@ -908,51 +921,44 @@ export async function updateStudent(
     ).toISOString().split('T')[0];
 
     await academyTransaction(academySlug, async (client) => {
-      // Drop all active subject enrollments, then re-insert fresh set
-      await client.query(
-        `UPDATE student_subjects
-         SET status = 'dropped', end_date = CURRENT_DATE
-         WHERE student_id = $1 AND status = 'active'`,
-        [id]
-      );
-      // Also drop legacy course enrollments
-      await client.query(
-        `UPDATE student_courses
-         SET status = 'dropped', end_date = CURRENT_DATE
-         WHERE student_id = $1 AND status = 'active'`,
-        [id]
-      );
-
+      // Only INSERT new subjects — existing enrollments are permanent (Rules 1–3)
       for (const sel of resolvedSubjects) {
         await client.query(
           `INSERT INTO student_subjects (student_id, subject_id, fee_amount, start_date, status)
            VALUES ($1, $2, $3, CURRENT_DATE, 'active')
-           ON CONFLICT (student_id, subject_id)
-           DO UPDATE SET fee_amount = $3, status = 'active', end_date = NULL`,
+           ON CONFLICT (student_id, subject_id) DO NOTHING`,
           [id, sel.subject_id, sel.fee_amount]
-        );
-
-        await client.query(
-          `INSERT INTO fee_records (student_id, subject_id, course_id, amount_due, due_date, status)
-           SELECT $1::varchar, $2::uuid, $3::uuid, $4::numeric, $5::date, 'pending'
-           WHERE NOT EXISTS (
-             SELECT 1 FROM fee_records fr
-             WHERE fr.student_id = $1
-               AND fr.subject_id = $2
-               AND TO_CHAR(fr.due_date, 'YYYY-MM') = $6::text
-           )`,
-          [id, sel.subject_id, sel.course_id, sel.fee_amount, dueDate, month]
         );
       }
 
-      // Re-insert course aggregate rows for backward-compat
-      for (const [courseId, totalFee] of uniqueCourseEnrollments) {
+      // Recalculate course totals from DB after new insertions
+      const { rows: courseAggs } = await client.query<{ course_id: string; total_fee: string }>(
+        `SELECT sub.course_id, SUM(ss.fee_amount) AS total_fee
+         FROM student_subjects ss
+         JOIN subjects sub ON sub.id = ss.subject_id
+         WHERE ss.student_id = $1 AND ss.status = 'active'
+         GROUP BY sub.course_id`,
+        [id]
+      );
+
+      for (const agg of courseAggs) {
+        const totalFee = parseFloat(agg.total_fee);
         await client.query(
           `INSERT INTO student_courses (student_id, course_id, fee_amount, start_date, status)
            VALUES ($1, $2, $3, CURRENT_DATE, 'active')
            ON CONFLICT (student_id, course_id)
            DO UPDATE SET fee_amount = $3, status = 'active', end_date = NULL`,
-          [id, courseId, totalFee]
+          [id, agg.course_id, totalFee]
+        );
+        // Update current month's pending/overdue fee record to reflect new subject total
+        await client.query(
+          `UPDATE fee_records
+           SET amount_due = $3, updated_at = NOW()
+           WHERE student_id = $1 AND course_id = $2
+             AND subject_id IS NULL
+             AND status IN ('pending', 'overdue')
+             AND TO_CHAR(due_date, 'YYYY-MM') = $4`,
+          [id, agg.course_id, totalFee, month]
         );
       }
 

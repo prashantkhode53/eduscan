@@ -38,6 +38,9 @@ class AcademyCourseSelector extends StatefulWidget {
   final VoidCallback onRetry;
   final String? nextLabel;
 
+  /// Subject IDs that are permanently enrolled and cannot be deselected.
+  final Set<String> lockedSubjectIds;
+
   const AcademyCourseSelector({
     super.key,
     required this.loading,
@@ -54,6 +57,7 @@ class AcademyCourseSelector extends StatefulWidget {
     required this.onNext,
     required this.onRetry,
     this.nextLabel,
+    this.lockedSubjectIds = const {},
   });
 
   @override
@@ -308,6 +312,7 @@ class _AcademyCourseSelectorState extends State<AcademyCourseSelector> {
                     selectedCount: _courseSelectedCount(filtered[i]['id'] as String),
                     selectedSubjectFees: widget.selectedSubjectFees,
                     feeControllers: _ctrls,
+                    lockedSubjectIds: widget.lockedSubjectIds,
                     onExpand: () =>
                         widget.onCourseExpand(filtered[i]['id'] as String),
                     onSubjectToggle: widget.onSubjectToggle,
@@ -386,6 +391,7 @@ class _CourseCard extends StatelessWidget {
   final int selectedCount;
   final Map<String, double> selectedSubjectFees;
   final Map<String, TextEditingController> feeControllers;
+  final Set<String> lockedSubjectIds;
   final VoidCallback onExpand;
   final void Function(String subjectId, double defaultFee, bool selected) onSubjectToggle;
   final void Function(String subjectId, double fee) onSubjectFeeChanged;
@@ -400,6 +406,7 @@ class _CourseCard extends StatelessWidget {
     required this.selectedCount,
     required this.selectedSubjectFees,
     required this.feeControllers,
+    this.lockedSubjectIds = const {},
     required this.onExpand,
     required this.onSubjectToggle,
     required this.onSubjectFeeChanged,
@@ -550,9 +557,11 @@ class _CourseCard extends StatelessWidget {
                         0.0;
                     final isSelected = selectedSubjectFees.containsKey(subId);
 
+                    final isLocked = lockedSubjectIds.contains(subId);
                     return _SubjectRow(
                       subject: sub,
                       isSelected: isSelected,
+                      isLocked: isLocked,
                       defaultFee: defaultFee,
                       feeController: feeControllers[subId],
                       onToggle: (selected) =>
@@ -574,6 +583,7 @@ class _CourseCard extends StatelessWidget {
 class _SubjectRow extends StatelessWidget {
   final Map<String, dynamic> subject;
   final bool isSelected;
+  final bool isLocked;
   final double defaultFee;
   final TextEditingController? feeController;
   final void Function(bool selected) onToggle;
@@ -582,6 +592,7 @@ class _SubjectRow extends StatelessWidget {
   const _SubjectRow({
     required this.subject,
     required this.isSelected,
+    this.isLocked = false,
     required this.defaultFee,
     required this.feeController,
     required this.onToggle,
@@ -597,14 +608,18 @@ class _SubjectRow extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // Checkbox
+          // Lock icon or Checkbox
           SizedBox(
             width: 24, height: 24,
-            child: Checkbox(
-              value: isSelected,
-              onChanged: (v) => onToggle(v ?? false),
-              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
+            child: isLocked
+                ? Icon(Icons.lock_outline,
+                    size: 18,
+                    color: theme.colorScheme.primary.withValues(alpha: 0.7))
+                : Checkbox(
+                    value: isSelected,
+                    onChanged: (v) => onToggle(v ?? false),
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
           ),
           const SizedBox(width: 10),
 
@@ -613,21 +628,34 @@ class _SubjectRow extends StatelessWidget {
             child: Text(
               subject['name'] as String? ?? '',
               style: theme.textTheme.bodyMedium?.copyWith(
-                fontWeight:
-                    isSelected ? FontWeight.w600 : FontWeight.normal,
-                color: isSelected ? theme.colorScheme.primary : null,
+                fontWeight: (isSelected || isLocked) ? FontWeight.w600 : FontWeight.normal,
+                color: (isSelected || isLocked) ? theme.colorScheme.primary : null,
               ),
             ),
           ),
 
-          // Fee: show default when not selected, editable when selected
-          if (!isSelected)
+          // Fee: read-only badge when locked, editable when selected, default when unselected
+          if (isLocked)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.primary.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                '₹${(feeController != null ? (double.tryParse(feeController!.text) ?? defaultFee) : defaultFee).toStringAsFixed(0)}',
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: theme.colorScheme.primary),
+              ),
+            )
+          else if (!isSelected)
             Text(
               '₹${defaultFee.toStringAsFixed(0)}',
               style: TextStyle(
                   fontSize: 13,
-                  color:
-                      theme.colorScheme.onSurface.withValues(alpha: 0.5)),
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.5)),
             )
           else ...[
             SizedBox(
@@ -654,8 +682,7 @@ class _SubjectRow extends StatelessWidget {
               '(def: ₹${defaultFee.toStringAsFixed(0)})',
               style: TextStyle(
                   fontSize: 10,
-                  color:
-                      theme.colorScheme.onSurface.withValues(alpha: 0.4)),
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.4)),
             ),
           ],
         ],
