@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import bcrypt from 'bcrypt';
 import { academyQuery, academyQueryOne, academyTransaction, academyExec } from '../../db/poolManager';
 import { AppError } from '../../middleware/errorHandler';
-import { batchEmbed, matchFace, cacheUpsert, cacheDelete } from '../../utils/insightface';
+import { batchEmbed, matchFace, cacheUpsert, cacheDelete, warmup } from '../../utils/insightface';
 
 // ── ID generation ─────────────────────────────────────────────────────────────
 
@@ -75,6 +75,11 @@ export async function registerStudent(
     // create that includes face_images still behaves exactly as before.
     let embedding: number[] | null = null;
     let quality:   number | null   = null;
+    if (!face_images?.length) {
+      // Phase 1 (details-only save): ping InsightFace now so it wakes up on
+      // Render's free tier while the admin is capturing the face (30-60 s window).
+      warmup();
+    }
     if (face_images?.length) {
       // 1 — Generate face embedding via InsightFace
       let embedResult: Awaited<ReturnType<typeof batchEmbed>>;

@@ -657,8 +657,15 @@ export async function getReceipt(
       [id]
     );
 
-    // Compute course-level totals from the underlying fee_records
-    const recordIds = items.map(i => i.fee_record_id).filter(Boolean);
+    // Compute course-level totals from the underlying fee_records.
+    // For old receipts (pre-items migration) fall back to the legacy fee_record_id
+    // stored directly on fee_receipts.
+    let recordIds = items.map(i => i.fee_record_id).filter(Boolean) as string[];
+    if (recordIds.length === 0) {
+      const legacyId = (receipt as Record<string, unknown>)['fee_record_id'] as string | null;
+      if (legacyId) recordIds = [legacyId];
+    }
+
     let courseTotals: {
       course_id: string | null; course_name: string | null;
       subject_names: string | null;

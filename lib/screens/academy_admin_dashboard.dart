@@ -41,7 +41,8 @@ class _AcademyAdminDashboardState extends State<AcademyAdminDashboard> {
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
-    final user = auth.academyUser!;
+    final user = auth.academyUser;
+    if (user == null) return const SizedBox.shrink();
 
     return PopScope(
       canPop: false,

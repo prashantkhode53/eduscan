@@ -1545,7 +1545,7 @@ class _FeeCollectionSheetState extends State<FeeCollectionSheet> {
               DropdownMenuItem(value: 'bank_transfer', child: Text('Bank Transfer')),
               DropdownMenuItem(value: 'cheque',        child: Text('Cheque')),
             ],
-            onChanged: (v) => setState(() => _paymentMode = v!),
+            onChanged: (v) { if (v != null) setState(() => _paymentMode = v); },
           ),
           const SizedBox(height: 12),
 

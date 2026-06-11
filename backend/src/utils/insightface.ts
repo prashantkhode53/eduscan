@@ -36,15 +36,26 @@ export interface MatchResult {
 }
 
 /**
+ * Fire-and-forget GET to /health so the InsightFace service wakes up on
+ * Render's free tier before the face-capture step needs it.  Errors are
+ * intentionally swallowed — this is best-effort only.
+ */
+export function warmup(): void {
+  fetch(`${BASE_URL}/health`, { signal: AbortSignal.timeout(90_000) })
+    .catch(() => { /* ignore — warmup is best-effort */ });
+}
+
+/**
  * Send multiple base64-encoded JPEG images to Python and get back a 512-D
  * averaged ArcFace embedding.  Called during student registration.
+ * Timeout is 90 s to survive a cold-start on Render's free tier.
  */
 export async function batchEmbed(imagesB64: string[]): Promise<EmbedResult> {
   const response = await fetch(`${BASE_URL}/embed/batch`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ images_b64: imagesB64 }),
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(90_000),
   });
   if (!response.ok) {
     throw new Error(`InsightFace /embed/batch returned ${response.status}`);
