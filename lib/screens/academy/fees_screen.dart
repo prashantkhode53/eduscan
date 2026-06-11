@@ -26,9 +26,18 @@ class _FeesScreenState extends State<FeesScreen>
 
   List<Map<String, dynamic>> _all     = [];
   Map<String, dynamic>       _summary = {};
-  bool   _loading      = true;
-  String _month        = _currentMonth();
-  int    _reloadTrigger = 0;
+  bool    _loading      = true;
+  String  _month        = _currentMonth();
+  String? _dueFilter;   // 'today' | 'this_week' | 'this_month' | 'overdue' | 'upcoming' | null
+  int     _reloadTrigger = 0;
+
+  static const _dueFilters = [
+    ('today',      'Due Today',     Icons.today_outlined),
+    ('this_week',  'This Week',     Icons.date_range_outlined),
+    ('this_month', 'This Month',    Icons.calendar_month_outlined),
+    ('overdue',    'Overdue',       Icons.warning_amber_outlined),
+    ('upcoming',   'Upcoming',      Icons.schedule_outlined),
+  ];
 
   static String _currentMonth() =>
       DateTime.now().toIso8601String().substring(0, 7);
@@ -52,7 +61,11 @@ class _FeesScreenState extends State<FeesScreen>
     if (!mounted) return;
     setState(() => _loading = true);
     try {
-      final data = await AcademyApiService.getFees(month: _month, limit: 200);
+      final data = await AcademyApiService.getFees(
+        month:     _dueFilter == null ? _month : null,
+        dueFilter: _dueFilter,
+        limit:     200,
+      );
       if (!mounted) return;
       setState(() {
         _all     = (data['records'] as List).cast<Map<String, dynamic>>();
@@ -73,6 +86,11 @@ class _FeesScreenState extends State<FeesScreen>
   List<Map<String, dynamic>> _filtered(String? status) => status == null
       ? _all
       : _all.where((r) => r['status'] == status).toList();
+
+  void _setDueFilter(String? filter) {
+    setState(() => _dueFilter = filter);
+    _load();
+  }
 
   Future<void> _generateFees() async {
     try {
@@ -122,8 +140,10 @@ class _FeesScreenState extends State<FeesScreen>
       initialEntryMode: DatePickerEntryMode.calendarOnly,
     );
     if (picked != null) {
-      setState(() => _month =
-          '${picked.year}-${picked.month.toString().padLeft(2, '0')}');
+      setState(() {
+        _month     = '${picked.year}-${picked.month.toString().padLeft(2, '0')}';
+        _dueFilter = null;  // month picker clears time filter
+      });
       _load();
     }
   }
@@ -187,20 +207,37 @@ class _FeesScreenState extends State<FeesScreen>
           if (_showMonthStrip)
             Container(
               color: theme.colorScheme.surfaceContainerLow,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // Header row: current context label + clear + loading
                   Row(
                     children: [
-                      Icon(Icons.calendar_today_outlined,
-                          size: 16, color: theme.colorScheme.primary),
+                      Icon(
+                        _dueFilter != null
+                            ? _dueFilters.firstWhere((f) => f.$1 == _dueFilter).$3
+                            : Icons.calendar_today_outlined,
+                        size: 16, color: theme.colorScheme.primary,
+                      ),
                       const SizedBox(width: 6),
                       Text(
-                        _formatMonth(_month),
+                        _dueFilter != null
+                            ? _dueFilters.firstWhere((f) => f.$1 == _dueFilter).$2
+                            : _formatMonth(_month),
                         style: TextStyle(
                             fontWeight: FontWeight.bold,
                             color: theme.colorScheme.primary),
                       ),
+                      if (_dueFilter != null) ...[
+                        const SizedBox(width: 4),
+                        InkWell(
+                          onTap: () => _setDueFilter(null),
+                          borderRadius: BorderRadius.circular(12),
+                          child: Icon(Icons.close, size: 16,
+                              color: theme.colorScheme.onSurface.withValues(alpha: 0.5)),
+                        ),
+                      ],
                       const Spacer(),
                       if (_loading)
                         const SizedBox(
@@ -208,6 +245,48 @@ class _FeesScreenState extends State<FeesScreen>
                             child: CircularProgressIndicator(strokeWidth: 2)),
                     ],
                   ),
+                  const SizedBox(height: 8),
+
+                  // Due-date filter chips
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: _dueFilters.map((f) {
+                        final isActive = _dueFilter == f.$1;
+                        final chipColor = f.$1 == 'overdue'
+                            ? Colors.red
+                            : f.$1 == 'today' || f.$1 == 'this_week'
+                                ? Colors.orange
+                                : theme.colorScheme.primary;
+                        return Padding(
+                          padding: const EdgeInsets.only(right: 6),
+                          child: FilterChip(
+                            label: Text(f.$2,
+                                style: TextStyle(
+                                    fontSize: 12,
+                                    color: isActive ? Colors.white : chipColor)),
+                            avatar: Icon(f.$3, size: 14,
+                                color: isActive ? Colors.white : chipColor),
+                            selected: isActive,
+                            onSelected: (_) =>
+                                _setDueFilter(isActive ? null : f.$1),
+                            backgroundColor:
+                                chipColor.withValues(alpha: 0.08),
+                            selectedColor: chipColor,
+                            checkmarkColor: Colors.white,
+                            side: BorderSide(
+                                color: isActive
+                                    ? chipColor
+                                    : chipColor.withValues(alpha: 0.3)),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 4, vertical: 2),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ),
+
+                  // Summary stats (only on fee-list tabs, not Students tab)
                   if (!_loading && _summary.isNotEmpty && _tabCtrl.index > 0) ...[
                     const SizedBox(height: 8),
                     SingleChildScrollView(
@@ -247,7 +326,8 @@ class _FeesScreenState extends State<FeesScreen>
               children: [
                 // Tab 0: Students — collect fees
                 _StudentsTab(
-                  month: _month,
+                  month:         _dueFilter == null ? _month : null,
+                  dueFilter:     _dueFilter,
                   reloadTrigger: _reloadTrigger,
                   onPaymentMade: _onPaymentMade,
                 ),
@@ -308,12 +388,14 @@ class _FeesScreenState extends State<FeesScreen>
 // ── Students tab ─────────────────────────────────────────────────────────────
 
 class _StudentsTab extends StatefulWidget {
-  final String month;
+  final String? month;
+  final String? dueFilter;
   final int reloadTrigger;
   final VoidCallback onPaymentMade;
 
   const _StudentsTab({
-    required this.month,
+    this.month,
+    this.dueFilter,
     required this.reloadTrigger,
     required this.onPaymentMade,
   });
@@ -342,7 +424,9 @@ class _StudentsTabState extends State<_StudentsTab>
   @override
   void didUpdateWidget(_StudentsTab old) {
     super.didUpdateWidget(old);
-    if (old.month != widget.month || old.reloadTrigger != widget.reloadTrigger) {
+    if (old.month != widget.month ||
+        old.dueFilter != widget.dueFilter ||
+        old.reloadTrigger != widget.reloadTrigger) {
       _load();
     }
   }
@@ -357,7 +441,10 @@ class _StudentsTabState extends State<_StudentsTab>
     if (!mounted) return;
     setState(() { _loading = true; _error = null; });
     try {
-      final data = await AcademyApiService.getFeesStudentSummary(month: widget.month);
+      final data = await AcademyApiService.getFeesStudentSummary(
+        month:     widget.dueFilter == null ? widget.month : null,
+        dueFilter: widget.dueFilter,
+      );
       if (!mounted) return;
       setState(() {
         _students = (data['students'] as List? ?? []).cast<Map<String, dynamic>>();
@@ -478,7 +565,9 @@ class _StudentsTabState extends State<_StudentsTab>
                       const SizedBox(height: 12),
                       Text(
                         _q.isEmpty
-                            ? 'No pending fees this month'
+                            ? (widget.dueFilter == null
+                                ? 'No pending fees this month'
+                                : 'No fees match this filter')
                             : 'No students match "$_q"',
                         style: theme.textTheme.bodyMedium,
                       ),
@@ -549,6 +638,22 @@ class _StudentFeeCard extends StatelessWidget {
         .map((e) => e.value.isEmpty ? e.key : '${e.key}: ${e.value.join(', ')}')
         .join(' · ');
 
+    // Next due date + overdue detection
+    final today = DateTime.now();
+    final today0 = DateTime(today.year, today.month, today.day);
+    DateTime? nextDue;
+    bool hasOverdue = false;
+    for (final r in records) {
+      final raw = r['due_date']?.toString() ?? '';
+      if (raw.isEmpty) continue;
+      try {
+        final d = DateTime.parse(raw.length > 10 ? raw : '${raw}T00:00:00');
+        final d0 = DateTime(d.year, d.month, d.day);
+        if (d0.isBefore(today0)) hasOverdue = true;
+        if (nextDue == null || d0.isBefore(nextDue)) nextDue = d0;
+      } catch (_) {}
+    }
+
     return Card(
       margin: EdgeInsets.zero,
       child: Padding(
@@ -614,6 +719,41 @@ class _StudentFeeCard extends StatelessWidget {
                 ),
               ],
             ),
+            const SizedBox(height: 8),
+
+            // Due date row
+            if (nextDue != null)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                decoration: BoxDecoration(
+                  color: hasOverdue
+                      ? Colors.red.withValues(alpha: 0.08)
+                      : Colors.orange.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      hasOverdue ? Icons.warning_amber_rounded : Icons.schedule_outlined,
+                      size: 13,
+                      color: hasOverdue ? Colors.red.shade700 : Colors.orange.shade700,
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      hasOverdue
+                          ? 'Overdue since ${_fmtDate(nextDue)}'
+                          : 'Next due: ${_fmtDate(nextDue)}',
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                          color: hasOverdue
+                              ? Colors.red.shade700
+                              : Colors.orange.shade700),
+                    ),
+                  ],
+                ),
+              ),
+
             const SizedBox(height: 10),
             Row(
               children: [
@@ -643,6 +783,12 @@ class _StudentFeeCard extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  static String _fmtDate(DateTime d) {
+    const m = ['', 'Jan','Feb','Mar','Apr','May','Jun',
+                    'Jul','Aug','Sep','Oct','Nov','Dec'];
+    return '${d.day} ${m[d.month]} ${d.year}';
   }
 }
 

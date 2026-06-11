@@ -608,49 +608,53 @@ class _SubjectRow extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // Lock icon or Checkbox
+          // Checkbox (always interactive — enrolled subjects show confirmation dialog in parent)
           SizedBox(
             width: 24, height: 24,
-            child: isLocked
-                ? Icon(Icons.lock_outline,
-                    size: 18,
-                    color: theme.colorScheme.primary.withValues(alpha: 0.7))
-                : Checkbox(
-                    value: isSelected,
-                    onChanged: (v) => onToggle(v ?? false),
-                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
+            child: Checkbox(
+              value: isSelected,
+              onChanged: (v) => onToggle(v ?? false),
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
           ),
           const SizedBox(width: 10),
 
-          // Subject name
+          // Subject name + "Enrolled" badge for already-enrolled subjects
           Expanded(
-            child: Text(
-              subject['name'] as String? ?? '',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                fontWeight: (isSelected || isLocked) ? FontWeight.w600 : FontWeight.normal,
-                color: (isSelected || isLocked) ? theme.colorScheme.primary : null,
-              ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    subject['name'] as String? ?? '',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                      color: isSelected ? theme.colorScheme.primary : null,
+                    ),
+                  ),
+                ),
+                if (isLocked)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                    margin: const EdgeInsets.only(left: 4),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.primaryContainer,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      'Enrolled',
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: theme.colorScheme.onPrimaryContainer,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
 
-          // Fee: read-only badge when locked, editable when selected, default when unselected
-          if (isLocked)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.primary.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Text(
-                '₹${(feeController != null ? (double.tryParse(feeController!.text) ?? defaultFee) : defaultFee).toStringAsFixed(0)}',
-                style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: theme.colorScheme.primary),
-              ),
-            )
-          else if (!isSelected)
+          // Fee: editable when selected, dimmed default when unselected
+          if (!isSelected)
             Text(
               '₹${defaultFee.toStringAsFixed(0)}',
               style: TextStyle(

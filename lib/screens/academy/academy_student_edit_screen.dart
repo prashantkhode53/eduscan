@@ -844,8 +844,32 @@ class _AcademyStudentEditScreenState
             subjectsError:       _subjectsError,
             lockedSubjectIds:    _lockedSubjectIds,
             onCourseExpand:      _loadSubjects,
-            onSubjectToggle: (subjectId, defaultFee, selected) {
-              if (!selected && _lockedSubjectIds.contains(subjectId)) return;
+            onSubjectToggle: (subjectId, defaultFee, selected) async {
+              if (!selected && _lockedSubjectIds.contains(subjectId)) {
+                final confirm = await showDialog<bool>(
+                  context: context,
+                  builder: (_) => AlertDialog(
+                    title: const Text('Remove Subject?'),
+                    content: const Text(
+                      'This removes the subject from this student\'s enrollment. '
+                      'Current unpaid fees will be recalculated. '
+                      'Past payments are preserved.',
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, false),
+                        child: const Text('Cancel'),
+                      ),
+                      FilledButton(
+                        style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                        onPressed: () => Navigator.pop(context, true),
+                        child: const Text('Remove'),
+                      ),
+                    ],
+                  ),
+                );
+                if (confirm != true || !mounted) return;
+              }
               setState(() {
                 if (selected) {
                   _selectedSubjectFees[subjectId] = defaultFee;

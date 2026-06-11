@@ -315,6 +315,7 @@ class AcademyApiService {
     String? studentId,
     String? courseId,
     String? month,
+    String? dueFilter,
     int page = 1,
     int limit = 50,
   }) async {
@@ -325,6 +326,7 @@ class AcademyApiService {
       if (studentId != null) 'student_id': studentId,
       if (courseId != null)  'course_id':  courseId,
       if (month != null)     'month':      month,
+      if (dueFilter != null) 'due_filter': dueFilter,
     };
     final uri = Uri.parse(ApiEndpoints.academyFees)
         .replace(queryParameters: params);
@@ -372,9 +374,13 @@ class AcademyApiService {
     return _parse(res) as Map<String, dynamic>;
   }
 
-  static Future<Map<String, dynamic>> getFeesStudentSummary({String? month}) async {
+  static Future<Map<String, dynamic>> getFeesStudentSummary({
+    String? month,
+    String? dueFilter,
+  }) async {
     final params = <String, String>{
-      if (month != null) 'month': month,
+      if (month != null)     'month':      month,
+      if (dueFilter != null) 'due_filter': dueFilter,
     };
     final uri = Uri.parse('${ApiEndpoints.academyFees}/students-summary')
         .replace(queryParameters: params.isEmpty ? null : params);

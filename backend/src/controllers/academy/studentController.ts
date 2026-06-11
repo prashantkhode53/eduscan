@@ -948,17 +948,43 @@ export async function updateStudent(
     ).toISOString().split('T')[0];
 
     await academyTransaction(academySlug, async (client) => {
-      // Only INSERT new subjects — existing enrollments are permanent (Rules 1–3)
+      // Group desired subjects by course for targeted upsert + drop
+      const desiredByCourse = new Map<string, typeof resolvedSubjects>();
       for (const sel of resolvedSubjects) {
+        const list = desiredByCourse.get(sel.course_id) ?? [];
+        list.push(sel);
+        desiredByCourse.set(sel.course_id, list);
+      }
+
+      for (const [courseId, selections] of desiredByCourse) {
+        const desiredIds = selections.map(s => s.subject_id);
+
+        // Upsert desired subjects — also updates fee_amount for existing enrollments
+        for (const sel of selections) {
+          await client.query(
+            `INSERT INTO student_subjects (student_id, subject_id, fee_amount, start_date, status)
+             VALUES ($1, $2, $3, CURRENT_DATE, 'active')
+             ON CONFLICT (student_id, subject_id) DO UPDATE
+               SET fee_amount = EXCLUDED.fee_amount, status = 'active', end_date = NULL`,
+            [id, sel.subject_id, sel.fee_amount]
+          );
+        }
+
+        // Drop active subjects for this course that are no longer desired
         await client.query(
-          `INSERT INTO student_subjects (student_id, subject_id, fee_amount, start_date, status)
-           VALUES ($1, $2, $3, CURRENT_DATE, 'active')
-           ON CONFLICT (student_id, subject_id) DO NOTHING`,
-          [id, sel.subject_id, sel.fee_amount]
+          `UPDATE student_subjects ss
+             SET status = 'dropped', end_date = CURRENT_DATE
+           FROM subjects sub
+           WHERE ss.student_id = $1
+             AND sub.id = ss.subject_id
+             AND sub.course_id = $2
+             AND ss.status = 'active'
+             AND ss.subject_id <> ALL($3::uuid[])`,
+          [id, courseId, desiredIds]
         );
       }
 
-      // Recalculate course totals from DB after new insertions
+      // Recalculate course totals from DB after upsert/drop
       const { rows: courseAggs } = await client.query<{ course_id: string; total_fee: string }>(
         `SELECT sub.course_id, SUM(ss.fee_amount) AS total_fee
          FROM student_subjects ss
@@ -977,7 +1003,6 @@ export async function updateStudent(
            DO UPDATE SET fee_amount = $3, status = 'active', end_date = NULL`,
           [id, agg.course_id, totalFee]
         );
-        // Update current month's pending/overdue fee record to reflect new subject total
         await client.query(
           `UPDATE fee_records
            SET amount_due = $3, updated_at = NOW()
@@ -987,6 +1012,27 @@ export async function updateStudent(
              AND TO_CHAR(due_date, 'YYYY-MM') = $4`,
           [id, agg.course_id, totalFee, month]
         );
+      }
+
+      // Deactivate student_courses for courses where all subjects were dropped
+      for (const courseId of desiredByCourse.keys()) {
+        if (!courseAggs.some(a => a.course_id === courseId)) {
+          await client.query(
+            `UPDATE student_courses
+               SET status = 'dropped', end_date = CURRENT_DATE
+             WHERE student_id = $1 AND course_id = $2 AND status = 'active'`,
+            [id, courseId]
+          );
+          await client.query(
+            `UPDATE fee_records
+               SET amount_due = 0, updated_at = NOW()
+             WHERE student_id = $1 AND course_id = $2
+               AND subject_id IS NULL
+               AND status IN ('pending', 'overdue')
+               AND TO_CHAR(due_date, 'YYYY-MM') = $3`,
+            [id, courseId, month]
+          );
+        }
       }
 
       // Update personal info fields when provided
