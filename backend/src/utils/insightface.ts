@@ -5,7 +5,10 @@
  * and Render both work without code changes (Render injects the internal URL).
  */
 
-const BASE_URL = (process.env.INSIGHTFACE_URL ?? 'http://localhost:8000').replace(/\/$/, '');
+// Normalise the URL: add https:// if the env var is a bare hostname (Render's
+// `property: host` returns just the hostname without a scheme).
+const _rawUrl = process.env.INSIGHTFACE_URL ?? 'http://localhost:8000';
+const BASE_URL = (_rawUrl.startsWith('http') ? _rawUrl : `https://${_rawUrl}`).replace(/\/$/, '');
 
 export interface EmbedResult {
   success: boolean;

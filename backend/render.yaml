@@ -21,6 +21,13 @@ services:
       - key: JWT_SECRET
         sync: false
 
+      # Internal URL of the Python InsightFace service (Render private networking).
+      # If the InsightFace service is deployed in the same Render project, use:
+      #   fromService: { name: eduscan-insightface, type: web, property: host }
+      # Otherwise set INSIGHTFACE_URL manually in the Render dashboard.
+      - key: INSIGHTFACE_URL
+        sync: false
+
       # Firebase service-account JSON for parent push notifications.
       # Set the actual value in the Render dashboard (kept out of source control).
       - key: FIREBASE_SERVICE_ACCOUNT_JSON

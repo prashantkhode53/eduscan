@@ -77,7 +77,15 @@ export async function registerStudent(
     let quality:   number | null   = null;
     if (face_images?.length) {
       // 1 — Generate face embedding via InsightFace
-      const embedResult = await batchEmbed(face_images);
+      let embedResult: Awaited<ReturnType<typeof batchEmbed>>;
+      try {
+        embedResult = await batchEmbed(face_images);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return next(new AppError(
+          `Face service error: ${msg}. Please try again in a moment.`, 503
+        ));
+      }
       if (!embedResult.success || !embedResult.embedding) {
         return next(new AppError(
           `Face registration failed: ${embedResult.reason ?? 'no face detected'}`, 422
@@ -85,7 +93,15 @@ export async function registerStudent(
       }
 
       // 2 — Duplicate check (confidence >= 0.88 = already registered)
-      const matchResult = await matchFace(face_images[0]);
+      let matchResult: Awaited<ReturnType<typeof matchFace>>;
+      try {
+        matchResult = await matchFace(face_images[0]);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return next(new AppError(
+          `Face service error: ${msg}. Please try again in a moment.`, 503
+        ));
+      }
       if (matchResult.matched && (matchResult.confidence ?? 0) >= 0.88) {
         // Look up the matched student so the client can show a useful warning.
         const dup = matchResult.student_id
@@ -268,16 +284,22 @@ export async function registerStudent(
     });
 
     // 5 — Push embedding to InsightFace Redis cache (only when a face was given)
+    // Non-fatal: if the cache update fails the student is still registered; the
+    // embedding is persisted in the DB and the cache can be reloaded later.
     if (embedding) {
-      await cacheUpsert({
-        student_id:  studentId,
-        embedding,
-        first_name:  first_name.trim(),
-        last_name:   last_name.trim(),
-        class_grade: 'academy',
-        division:    academySlug.substring(0, 8),
-        roll_no:     null,
-      });
+      try {
+        await cacheUpsert({
+          student_id:  studentId,
+          embedding,
+          first_name:  first_name.trim(),
+          last_name:   last_name.trim(),
+          class_grade: 'academy',
+          division:    academySlug.substring(0, 8),
+          roll_no:     null,
+        });
+      } catch (e) {
+        console.error('[register] cacheUpsert failed (non-fatal):', e);
+      }
     }
 
     res.status(201).json({
@@ -1046,7 +1068,15 @@ export async function updateStudentFace(
     }>(academySlug, `SELECT id, first_name, last_name FROM students WHERE id = $1`, [id]);
     if (!student) return next(new AppError('Student not found', 404));
 
-    const embed = await batchEmbed(face_images);
+    let embed: Awaited<ReturnType<typeof batchEmbed>>;
+    try {
+      embed = await batchEmbed(face_images);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return next(new AppError(
+        `Face service error: ${msg}. Please try again in a moment.`, 503
+      ));
+    }
     if (!embed.success || !embed.embedding) {
       return next(new AppError(
         `Face capture failed: ${embed.reason ?? 'no face detected'}`, 422
@@ -1055,7 +1085,15 @@ export async function updateStudentFace(
 
     // Duplicate check — a high-confidence match to a DIFFERENT student means
     // this face is already registered to someone else.
-    const match = await matchFace(face_images[0]);
+    let match: Awaited<ReturnType<typeof matchFace>>;
+    try {
+      match = await matchFace(face_images[0]);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return next(new AppError(
+        `Face service error: ${msg}. Please try again in a moment.`, 503
+      ));
+    }
     if (match.matched && match.student_id && match.student_id !== id &&
         (match.confidence ?? 0) >= 0.88) {
       const dup = await academyQueryOne<{
@@ -1099,15 +1137,20 @@ export async function updateStudentFace(
       [JSON.stringify(embed.embedding), embed.quality ?? null, id]
     );
 
-    await cacheUpsert({
-      student_id:  id,
-      embedding:   embed.embedding,
-      first_name:  student.first_name,
-      last_name:   student.last_name,
-      class_grade: 'academy',
-      division:    academySlug.substring(0, 8),
-      roll_no:     null,
-    });
+    // Non-fatal: if the cache update fails the student is still registered.
+    try {
+      await cacheUpsert({
+        student_id:  id,
+        embedding:   embed.embedding,
+        first_name:  student.first_name,
+        last_name:   student.last_name,
+        class_grade: 'academy',
+        division:    academySlug.substring(0, 8),
+        roll_no:     null,
+      });
+    } catch (e) {
+      console.error('[updateStudentFace] cacheUpsert failed (non-fatal):', e);
+    }
 
     res.json({ success: true, message: 'Face saved successfully' });
   } catch (err) { next(err); }
