@@ -10,18 +10,16 @@ import 'package:pdf/widgets.dart' as pw;
 
 /// Generates professional fee PDF documents and opens them.
 ///
-/// Font strategy: Noto Sans (via PdfGoogleFonts) is loaded async before each
-/// PDF build. It supports the ₹ glyph (U+20B9). If the download fails (offline
-/// first run), we fall back to the built-in PDF Helvetica font — ₹ will render
-/// as a box in that case but the PDF is still usable.
+/// Font strategy: Roboto (bundled in assets/fonts/) is loaded async before each
+/// PDF build. Falls back to built-in PDF Helvetica if the asset load fails.
 class FeePdfService {
   // ── Formatters ──────────────────────────────────────────────────────────────
 
   // Indian locale, 2 decimal places: 10000 → "10,000.00"
   static final _money = NumberFormat('#,##,##0.00', 'en_IN');
 
-  /// Formats a double as ₹ + Indian-comma amount with 2 decimals.
-  static String _fmt(double v) => '₹${_money.format(v)}';
+  /// Formats a double as Rs. + Indian-comma amount with 2 decimals.
+  static String _fmt(double v) => 'Rs.${_money.format(v)}';
 
   /// Same as [_fmt] but accepts any dynamic value (parses to double first).
   static String _m(dynamic v) =>
@@ -73,8 +71,7 @@ class FeePdfService {
 
   // ── Font loading ─────────────────────────────────────────────────────────────
 
-  /// Returns a [pw.ThemeData] using bundled Noto Sans fonts.
-  /// Noto Sans covers U+20B9 (₹) and virtually all Unicode scripts.
+  /// Returns a [pw.ThemeData] using bundled Roboto fonts.
   /// Falls back to built-in Helvetica only if the asset load fails.
   static Future<pw.ThemeData> _theme() async {
     try {
