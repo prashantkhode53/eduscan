@@ -215,18 +215,20 @@ export async function registerStudent(
 
     // Resolve per-course due dates from each course's fee_due_day setting.
     const courseIds = Array.from(uniqueCourseEnrollments.keys());
-    const courseRows = await academyQuery<{ id: string; fee_due_day: number | null }>(
+    const courseRows = await academyQuery<{ id: string; fee_due_date: string | null; fee_due_day: number | null }>(
       academySlug,
-      `SELECT id, fee_due_day FROM courses WHERE id = ANY($1::uuid[])`,
+      `SELECT id, fee_due_date, fee_due_day FROM courses WHERE id = ANY($1::uuid[])`,
       [courseIds]
     );
-    const courseDueDayMap = new Map<string, number | null>(
-      courseRows.map(r => [r.id, r.fee_due_day])
+    const courseDueDateMap = new Map(
+      courseRows.map(r => [r.id, { fee_due_date: r.fee_due_date, fee_due_day: r.fee_due_day }])
     );
 
     const now = new Date();
     const getCourseDueDate = (courseId: string): string => {
-      const feeDueDay = courseDueDayMap.get(courseId) ?? null;
+      const c = courseDueDateMap.get(courseId);
+      if (c?.fee_due_date) return c.fee_due_date.split('T')[0];
+      const feeDueDay = c?.fee_due_day ?? null;
       if (feeDueDay != null && feeDueDay > 0) {
         return new Date(now.getFullYear(), now.getMonth(), feeDueDay)
           .toISOString().split('T')[0];
@@ -957,17 +959,42 @@ export async function updateStudent(
       }
 
       for (const [courseId, selections] of desiredByCourse) {
-        const desiredIds = selections.map(s => s.subject_id);
+        const desiredIds   = selections.map(s => s.subject_id);
+        const desiredIdSet = new Set(desiredIds);
 
-        // Upsert desired subjects — also updates fee_amount for existing enrollments
+        // Upsert desired subjects — fee_amount is LOCKED after first assignment
         for (const sel of selections) {
           await client.query(
             `INSERT INTO student_subjects (student_id, subject_id, fee_amount, start_date, status)
              VALUES ($1, $2, $3, CURRENT_DATE, 'active')
              ON CONFLICT (student_id, subject_id) DO UPDATE
-               SET fee_amount = EXCLUDED.fee_amount, status = 'active', end_date = NULL`,
+               SET status = 'active', end_date = NULL`,
             [id, sel.subject_id, sel.fee_amount]
           );
+        }
+
+        // Guard: block subject removal if fees have already been collected for this course
+        const existingActive = (await client.query<{ subject_id: string }>(
+          `SELECT ss.subject_id
+           FROM student_subjects ss
+           JOIN subjects sub ON sub.id = ss.subject_id
+           WHERE ss.student_id = $1 AND sub.course_id = $2 AND ss.status = 'active'`,
+          [id, courseId]
+        )).rows;
+        const beingDropped = existingActive.filter(r => !desiredIdSet.has(r.subject_id));
+
+        if (beingDropped.length > 0) {
+          const { rows: paidCheck } = await client.query(
+            `SELECT 1 FROM fee_records
+             WHERE student_id = $1 AND course_id = $2 AND amount_paid > 0 LIMIT 1`,
+            [id, courseId]
+          );
+          if (paidCheck.length > 0) {
+            throw new AppError(
+              'Cannot remove subjects: fees have already been collected for this course',
+              400
+            );
+          }
         }
 
         // Drop active subjects for this course that are no longer desired

@@ -232,10 +232,17 @@ class _CourseMasterScreenState extends State<CourseMasterScreen> {
                                 final subjectCount = int.tryParse(c['subject_count']?.toString() ?? '') ?? 0;
                                 final totalFee     = double.tryParse(c['total_subject_fee']?.toString() ?? '0') ?? 0.0;
                                 final yearName     = c['academic_year_name'] as String?;
-                                final feeDueDay    = c['fee_due_day'] as int?;
-                                final dueDayLabel  = feeDueDay == null
-                                    ? 'last day'
-                                    : '$feeDueDay${_CourseFormState._ordinal(feeDueDay)}';
+                                final feeDueDateStr = c['fee_due_date'] as String?;
+                                final feeDueDayInt  = c['fee_due_day']  as int?;
+                                final String dueDayLabel;
+                                if (feeDueDateStr != null) {
+                                  final d = DateTime.tryParse(feeDueDateStr);
+                                  dueDayLabel = d != null ? _CourseFormState._fmtDate(d) : feeDueDateStr;
+                                } else if (feeDueDayInt != null) {
+                                  dueDayLabel = '$feeDueDayInt${_CourseFormState._ordinal(feeDueDayInt)}';
+                                } else {
+                                  dueDayLabel = 'last day';
+                                }
                                 return Card(
                                   child: ListTile(
                                     onTap: () => _showSubjects(c),
@@ -712,12 +719,12 @@ class _CourseFormState extends State<_CourseForm> {
   final _nameCtrl      = TextEditingController();
   final _descCtrl      = TextEditingController();
   final _durationCtrl  = TextEditingController();
-  String  _schedule        = 'monthly';
-  String? _academicYearId;
-  // null = last day of month; 1-28 = specific day
-  int?    _feeDueDay;
-  int?    _originalFeeDueDay;
-  bool    _saving      = false;
+  String    _schedule        = 'monthly';
+  String?   _academicYearId;
+  // null = last day of month; a specific date means that day recurs monthly
+  DateTime? _feeDueDate;
+  DateTime? _originalFeeDueDate;
+  bool      _saving      = false;
 
   bool get _isEdit => widget.course != null;
 
@@ -731,8 +738,16 @@ class _CourseFormState extends State<_CourseForm> {
       _durationCtrl.text = c['duration_months']?.toString() ?? '';
       _schedule          = c['schedule'] ?? 'monthly';
       _academicYearId    = c['academic_year_id'] as String?;
-      _feeDueDay         = c['fee_due_day'] as int?;
-      _originalFeeDueDay = _feeDueDay;
+      // Prefer the full fee_due_date; fall back to migrating fee_due_day to a date
+      final feeDueDateStr = c['fee_due_date'] as String?;
+      final feeDueDayInt  = c['fee_due_day']  as int?;
+      if (feeDueDateStr != null) {
+        _feeDueDate = DateTime.tryParse(feeDueDateStr);
+      } else if (feeDueDayInt != null) {
+        final now = DateTime.now();
+        _feeDueDate = DateTime(now.year, now.month, feeDueDayInt.clamp(1, 28));
+      }
+      _originalFeeDueDate = _feeDueDate;
     } else {
       _academicYearId = widget.defaultYearId;
     }
@@ -750,12 +765,12 @@ class _CourseFormState extends State<_CourseForm> {
 
     bool updatePendingFees = false;
 
-    // If due day changed on an existing course, ask whether to also update
+    // If due date changed on an existing course, ask whether to also update
     // pending/overdue fee records for this course.
-    if (_isEdit && _feeDueDay != _originalFeeDueDay) {
-      final label = _feeDueDay == null
+    if (_isEdit && _feeDueDate != _originalFeeDueDate) {
+      final label = _feeDueDate == null
           ? 'last day of month'
-          : '${_feeDueDay!}${_ordinal(_feeDueDay!)} of each month';
+          : _fmtDate(_feeDueDate!);
       final confirm = await showDialog<bool>(
         context: context,
         builder: (_) => AlertDialog(
@@ -789,7 +804,11 @@ class _CourseFormState extends State<_CourseForm> {
         'description':      _descCtrl.text.trim(),
         'schedule':         _schedule,
         'academic_year_id': _academicYearId,
-        'fee_due_day':      _feeDueDay,
+        'fee_due_date':     _feeDueDate != null
+            ? '${_feeDueDate!.year.toString().padLeft(4,'0')}'
+              '-${_feeDueDate!.month.toString().padLeft(2,'0')}'
+              '-${_feeDueDate!.day.toString().padLeft(2,'0')}'
+            : null,
         if (_durationCtrl.text.isNotEmpty)
           'duration_months': int.tryParse(_durationCtrl.text),
         if (_isEdit && updatePendingFees)
@@ -810,6 +829,12 @@ class _CourseFormState extends State<_CourseForm> {
       }
     }
     if (mounted) setState(() => _saving = false);
+  }
+
+  static String _fmtDate(DateTime d) {
+    const months = ['Jan','Feb','Mar','Apr','May','Jun',
+                    'Jul','Aug','Sep','Oct','Nov','Dec'];
+    return '${d.day} ${months[d.month - 1]} ${d.year}';
   }
 
   static String _ordinal(int n) {
@@ -911,21 +936,21 @@ class _CourseFormState extends State<_CourseForm> {
             const SizedBox(height: 12),
             _SubjectInfoTile(course: widget.course),
             const SizedBox(height: 12),
-            // Fee due date picker
+            // Fee due date picker — stores full calendar date; day is reused monthly
             TextFormField(
               readOnly: true,
               decoration: InputDecoration(
                 labelText: 'Fee Due Date',
-                helperText: 'Day of month when fee is due each cycle',
+                helperText: 'Day of selected date recurs each month (e.g. 26 Jun → 26th every month)',
                 border: const OutlineInputBorder(),
                 suffixIcon: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (_feeDueDay != null)
+                    if (_feeDueDate != null)
                       IconButton(
                         icon: const Icon(Icons.clear, size: 18),
                         tooltip: 'Reset to last day of month',
-                        onPressed: () => setState(() => _feeDueDay = null),
+                        onPressed: () => setState(() => _feeDueDate = null),
                       ),
                     const Padding(
                       padding: EdgeInsets.only(right: 10),
@@ -935,33 +960,22 @@ class _CourseFormState extends State<_CourseForm> {
                 ),
               ),
               controller: TextEditingController(
-                text: _feeDueDay != null
-                    ? '$_feeDueDay${_ordinal(_feeDueDay!)} of each month'
+                text: _feeDueDate != null
+                    ? _fmtDate(_feeDueDate!)
                     : 'Last day of month',
               ),
               onTap: () async {
                 final now = DateTime.now();
-                // If a day is already set, try to show it in the current/next
-                // month so it's visible; fall back to today if it's in the past.
-                DateTime initial = now;
-                if (_feeDueDay != null) {
-                  final candidate = DateTime(now.year, now.month, _feeDueDay!);
-                  initial = candidate.isBefore(now)
-                      ? DateTime(now.year, now.month + 1, _feeDueDay!)
-                      : candidate;
-                }
+                final initial = _feeDueDate ?? now;
                 final picked = await showDatePicker(
                   context: context,
-                  initialDate: initial,
-                  firstDate: now,
+                  initialDate: initial.isBefore(now) ? now : initial,
+                  firstDate: DateTime(now.year - 1, 1, 1),
                   lastDate: DateTime(now.year + 5, 12, 31),
-                  helpText: 'Select fee due day',
-                  fieldLabelText: 'Due Day',
+                  helpText: 'Select fee due date',
+                  fieldLabelText: 'Due Date',
                 );
-                if (picked != null) {
-                  // Clamp to 28 — safe for all months including February
-                  setState(() => _feeDueDay = picked.day > 28 ? 28 : picked.day);
-                }
+                if (picked != null) setState(() => _feeDueDate = picked);
               },
             ),
             const SizedBox(height: 12),

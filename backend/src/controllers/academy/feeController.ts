@@ -485,6 +485,8 @@ export async function generateMonthlyFees(
          t.course_id,
          t.total_fee,
          CASE
+           WHEN c.fee_due_date IS NOT NULL
+           THEN (DATE_TRUNC('month', $1::date) + (EXTRACT(DAY FROM c.fee_due_date)::int - 1) * INTERVAL '1 day')::date
            WHEN c.fee_due_day IS NOT NULL
            THEN (DATE_TRUNC('month', $1::date) + (c.fee_due_day - 1) * INTERVAL '1 day')::date
            ELSE $1::date

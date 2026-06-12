@@ -208,6 +208,11 @@ export async function reconcileAcademySchemas(): Promise<void> {
           ADD COLUMN IF NOT EXISTS fee_due_day INT DEFAULT NULL
             CHECK (fee_due_day IS NULL OR (fee_due_day >= 1 AND fee_due_day <= 28))
       `);
+      // Full calendar due date (supersedes fee_due_day; day portion used for monthly recurrence)
+      await academyExec(slug, `
+        ALTER TABLE IF EXISTS courses
+          ADD COLUMN IF NOT EXISTS fee_due_date DATE DEFAULT NULL
+      `);
       ok++;
     } catch (err) {
       console.error(`[Reconcile] schema "${slug}" failed:`, err);
@@ -553,6 +558,11 @@ export async function runAcademyMigrations(
       ALTER TABLE IF EXISTS courses
         ADD COLUMN IF NOT EXISTS fee_due_day INT DEFAULT NULL
           CHECK (fee_due_day IS NULL OR (fee_due_day >= 1 AND fee_due_day <= 28))
+    `);
+    // Full calendar due date (supersedes fee_due_day; day portion used for monthly recurrence)
+    await client.query(`
+      ALTER TABLE IF EXISTS courses
+        ADD COLUMN IF NOT EXISTS fee_due_date DATE DEFAULT NULL
     `);
 
     await client.query('COMMIT');

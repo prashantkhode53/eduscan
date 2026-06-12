@@ -653,13 +653,46 @@ class _SubjectRow extends StatelessWidget {
             ),
           ),
 
-          // Fee: editable when selected, dimmed default when unselected
+          // Fee: read-only badge for locked enrolled subjects; editable for new selections
           if (!isSelected)
             Text(
               '₹${defaultFee.toStringAsFixed(0)}',
               style: TextStyle(
                   fontSize: 13,
                   color: theme.colorScheme.onSurface.withValues(alpha: 0.5)),
+            )
+          else if (isLocked)
+            GestureDetector(
+              onTap: () => ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text(
+                    'Subject fee cannot be modified — already assigned to this student.',
+                  ),
+                  duration: Duration(seconds: 3),
+                ),
+              ),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.surfaceContainerHigh,
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(
+                      color: theme.colorScheme.outline.withValues(alpha: 0.35)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '₹${(double.tryParse(feeController?.text ?? '') ?? defaultFee).toStringAsFixed(0)}',
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                    const SizedBox(width: 4),
+                    Icon(Icons.lock_outline,
+                        size: 12,
+                        color: theme.colorScheme.onSurface.withValues(alpha: 0.4)),
+                  ],
+                ),
+              ),
             )
           else ...[
             SizedBox(

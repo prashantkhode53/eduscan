@@ -13,6 +13,7 @@ interface CourseRow {
   default_fee: number;
   schedule: string;
   fee_due_day: number | null;
+  fee_due_date: string | null;
   is_active: boolean;
   created_at: string;
   student_count?: number;
@@ -59,19 +60,20 @@ export async function createCourse(
     const { academySlug } = req.academyUser!;
     const {
       academic_year_id, name, description, subject,
-      duration_months, default_fee, schedule, fee_due_day,
+      duration_months, default_fee, schedule, fee_due_day, fee_due_date,
     } = req.body as {
       academic_year_id?: string; name: string; description?: string;
       subject?: string; duration_months?: number; default_fee?: number;
-      schedule?: 'monthly' | 'quarterly' | 'onetime'; fee_due_day?: number | null;
+      schedule?: 'monthly' | 'quarterly' | 'onetime';
+      fee_due_day?: number | null; fee_due_date?: string | null;
     };
 
     if (!name?.trim()) return next(new AppError('Course name is required', 400));
 
     const course = await academyQueryOne<CourseRow>(
       academySlug,
-      `INSERT INTO courses (academic_year_id, name, description, subject, duration_months, default_fee, schedule, fee_due_day)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      `INSERT INTO courses (academic_year_id, name, description, subject, duration_months, default_fee, schedule, fee_due_day, fee_due_date)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
        RETURNING *`,
       [
         academic_year_id ?? null,
@@ -82,6 +84,7 @@ export async function createCourse(
         default_fee ?? 0,
         schedule ?? 'monthly',
         fee_due_day ?? null,
+        fee_due_date ?? null,
       ]
     );
     res.status(201).json({ success: true, data: course, message: 'Course created' });
@@ -98,15 +101,17 @@ export async function updateCourse(
     const { id } = req.params;
     const {
       academic_year_id, name, description, subject,
-      duration_months, default_fee, schedule, fee_due_day,
+      duration_months, default_fee, schedule, fee_due_day, fee_due_date,
       update_pending_fees,
     } = req.body as Partial<CourseRow> & {
       academic_year_id?: string | null;
       fee_due_day?: number | null;
+      fee_due_date?: string | null;
       update_pending_fees?: boolean;
     };
 
-    const feeDueDayInBody = 'fee_due_day' in req.body;
+    const feeDueDayInBody  = 'fee_due_day'  in req.body;
+    const feeDueDateInBody = 'fee_due_date' in req.body;
 
     let course: CourseRow | null = null;
 
@@ -120,7 +125,8 @@ export async function updateCourse(
              duration_months  = COALESCE($6, duration_months),
              default_fee      = COALESCE($7, default_fee),
              schedule         = COALESCE($8, schedule),
-             fee_due_day      = CASE WHEN $10::boolean THEN $11::int  ELSE fee_due_day END,
+             fee_due_day      = CASE WHEN $10::boolean THEN $11::int  ELSE fee_due_day  END,
+             fee_due_date     = CASE WHEN $12::boolean THEN $13::date ELSE fee_due_date END,
              updated_at       = NOW()
          WHERE id = $9 AND is_active = TRUE
          RETURNING *`,
@@ -132,13 +138,19 @@ export async function updateCourse(
           id,
           feeDueDayInBody,
           fee_due_day ?? null,
+          feeDueDateInBody,
+          fee_due_date ?? null,
         ]
       ).then(r => r.rows[0] ?? null);
 
       if (!course) return;
 
-      // If requested, bulk-update due_date on pending/overdue course-level fee records
-      if (update_pending_fees && feeDueDayInBody) {
+      // If requested, bulk-update due_date on pending/overdue course-level fee records.
+      // Derive effective day-of-month: prefer fee_due_date, fall back to fee_due_day.
+      if (update_pending_fees && (feeDueDayInBody || feeDueDateInBody)) {
+        const effectiveDueDay = feeDueDateInBody
+          ? (fee_due_date ? new Date(fee_due_date).getDate() : null)
+          : (fee_due_day ?? null);
         await client.query(
           `UPDATE fee_records
            SET due_date   = CASE
@@ -148,7 +160,7 @@ export async function updateCourse(
            END,
            updated_at = NOW()
            WHERE course_id = $2 AND subject_id IS NULL AND status IN ('pending', 'overdue')`,
-          [fee_due_day ?? null, id]
+          [effectiveDueDay, id]
         );
       }
     });
