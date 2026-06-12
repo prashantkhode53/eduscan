@@ -214,11 +214,28 @@ export async function registerStudent(
 
     // Resolve per-course due dates from each course's fee_due_day setting.
     const courseIds = Array.from(uniqueCourseEnrollments.keys());
-    const courseRows = await academyQuery<{ id: string; fee_due_date: string | null; fee_due_day: number | null }>(
-      academySlug,
-      `SELECT id, fee_due_date, fee_due_day FROM courses WHERE id = ANY($1::uuid[])`,
-      [courseIds]
-    );
+    const courseDueSql =
+      `SELECT id, fee_due_date, fee_due_day FROM courses WHERE id = ANY($1::uuid[])`;
+    let courseRows: Array<{ id: string; fee_due_date: string | null; fee_due_day: number | null }>;
+    try {
+      courseRows = await academyQuery(academySlug, courseDueSql, [courseIds]);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      // Self-heal: an older academy whose boot-time reconcile partially failed
+      // may be missing the fee_due_* columns. Add them idempotently and retry
+      // once rather than 500-ing the whole registration. Any other error still
+      // propagates so genuine bugs are not masked.
+      if (/column .*(fee_due_date|fee_due_day).* does not exist/i.test(msg)) {
+        await academyExec(academySlug, `
+          ALTER TABLE IF EXISTS courses
+            ADD COLUMN IF NOT EXISTS fee_due_day  INT  DEFAULT NULL,
+            ADD COLUMN IF NOT EXISTS fee_due_date DATE DEFAULT NULL
+        `);
+        courseRows = await academyQuery(academySlug, courseDueSql, [courseIds]);
+      } else {
+        throw e;
+      }
+    }
     const courseDueDateMap = new Map(
       courseRows.map(r => [r.id, { fee_due_date: r.fee_due_date, fee_due_day: r.fee_due_day }])
     );

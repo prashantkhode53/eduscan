@@ -33,6 +33,16 @@ export async function reconcileAcademySchemas(): Promise<void> {
   for (const { slug } of slugs) {
     if (!/^[a-z0-9_]{1,63}$/.test(slug)) continue;
     try {
+      // Per-course due-date columns FIRST: these are read on every student
+      // registration (SELECT fee_due_date, fee_due_day FROM courses). They have
+      // no dependencies, so adding them before anything else guarantees they are
+      // present even if a later reconcile step throws for this academy.
+      await academyExec(slug, `
+        ALTER TABLE IF EXISTS courses
+          ADD COLUMN IF NOT EXISTS fee_due_day  INT  DEFAULT NULL
+            CHECK (fee_due_day IS NULL OR (fee_due_day >= 1 AND fee_due_day <= 28)),
+          ADD COLUMN IF NOT EXISTS fee_due_date DATE DEFAULT NULL
+      `);
       // academyExec pins the search_path per-transaction (PgBouncer-safe).
       await academyExec(slug, `
         ALTER TABLE IF EXISTS students
@@ -77,14 +87,6 @@ export async function reconcileAcademySchemas(): Promise<void> {
       await academyExec(slug, `
         ALTER TABLE IF EXISTS courses
           ADD COLUMN IF NOT EXISTS academic_year_id UUID REFERENCES academic_years(id) ON DELETE SET NULL
-      `);
-      // Per-course due-date columns — moved here so they are added even if later
-      // steps (e.g. unique-index creation) throw for an existing academy.
-      await academyExec(slug, `
-        ALTER TABLE IF EXISTS courses
-          ADD COLUMN IF NOT EXISTS fee_due_day  INT  DEFAULT NULL
-            CHECK (fee_due_day IS NULL OR (fee_due_day >= 1 AND fee_due_day <= 28)),
-          ADD COLUMN IF NOT EXISTS fee_due_date DATE DEFAULT NULL
       `);
       // subjects — one row per subject within a course (Physics, Chemistry, …)
       await academyExec(slug, `
