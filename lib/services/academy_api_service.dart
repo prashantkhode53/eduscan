@@ -27,6 +27,36 @@ class FaceDuplicateException implements Exception {
   String toString() => message;
 }
 
+/// Thrown for any non-success API response that isn't a face-duplicate.
+/// Carries the backend's structured fields so the UI can show a specific,
+/// traceable message instead of a generic one:
+///  - [message]   user-safe reason from the server
+///  - [statusCode] HTTP status (e.g. 400, 422, 500)
+///  - [errorRef]   short correlation id logged server-side (for support)
+///  - [category]   coarse failure type: validation | face | database | schema | server
+class ApiException implements Exception {
+  final String message;
+  final int? statusCode;
+  final String? errorRef;
+  final String? category;
+
+  const ApiException(
+    this.message, {
+    this.statusCode,
+    this.errorRef,
+    this.category,
+  });
+
+  /// True when the failure is a server/database/schema fault (not user-fixable),
+  /// so the UI should surface the reference code for support follow-up.
+  bool get isServerFault =>
+      category == 'server' || category == 'database' || category == 'schema' ||
+      (statusCode != null && statusCode! >= 500);
+
+  @override
+  String toString() => message;
+}
+
 /// All API calls scoped to an academy (requires academy JWT in Authorization header).
 class AcademyApiService {
   static const Duration _timeout     = Duration(seconds: 30);
@@ -42,7 +72,19 @@ class AcademyApiService {
   }
 
   static dynamic _parse(http.Response res) {
-    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    Map<String, dynamic> body;
+    try {
+      body = jsonDecode(res.body) as Map<String, dynamic>;
+    } catch (_) {
+      // Non-JSON body (e.g. an HTML 502 from the proxy while the server wakes).
+      throw ApiException(
+        res.statusCode >= 500
+            ? 'The server is starting up or temporarily unavailable. Please try again in a moment.'
+            : 'Unexpected server response (${res.statusCode}).',
+        statusCode: res.statusCode,
+        category: 'server',
+      );
+    }
     if (res.statusCode >= 200 && res.statusCode < 300) {
       return body['data'] ?? body;
     }
@@ -66,7 +108,13 @@ class AcademyApiService {
         );
       }
     }
-    throw Exception(body['message'] ?? 'Request failed (${res.statusCode})');
+    // Typed failure carrying the server's reason + correlation ref + category.
+    throw ApiException(
+      body['message'] as String? ?? 'Request failed (${res.statusCode})',
+      statusCode: res.statusCode,
+      errorRef:   body['error_ref'] as String?,
+      category:   body['category']  as String?,
+    );
   }
 
   // ── Stats ─────────────────────────────────────────────────────────────────

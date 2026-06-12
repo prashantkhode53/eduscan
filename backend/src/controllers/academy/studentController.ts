@@ -4,6 +4,19 @@ import { academyQuery, academyQueryOne, academyTransaction, academyExec } from '
 import { AppError } from '../../middleware/errorHandler';
 import { batchEmbed, matchFace, cacheUpsert, cacheDelete, warmup } from '../../utils/insightface';
 
+/**
+ * Lightweight, structured step logging for the registration flow. Lets us see
+ * exactly which phase a failing request reached in the Render logs (correlate
+ * with the error_ref logged by the central errorHandler). No PII beyond the
+ * academy slug + a short mobile suffix is recorded.
+ */
+function regLog(slug: string, phase: string, extra?: Record<string, unknown>): void {
+  const tail = extra
+    ? ' ' + Object.entries(extra).map(([k, v]) => `${k}=${v}`).join(' ')
+    : '';
+  console.log(`[register] academy=${slug} phase=${phase}${tail}`);
+}
+
 // ── ID generation ─────────────────────────────────────────────────────────────
 
 async function generateStudentId(slug: string): Promise<string> {
@@ -58,6 +71,12 @@ export async function registerStudent(
       return next(new AppError('At least one subject must be selected', 400));
     }
 
+    regLog(academySlug, 'start', {
+      hasFace: !!face_images?.length,
+      subjects: subjects?.length ?? 0,
+      courses: courses?.length ?? 0,
+    });
+
     // Remove any orphaned face-less students for this mobile number created by
     // previous abandoned two-phase registrations. They have no face_embedding,
     // so they cannot be recognised — removing them before inserting the new
@@ -82,16 +101,19 @@ export async function registerStudent(
     }
     if (face_images?.length) {
       // 1 — Generate face embedding via InsightFace
+      regLog(academySlug, 'embed', { images: face_images.length });
       let embedResult: Awaited<ReturnType<typeof batchEmbed>>;
       try {
         embedResult = await batchEmbed(face_images);
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
+        console.error(`[register] academy=${academySlug} phase=embed FAILED (face service):`, msg);
         return next(new AppError(
           `Face service error: ${msg}. Please try again in a moment.`, 503
         ));
       }
       if (!embedResult.success || !embedResult.embedding) {
+        regLog(academySlug, 'embed-rejected', { reason: embedResult.reason ?? 'no face detected' });
         return next(new AppError(
           `Face registration failed: ${embedResult.reason ?? 'no face detected'}`, 422
         ));
@@ -258,6 +280,8 @@ export async function registerStudent(
         .toISOString().split('T')[0];
     };
 
+    regLog(academySlug, 'db-insert', { studentId, courses: uniqueCourseEnrollments.size });
+    try {
     await academyTransaction(academySlug, async (client) => {
       await client.query(
         `INSERT INTO students
@@ -309,6 +333,14 @@ export async function registerStudent(
         );
       }
     });
+    } catch (dbErr) {
+      // Log the failing step + slug so it can be matched to the error_ref the
+      // central handler emits, then rethrow so the handler categorises the pg
+      // error into a specific client message (e.g. "Database save failed ...").
+      console.error(`[register] academy=${academySlug} phase=db-insert FAILED studentId=${studentId}:`, dbErr);
+      throw dbErr;
+    }
+    regLog(academySlug, 'db-ok', { studentId });
 
     // 5 — Push embedding to InsightFace Redis cache (only when a face was given)
     // Non-fatal: if the cache update fails the student is still registered; the
@@ -329,6 +361,7 @@ export async function registerStudent(
       }
     }
 
+    regLog(academySlug, 'done', { studentId });
     res.status(201).json({
       success: true,
       data: { id: studentId, first_name, last_name, subjects_enrolled: resolvedSubjects.length },
@@ -1152,21 +1185,26 @@ export async function updateStudentFace(
       return next(new AppError('face_images are required', 400));
     }
 
+    regLog(academySlug, 'face:start', { studentId: id, images: face_images.length });
+
     const student = await academyQueryOne<{
       id: string; first_name: string; last_name: string;
     }>(academySlug, `SELECT id, first_name, last_name FROM students WHERE id = $1`, [id]);
     if (!student) return next(new AppError('Student not found', 404));
 
+    regLog(academySlug, 'face:embed', { studentId: id });
     let embed: Awaited<ReturnType<typeof batchEmbed>>;
     try {
       embed = await batchEmbed(face_images);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
+      console.error(`[register] academy=${academySlug} phase=face:embed FAILED (face service) studentId=${id}:`, msg);
       return next(new AppError(
         `Face service error: ${msg}. Please try again in a moment.`, 503
       ));
     }
     if (!embed.success || !embed.embedding) {
+      regLog(academySlug, 'face:embed-rejected', { studentId: id, reason: embed.reason ?? 'no face detected' });
       return next(new AppError(
         `Face capture failed: ${embed.reason ?? 'no face detected'}`, 422
       ));
@@ -1221,12 +1259,18 @@ export async function updateStudentFace(
       ));
     }
 
-    await academyExec(
-      academySlug,
-      `UPDATE students SET face_embedding = $1, face_quality = $2, updated_at = NOW()
-       WHERE id = $3`,
-      [JSON.stringify(embed.embedding), embed.quality ?? null, id]
-    );
+    regLog(academySlug, 'face:db-update', { studentId: id });
+    try {
+      await academyExec(
+        academySlug,
+        `UPDATE students SET face_embedding = $1, face_quality = $2, updated_at = NOW()
+         WHERE id = $3`,
+        [JSON.stringify(embed.embedding), embed.quality ?? null, id]
+      );
+    } catch (dbErr) {
+      console.error(`[register] academy=${academySlug} phase=face:db-update FAILED studentId=${id}:`, dbErr);
+      throw dbErr;
+    }
 
     // Non-fatal: if the cache update fails the student is still registered.
     try {
@@ -1243,6 +1287,7 @@ export async function updateStudentFace(
       console.error('[updateStudentFace] cacheUpsert failed (non-fatal):', e);
     }
 
+    regLog(academySlug, 'face:done', { studentId: id });
     res.json({ success: true, message: 'Face saved successfully' });
   } catch (err) { next(err); }
 }

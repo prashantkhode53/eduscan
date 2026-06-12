@@ -265,13 +265,13 @@ class _AcademyStudentRegistrationScreenState
       }
       return true;
     } catch (e) {
-      final msg = e.toString().replaceFirst('Exception: ', '');
       // Phase 1 runs in the background while the user is on the camera screen.
       // Never show an alarming red error from a background save — the fallback
-      // one-shot create in _submit() handles any failure transparently. Only
-      // surface genuinely user-actionable errors (e.g. invalid course selection)
-      // that can't be fixed by the fallback.
-      debugPrint('[register] Phase 1 failed (will fallback): $msg');
+      // one-shot create in _submit() handles any failure transparently. We log
+      // the type + ref so a Phase-1 failure is still diagnosable post-deploy.
+      final ref = e is ApiException ? e.errorRef : null;
+      debugPrint('[register] Phase 1 failed (will fallback to one-shot create): '
+          '${e.runtimeType} -> $e${ref != null ? ' [ref: $ref]' : ''}');
       // Old backend: still requires face at creation — proceed silently.
       // Any other error: also proceed and let _submit() do one-shot create.
       return true;
@@ -565,7 +565,10 @@ class _AcademyStudentRegistrationScreenState
         setState(() {});
         _startStream();
       }
-    } catch (_) {
+    } catch (e) {
+      // A capture/encode failure here is recoverable — log it and resume the
+      // stream so the user can simply try again rather than getting stuck.
+      debugPrint('[register] capture failed (will resume stream): ${e.runtimeType} -> $e');
       _autoCapturing = false;
       if (mounted) _startStream();
     }
@@ -589,8 +592,12 @@ class _AcademyStudentRegistrationScreenState
         try { await _detailsSave; } catch (_) {}
       }
       if (_studentId != null) {
+        debugPrint('[register] submit: attaching face to existing student '
+            '$_studentId (${_faceImages.length} images)');
         await AcademyApiService.updateStudentFace(_studentId!, _faceImages);
       } else {
+        debugPrint('[register] submit: one-shot create with face '
+            '(${_faceImages.length} images) — Phase 1 had not produced an id');
         final res = await AcademyApiService.registerStudent({
           ..._detailsBody(),
           'face_images': _faceImages,
@@ -599,6 +606,7 @@ class _AcademyStudentRegistrationScreenState
       }
 
       if (mounted) {
+        debugPrint('[register] submit: success, studentId=$_studentId');
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
               content: Text('Student registered successfully'),
@@ -612,13 +620,51 @@ class _AcademyStudentRegistrationScreenState
       if (e is FaceDuplicateException) {
         _showFaceDuplicateDialog(e);
       } else {
+        final msg = _describeError(e, 'submit');
+        // Server/database faults carry a reference code worth reading — give
+        // those a longer on-screen time than a quick "try again" hint.
+        final isServerFault = e is ApiException && e.isServerFault;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-              content: Text(e.toString().replaceFirst('Exception: ', '')),
-              backgroundColor: Colors.red),
+            content: Text(msg),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: isServerFault ? 8 : 4),
+          ),
         );
       }
     }
+  }
+
+  /// Maps any error thrown by the registration API calls into a clear,
+  /// user-facing message, and logs the raw error (type + detail) for
+  /// post-deployment diagnosis. Each failure mode reads distinctly instead of
+  /// collapsing into a single generic line.
+  String _describeError(Object e, String phase) {
+    debugPrint('[register] $phase FAILED: ${e.runtimeType} -> $e');
+    if (e is ApiException) {
+      // The backend already returns a specific, user-safe reason. For server /
+      // database / schema faults, surface the reference code so it can be
+      // reported to support and matched in the server logs.
+      if (e.isServerFault &&
+          e.errorRef != null &&
+          !e.message.contains(e.errorRef!)) {
+        return '${e.message} (ref: ${e.errorRef})';
+      }
+      return e.message;
+    }
+    if (e is TimeoutException) {
+      return 'The server took too long to respond — it may be waking up. '
+          'Please check your connection and try again.';
+    }
+    final s = e.toString();
+    if (s.contains('No internet connection') ||
+        s.contains('SocketException') ||
+        s.contains('Failed host lookup') ||
+        s.contains('Network is unreachable') ||
+        s.contains('Connection refused')) {
+      return 'Network connection failed. Please check your internet and try again.';
+    }
+    return s.replaceFirst('Exception: ', '');
   }
 
   void _showFaceDuplicateDialog(FaceDuplicateException e) {
