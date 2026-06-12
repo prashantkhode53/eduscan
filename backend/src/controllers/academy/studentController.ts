@@ -108,7 +108,9 @@ export async function registerStudent(
         ));
       }
       if (matchResult.matched && (matchResult.confidence ?? 0) >= 0.88) {
-        // Look up the matched student so the client can show a useful warning.
+        // Only block if the matched student is in THIS academy's schema.
+        // The Redis cache is shared across all academies, so a match against a
+        // student registered in a different academy must be allowed through.
         const dup = matchResult.student_id
           ? await academyQueryOne<{
               id: string; first_name: string; last_name: string;
@@ -130,20 +132,23 @@ export async function registerStudent(
             )
           : null;
 
-        return next(new AppError(
-          `Face already registered — ${(matchResult.confidence! * 100).toFixed(1)}% match with an existing student.`,
-          409,
-          {
-            code: 'FACE_DUPLICATE',
-            duplicate: {
-              student_id:    dup?.id    ?? matchResult.student_id ?? null,
-              student_name:  dup ? `${dup.first_name} ${dup.last_name}` : null,
-              courses:       dup?.course_names ?? [],
-              registered_at: dup?.created_at  ?? null,
-              confidence:    matchResult.confidence,
-            },
-          }
-        ));
+        if (dup) {
+          return next(new AppError(
+            `Face already registered — ${(matchResult.confidence! * 100).toFixed(1)}% match with an existing student.`,
+            409,
+            {
+              code: 'FACE_DUPLICATE',
+              duplicate: {
+                student_id:    dup.id,
+                student_name:  `${dup.first_name} ${dup.last_name}`,
+                courses:       dup.course_names ?? [],
+                registered_at: dup.created_at  ?? null,
+                confidence:    matchResult.confidence,
+              },
+            }
+          ));
+        }
+        // Match is from a different academy — allow registration to proceed.
       }
 
       embedding = embedResult.embedding;
@@ -1180,6 +1185,8 @@ export async function updateStudentFace(
     }
     if (match.matched && match.student_id && match.student_id !== id &&
         (match.confidence ?? 0) >= 0.88) {
+      // Only block if the matched student is in THIS academy — the Redis cache
+      // is shared, so a cross-academy match should be allowed through.
       const dup = await academyQueryOne<{
         id: string; first_name: string; last_name: string;
         created_at: string; course_names: string[];
@@ -1198,16 +1205,16 @@ export async function updateStudentFace(
          GROUP BY s.id`,
         [match.student_id]
       );
-      return next(new AppError(
+      if (dup) return next(new AppError(
         `Face already registered to another student — ${(match.confidence! * 100).toFixed(1)}% match.`,
         409,
         {
           code: 'FACE_DUPLICATE',
           duplicate: {
-            student_id:    dup?.id    ?? match.student_id,
-            student_name:  dup ? `${dup.first_name} ${dup.last_name}` : null,
-            courses:       dup?.course_names ?? [],
-            registered_at: dup?.created_at  ?? null,
+            student_id:    dup.id,
+            student_name:  `${dup.first_name} ${dup.last_name}`,
+            courses:       dup.course_names ?? [],
+            registered_at: dup.created_at  ?? null,
             confidence:    match.confidence,
           },
         }
