@@ -1089,14 +1089,44 @@ export async function updateStudent(
            DO UPDATE SET fee_amount = $3, status = 'active', end_date = NULL`,
           [id, agg.course_id, totalFee]
         );
-        await client.query(
+        // Recalculate the course-level fee record (subject_id IS NULL) to the new
+        // subject-fee sum. CRITICAL: this must apply for EVERY status — when a
+        // newly added subject raises the total for a student who was already
+        // 'partial' or 'paid', the old code's "status IN ('pending','overdue')"
+        // filter skipped them, so amount_due stayed stale and they never
+        // reappeared in Fees Management. amount_paid (Paid Till Date) is
+        // preserved; status + paid_date are recomputed from the new balance.
+        const { rowCount: updated } = await client.query(
           `UPDATE fee_records
-           SET amount_due = $3, updated_at = NOW()
+           SET amount_due = $3,
+               status = CASE
+                          WHEN amount_paid >= $3       THEN 'paid'
+                          WHEN due_date < CURRENT_DATE THEN 'overdue'
+                          WHEN amount_paid > 0         THEN 'partial'
+                          ELSE 'pending'
+                        END,
+               paid_date  = CASE WHEN amount_paid >= $3 THEN paid_date ELSE NULL END,
+               updated_at = NOW()
            WHERE student_id = $1 AND course_id = $2
-             AND subject_id IS NULL
-             AND status IN ('pending', 'overdue')`,
+             AND subject_id IS NULL`,
           [id, agg.course_id, totalFee]
         );
+        // No course-level fee record yet (e.g. a course freshly assigned during
+        // edit) → create one so the fee is collectible. Duplicate-guarded.
+        if (!updated) {
+          await client.query(
+            `INSERT INTO fee_records (student_id, course_id, amount_due, due_date, status)
+             SELECT $1, $2, $3, COALESCE(c.fee_due_date, CURRENT_DATE),
+                    CASE WHEN $3 <= 0 THEN 'paid' ELSE 'pending' END
+             FROM courses c
+             WHERE c.id = $2
+               AND NOT EXISTS (
+                 SELECT 1 FROM fee_records fr
+                 WHERE fr.student_id = $1 AND fr.course_id = $2 AND fr.subject_id IS NULL
+               )`,
+            [id, agg.course_id, totalFee]
+          );
+        }
       }
 
       // Deactivate student_courses for courses where all subjects were dropped
@@ -1108,12 +1138,15 @@ export async function updateStudent(
              WHERE student_id = $1 AND course_id = $2 AND status = 'active'`,
             [id, courseId]
           );
+          // All subjects dropped → no fee due for this course. Dropping is
+          // blocked earlier if any fee was collected, so amount_paid is 0 here;
+          // mark the record settled (balance 0) so it leaves Fees Management.
           await client.query(
             `UPDATE fee_records
-               SET amount_due = 0, updated_at = NOW()
+               SET amount_due = 0, status = 'paid', updated_at = NOW()
              WHERE student_id = $1 AND course_id = $2
                AND subject_id IS NULL
-               AND status IN ('pending', 'overdue')`,
+               AND amount_paid = 0`,
             [id, courseId]
           );
         }
