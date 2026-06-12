@@ -243,7 +243,10 @@ export async function registerStudent(
     const courseIds = Array.from(uniqueCourseEnrollments.keys());
     const courseDueSql =
       `SELECT id, fee_due_date, fee_due_day FROM courses WHERE id = ANY($1::uuid[])`;
-    let courseRows: Array<{ id: string; fee_due_date: string | null; fee_due_day: number | null }>;
+    // NOTE: node-postgres parses a DATE column into a JS Date object (not a
+    // string), so fee_due_date is typed Date | string | null and normalised via
+    // toYmd() below — calling .split() on it directly would throw a TypeError.
+    let courseRows: Array<{ id: string; fee_due_date: Date | string | null; fee_due_day: number | null }>;
     try {
       courseRows = await academyQuery(academySlug, courseDueSql, [courseIds]);
     } catch (e: unknown) {
@@ -268,16 +271,26 @@ export async function registerStudent(
     );
 
     const now = new Date();
+    // Format a date value to 'YYYY-MM-DD'. Handles BOTH a pg Date object and a
+    // string (some drivers/queries yield either) and reads LOCAL components so
+    // the stored calendar date is preserved regardless of the server timezone.
+    const toYmd = (v: Date | string): string => {
+      if (v instanceof Date) {
+        const y = v.getFullYear();
+        const m = String(v.getMonth() + 1).padStart(2, '0');
+        const d = String(v.getDate()).padStart(2, '0');
+        return `${y}-${m}-${d}`;
+      }
+      return String(v).slice(0, 10); // '2026-09-30' or '2026-09-30T00:00:...' → '2026-09-30'
+    };
     const getCourseDueDate = (courseId: string): string => {
       const c = courseDueDateMap.get(courseId);
-      if (c?.fee_due_date) return c.fee_due_date.split('T')[0];
+      if (c?.fee_due_date) return toYmd(c.fee_due_date);
       const feeDueDay = c?.fee_due_day ?? null;
       if (feeDueDay != null && feeDueDay > 0) {
-        return new Date(now.getFullYear(), now.getMonth(), feeDueDay)
-          .toISOString().split('T')[0];
+        return toYmd(new Date(now.getFullYear(), now.getMonth(), feeDueDay));
       }
-      return new Date(now.getFullYear(), now.getMonth() + 1, 0)
-        .toISOString().split('T')[0];
+      return toYmd(new Date(now.getFullYear(), now.getMonth() + 1, 0));
     };
 
     regLog(academySlug, 'db-insert', { studentId, courses: uniqueCourseEnrollments.size });
