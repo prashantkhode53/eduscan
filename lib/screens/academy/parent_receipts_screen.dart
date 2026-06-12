@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../services/parent_api_service.dart';
 import '../../services/fee_pdf_service.dart';
 import '../../providers/parent_auth_provider.dart';
+import '../../utils/fee_format.dart';
 
 class ParentReceiptsScreen extends StatefulWidget {
   const ParentReceiptsScreen({super.key});
@@ -269,7 +270,7 @@ class _ParentReceiptCardState extends State<_ParentReceiptCard> {
     final balance    = double.tryParse(r['balance']?.toString() ?? '')
         ?? (amountDue - amountPaid).clamp(0.0, double.infinity);
     final course     = r['course_name'] as String? ?? '';
-    final subject    = r['subject_name'] as String?;
+    final subjectNames = subjectNamesOf(r);
     final mode       = _parseMode(r['payment_mode'] as String?);
     final date       = _fmtDate(r['generated_at']);
     final dueDate    = _fmtDate(r['due_date']);
@@ -313,11 +314,11 @@ class _ParentReceiptCardState extends State<_ParentReceiptCard> {
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      subject != null && subject.isNotEmpty
-                          ? '$course · $subject'
-                          : course,
+                      courseWithSubjects(course, subjectNames),
                       style: const TextStyle(
                           fontWeight: FontWeight.w600, fontSize: 13),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
                 ]),

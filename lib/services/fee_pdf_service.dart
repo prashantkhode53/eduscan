@@ -7,6 +7,7 @@ import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+import '../utils/fee_format.dart';
 
 /// Generates professional fee PDF documents and opens them.
 ///
@@ -103,10 +104,13 @@ class FeePdfService {
     String? qrDescription,
   }) async {
     double totalDue = 0, totalPaid = 0;
+    String? statementSubjects;
     for (final r in records) {
       totalDue  += double.tryParse(r['amount_due']?.toString()  ?? '') ?? 0;
       totalPaid += double.tryParse(r['amount_paid']?.toString() ?? '') ?? 0;
+      statementSubjects ??= subjectNamesOf(r);
     }
+    final courseLabel = courseWithSubjects(courseName, statementSubjects);
     final pending  = (totalDue - totalPaid).clamp(0.0, double.infinity);
     final progress = totalDue > 0 ? (totalPaid / totalDue).clamp(0.0, 1.0) : 0.0;
 
@@ -227,7 +231,7 @@ class FeePdfService {
                     crossAxisAlignment: pw.CrossAxisAlignment.start,
                     children: [
                       pw.Text('Course / Batch', style: headerStyle),
-                      pw.Text(courseName.isNotEmpty ? courseName : '-', style: valueStyle),
+                      pw.Text(courseLabel.isNotEmpty ? courseLabel : '-', style: valueStyle),
                       pw.SizedBox(height: 6),
                       pw.Text('Mobile', style: headerStyle),
                       pw.Text(mobile.isNotEmpty ? mobile : '-',         style: valueStyle),

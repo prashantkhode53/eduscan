@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../providers/parent_auth_provider.dart';
 import '../../services/parent_api_service.dart';
 import '../../services/fcm_service.dart';
+import '../../utils/fee_format.dart';
 import 'parent_receipts_screen.dart';
 
 class ParentDashboardScreen extends StatefulWidget {
@@ -432,9 +433,11 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(f['course_name'] as String? ?? 'Course',
+                          Text(courseLabelOf(f),
                               style: const TextStyle(
-                                  fontWeight: FontWeight.w600, fontSize: 13)),
+                                  fontWeight: FontWeight.w600, fontSize: 13),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis),
                           Text('Due: $date',
                               style: TextStyle(
                                   fontSize: 11,

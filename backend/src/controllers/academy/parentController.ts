@@ -6,6 +6,7 @@ import { queryOne } from '../../db/pool';
 import { AppError } from '../../middleware/errorHandler';
 import { batchEmbed } from '../../utils/insightface';
 import { cosineSimilarity } from '../../utils/faceMatch';
+import { subjectNamesSql } from './feeController';
 
 function jwtSecret(): string {
   const s = process.env.JWT_SECRET;
@@ -261,7 +262,8 @@ export async function getParentProfile(
       academyQuery<Record<string, unknown>>(
         academySlug,
         `SELECT fr.status, fr.amount_due, fr.amount_paid, fr.due_date,
-                (SELECT name FROM courses WHERE id = fr.course_id) AS course_name
+                (SELECT name FROM courses WHERE id = fr.course_id) AS course_name,
+                ${subjectNamesSql('fr.student_id', 'fr.course_id')} AS subject_names
          FROM fee_records fr
          WHERE fr.student_id = $1 AND fr.status IN ('pending', 'overdue')
          ORDER BY fr.due_date ASC LIMIT 5`,
@@ -316,7 +318,16 @@ export async function getParentReceipts(
       academySlug,
       `SELECT
          r.id, r.receipt_number, r.amount_paid, r.payment_mode, r.generated_at,
-         c.name  AS course_name,
+         COALESCE(c.name,
+           (SELECT fri.course_name FROM fee_receipt_items fri
+            WHERE fri.receipt_id = r.id ORDER BY fri.course_name LIMIT 1)
+         ) AS course_name,
+         COALESCE(
+           ${subjectNamesSql('r.student_id', 'fr.course_id')},
+           (SELECT STRING_AGG(DISTINCT fri.subject_name, ', ' ORDER BY fri.subject_name)
+            FROM fee_receipt_items fri
+            WHERE fri.receipt_id = r.id AND fri.subject_name IS NOT NULL)
+         ) AS subject_names,
          sub.name AS subject_name,
          fr.amount_due, fr.amount_paid AS fr_amount_paid,
          GREATEST(0, fr.amount_due - fr.amount_paid) AS balance,
@@ -453,7 +464,16 @@ export async function getParentReceipt(
       `SELECT
          r.id, r.receipt_number, r.amount_paid, r.payment_mode, r.generated_at,
          s.id AS student_id, s.first_name, s.last_name, s.mobile, s.parent_name,
-         c.name  AS course_name,
+         COALESCE(c.name,
+           (SELECT fri.course_name FROM fee_receipt_items fri
+            WHERE fri.receipt_id = r.id ORDER BY fri.course_name LIMIT 1)
+         ) AS course_name,
+         COALESCE(
+           ${subjectNamesSql('r.student_id', 'fr.course_id')},
+           (SELECT STRING_AGG(DISTINCT fri.subject_name, ', ' ORDER BY fri.subject_name)
+            FROM fee_receipt_items fri
+            WHERE fri.receipt_id = r.id AND fri.subject_name IS NOT NULL)
+         ) AS subject_names,
          sub.name AS subject_name,
          fr.amount_due, fr.amount_paid AS fr_amount_paid,
          GREATEST(0, fr.amount_due - fr.amount_paid) AS balance,
@@ -468,6 +488,19 @@ export async function getParentReceipt(
     );
 
     if (!receipt) return next(new AppError('Receipt not found', 404));
-    res.json({ success: true, data: receipt });
+
+    // Itemised lines (multi-subject receipts) so the parent view can show each
+    // course with its subjects.
+    const items = await academyQuery<Record<string, unknown>>(
+      academySlug,
+      `SELECT fri.course_id, fri.course_name, fri.subject_id, fri.subject_name,
+              fri.amount_paid
+       FROM fee_receipt_items fri
+       WHERE fri.receipt_id = $1
+       ORDER BY fri.course_name, fri.subject_name`,
+      [id]
+    );
+
+    res.json({ success: true, data: { ...receipt, items: items.length > 0 ? items : null } });
   } catch (err) { next(err); }
 }

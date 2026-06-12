@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../../services/academy_api_service.dart';
 import '../../services/fee_pdf_service.dart';
 import '../../providers/auth_provider.dart';
+import '../../utils/fee_format.dart';
 import 'package:provider/provider.dart';
 
 /// "By Student" tab of Fees Management.
@@ -694,6 +695,24 @@ class _StudentFeeDetailScreenState extends State<StudentFeeDetailScreen> {
       (r) => r['status'] != 'paid',
       orElse: () => const {},
     );
+
+    // Enrolled subjects + per-subject fee breakdown derived from the records.
+    String? subjectNames;
+    final breakdown = <String, num>{};
+    for (final r in _records) {
+      subjectNames ??= subjectNamesOf(r);
+      final subs = r['subjects'];
+      if (subs is List) {
+        for (final s in subs) {
+          if (s is Map && s['name'] != null) {
+            breakdown[s['name'].toString()] =
+                num.tryParse(s['fee']?.toString() ?? '') ?? 0;
+          }
+        }
+      }
+    }
+    final courseLabel = courseWithSubjects(widget.courseName, subjectNames);
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -709,6 +728,23 @@ class _StudentFeeDetailScreenState extends State<StudentFeeDetailScreen> {
                 _StatusPill(status: _overallStatus),
               ],
             ),
+            if (courseLabel.isNotEmpty && courseLabel != 'Course') ...[
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Icon(Icons.menu_book_outlined,
+                      size: 15, color: theme.colorScheme.primary),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(courseLabel,
+                        style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: theme.colorScheme.primary)),
+                  ),
+                ],
+              ),
+            ],
             const SizedBox(height: 14),
             Row(
               children: [
@@ -726,6 +762,37 @@ class _StudentFeeDetailScreenState extends State<StudentFeeDetailScreen> {
                     color: _pending > 0 ? Colors.orange : Colors.green),
               ],
             ),
+            if (breakdown.length > 1) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.surfaceContainerLow,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  children: [
+                    for (final e in breakdown.entries)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(e.key,
+                                style: TextStyle(
+                                    fontSize: 12,
+                                    color: theme.colorScheme.onSurface
+                                        .withValues(alpha: 0.7))),
+                            Text('₹${e.value.toStringAsFixed(0)}',
+                                style: const TextStyle(
+                                    fontSize: 12, fontWeight: FontWeight.w600)),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(height: 14),
             ClipRRect(
               borderRadius: BorderRadius.circular(4),

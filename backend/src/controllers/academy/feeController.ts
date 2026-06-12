@@ -3,6 +3,46 @@ import { academyQuery, academyQueryOne, academyExec, academyTransaction } from '
 import { AppError } from '../../middleware/errorHandler';
 import { sendFcm } from '../../utils/fcm';
 
+/**
+ * Correlated subquery yielding the comma-separated names of the subjects a
+ * student is actively enrolled in for a given course, e.g. "Math, Physics".
+ *
+ * Fee records are stored at COURSE level (fee_records.subject_id IS NULL), so
+ * the enrolled subjects must be read from student_subjects — joining
+ * subjects ON sub.id = fr.subject_id always yields NULL. Pass the SQL column
+ * expressions that identify the student and course in the outer query.
+ */
+export function subjectNamesSql(studentCol: string, courseCol: string): string {
+  return `(
+    SELECT STRING_AGG(ssub.name, ', ' ORDER BY ssub.name)
+    FROM student_subjects sss
+    JOIN subjects ssub ON ssub.id = sss.subject_id
+    WHERE sss.student_id = ${studentCol}
+      AND ssub.course_id = ${courseCol}
+      AND sss.status = 'active'
+  )`;
+}
+
+/**
+ * Like subjectNamesSql but returns a JSON array of {name, fee} for a per-subject
+ * fee breakdown (e.g. Math ₹3000, Physics ₹5000) using the student's locked
+ * subject fee. Returns '[]' when there are no active subjects.
+ */
+function subjectBreakdownSql(studentCol: string, courseCol: string): string {
+  return `(
+    SELECT COALESCE(
+      JSON_AGG(JSON_BUILD_OBJECT('name', ssub.name, 'fee', sss.fee_amount)
+               ORDER BY ssub.name),
+      '[]'
+    )
+    FROM student_subjects sss
+    JOIN subjects ssub ON ssub.id = sss.subject_id
+    WHERE sss.student_id = ${studentCol}
+      AND ssub.course_id = ${courseCol}
+      AND sss.status = 'active'
+  )`;
+}
+
 // ── GET /api/academy/fees ─────────────────────────────────────────────────────
 
 export async function listFees(
@@ -27,8 +67,8 @@ export async function listFees(
            s.first_name, s.last_name, s.mobile,
            c.id          AS course_id,
            c.name        AS course_name,
-           STRING_AGG(DISTINCT sub.name, ', ' ORDER BY sub.name)
-             FILTER (WHERE sub.name IS NOT NULL)       AS subject_names,
+           ${subjectNamesSql('s.id', 'c.id')}          AS subject_names,
+           ${subjectBreakdownSql('s.id', 'c.id')}      AS subjects,
            SUM(fr.amount_due)                          AS amount_due,
            SUM(fr.amount_paid)                         AS amount_paid,
            SUM(GREATEST(0, fr.amount_due - fr.amount_paid)) AS balance,
@@ -175,6 +215,7 @@ export async function listFeesStudentSummary(
       record_id: string; course_id: string | null; subject_id: string | null;
       amount_due: string; amount_paid: string; status: string; due_date: string;
       course_name: string | null; subject_name: string | null;
+      subject_names: string | null; subjects: Array<{ name: string; fee: number }> | null;
     }>(
       academySlug,
       `SELECT
@@ -184,7 +225,9 @@ export async function listFeesStudentSummary(
          fr.course_id, fr.subject_id,
          fr.amount_due, fr.amount_paid, fr.status, fr.due_date,
          c.name      AS course_name,
-         sub.name    AS subject_name
+         sub.name    AS subject_name,
+         ${subjectNamesSql('s.id', 'fr.course_id')}     AS subject_names,
+         ${subjectBreakdownSql('s.id', 'fr.course_id')} AS subjects
        FROM students s
        JOIN fee_records fr ON fr.student_id = s.id
          AND fr.status IN ('pending', 'partial', 'overdue')
@@ -229,16 +272,18 @@ export async function listFeesStudentSummary(
       student.balance       += bal;
       student.pending_count += 1;
       student.pending_records.push({
-        id:           row.record_id,
-        course_id:    row.course_id,
-        course_name:  row.course_name,
-        subject_id:   row.subject_id,
-        subject_name: row.subject_name,
-        amount_due:   due,
-        amount_paid:  paid,
-        balance:      bal,
-        status:       row.status,
-        due_date:     row.due_date,
+        id:            row.record_id,
+        course_id:     row.course_id,
+        course_name:   row.course_name,
+        subject_id:    row.subject_id,
+        subject_name:  row.subject_name,
+        subject_names: row.subject_names,
+        subjects:      row.subjects ?? [],
+        amount_due:    due,
+        amount_paid:   paid,
+        balance:       bal,
+        status:        row.status,
+        due_date:      row.due_date,
       });
     }
 
@@ -288,13 +333,15 @@ export async function collectFee(
       id: string; student_id: string; course_id: string | null; subject_id: string | null;
       amount_due: string; amount_paid: string; status: string;
       course_name: string | null; subject_name: string | null;
+      subject_names: string | null;
     };
     const records = await academyQuery<RecordRow>(
       academySlug,
       `SELECT fr.id, fr.student_id, fr.course_id, fr.subject_id,
               fr.amount_due, fr.amount_paid, fr.status,
               c.name   AS course_name,
-              sub.name AS subject_name
+              sub.name AS subject_name,
+              ${subjectNamesSql('fr.student_id', 'fr.course_id')} AS subject_names
        FROM fee_records fr
        LEFT JOIN courses  c   ON c.id   = fr.course_id
        LEFT JOIN subjects sub ON sub.id = fr.subject_id
@@ -338,7 +385,10 @@ export async function collectFee(
       return {
         id: rec.id, newPaid, newStatus, paidDate,
         course_id: rec.course_id, subject_id: rec.subject_id,
-        course_name: rec.course_name, subject_name: rec.subject_name,
+        course_name: rec.course_name,
+        // Course-level fee record (subject_id NULL) → store the enrolled subjects
+        // ("Math, Physics") on the receipt item so receipts/PDF show them.
+        subject_name: rec.subject_name ?? rec.subject_names,
         amountInReceipt: item.amount_paid,
       };
     });
@@ -541,6 +591,8 @@ export async function getStudentFees(
       `SELECT fr.*,
               c.name   AS course_name,
               sub.name AS subject_name,
+              ${subjectNamesSql('fr.student_id', 'fr.course_id')}     AS subject_names,
+              ${subjectBreakdownSql('fr.student_id', 'fr.course_id')} AS subjects,
               GREATEST(0, fr.amount_due - fr.amount_paid) AS balance,
               rcpt.receipt_number,
               rcpt.id AS receipt_id
@@ -705,10 +757,8 @@ export async function getReceipt(
           `SELECT
              SUM(fr.amount_due)  AS total_course_fee,
              SUM(fr.amount_paid) AS total_paid_now,
-             STRING_AGG(DISTINCT sub.name, ', ' ORDER BY sub.name)
-               FILTER (WHERE sub.name IS NOT NULL) AS subject_names
+             ${subjectNamesSql('$1', '$2::uuid')} AS subject_names
            FROM fee_records fr
-           LEFT JOIN subjects sub ON sub.id = fr.subject_id
            WHERE fr.student_id = $1
              AND ($2::uuid IS NULL OR fr.course_id = $2::uuid)`,
           [rc.student_id, rc.course_id]

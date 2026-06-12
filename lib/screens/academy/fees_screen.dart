@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../services/academy_api_service.dart';
 import '../../services/fee_pdf_service.dart';
 import '../../providers/auth_provider.dart';
+import '../../utils/fee_format.dart';
 import 'student_fees_detail_tab.dart';
 
 class FeesScreen extends StatefulWidget {
@@ -579,18 +580,16 @@ class _StudentFeeCard extends StatelessWidget {
         .map((p) => p[0].toUpperCase())
         .join();
 
-    // Build compact subject list grouped by course
+    // Build compact "Course (Subjects)" summary, one entry per course.
     final records = (student['pending_records'] as List? ?? [])
         .cast<Map<String, dynamic>>();
-    final coursesMap = <String, List<String>>{};
+    final coursesMap = <String, String?>{};
     for (final r in records) {
       final cName = (r['course_name'] as String?) ?? 'Course';
-      final sName = r['subject_name'] as String?;
-      coursesMap.putIfAbsent(cName, () => []);
-      if (sName != null && sName.isNotEmpty) coursesMap[cName]!.add(sName);
+      coursesMap[cName] = subjectNamesOf(r) ?? coursesMap[cName];
     }
     final subjectSummary = coursesMap.entries
-        .map((e) => e.value.isEmpty ? e.key : '${e.key}: ${e.value.join(', ')}')
+        .map((e) => courseWithSubjects(e.key, e.value))
         .join(' · ');
 
     // Next due date + overdue detection
@@ -984,17 +983,11 @@ class _ReceiptAdminCardState extends State<_ReceiptAdminCard> {
                       const SizedBox(height: 2),
                       Text(name, style: const TextStyle(fontWeight: FontWeight.w600)),
                       if (course.isNotEmpty)
-                        Text(course,
+                        Text(courseWithSubjects(course, subjectNames),
                             style: TextStyle(
                                 fontSize: 12,
                                 color: theme.colorScheme.onSurface
-                                    .withValues(alpha: 0.6))),
-                      if (subjectNames != null && subjectNames.isNotEmpty)
-                        Text(subjectNames,
-                            style: TextStyle(
-                                fontSize: 11,
-                                color: theme.colorScheme.onSurface
-                                    .withValues(alpha: 0.5)),
+                                    .withValues(alpha: 0.6)),
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis),
                     ],
@@ -1179,25 +1172,16 @@ class _FeeCard extends StatelessWidget {
                           size: 13, color: theme.colorScheme.primary),
                       const SizedBox(width: 5),
                       Expanded(
-                        child: Text(courseName,
+                        child: Text(courseWithSubjects(courseName, subjectNames),
                             style: TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w600,
                                 color: theme.colorScheme.primary),
+                            maxLines: 2,
                             overflow: TextOverflow.ellipsis),
                       ),
                     ],
                   ),
-                  if (subjectNames != null && subjectNames.isNotEmpty) ...[
-                    const SizedBox(height: 4),
-                    Text(subjectNames,
-                        style: TextStyle(
-                            fontSize: 11,
-                            color: theme.colorScheme.onSurface
-                                .withValues(alpha: 0.55)),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis),
-                  ],
                 ],
               ),
             ),
@@ -1690,14 +1674,21 @@ class _CourseInfoCard extends StatelessWidget {
 
     double totalDue  = 0;
     double totalPaid = 0;
-    final subjects = <String>[];
+    final breakdown = <String, num>{}; // subject name → locked fee
+    String? subjectNames;
 
     for (final r in records) {
       totalDue  += double.tryParse(r['amount_due']?.toString()  ?? '') ?? 0.0;
       totalPaid += double.tryParse(r['amount_paid']?.toString() ?? '') ?? 0.0;
-      final subName = r['subject_name'] as String?;
-      if (subName != null && subName.isNotEmpty && !subjects.contains(subName)) {
-        subjects.add(subName);
+      subjectNames ??= subjectNamesOf(r);
+      final subs = r['subjects'];
+      if (subs is List) {
+        for (final s in subs) {
+          if (s is Map && s['name'] != null) {
+            breakdown[s['name'].toString()] =
+                num.tryParse(s['fee']?.toString() ?? '') ?? 0;
+          }
+        }
       }
     }
 
@@ -1713,11 +1704,13 @@ class _CourseInfoCard extends StatelessWidget {
               Icon(Icons.menu_book_outlined,
                   size: 15, color: theme.colorScheme.primary),
               const SizedBox(width: 6),
-              Text(courseName,
-                  style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 13,
-                      color: theme.colorScheme.primary)),
+              Expanded(
+                child: Text(courseWithSubjects(courseName, subjectNames),
+                    style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                        color: theme.colorScheme.primary)),
+              ),
             ],
           ),
         ),
@@ -1731,6 +1724,15 @@ class _CourseInfoCard extends StatelessWidget {
             children: [
               _statRow(theme, 'Total Course Fee',
                   '₹${totalDue.toStringAsFixed(0)}'),
+              if (breakdown.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                // Per-subject fee breakdown (e.g. Math ₹3,000 · Physics ₹5,000)
+                ...breakdown.entries.map((e) => Padding(
+                      padding: const EdgeInsets.only(left: 12, bottom: 4),
+                      child: _statRow(theme, e.key,
+                          '₹${e.value.toStringAsFixed(0)}', muted: true),
+                    )),
+              ],
               const SizedBox(height: 6),
               _statRow(theme, 'Paid Till Date',
                   '₹${totalPaid.toStringAsFixed(0)}', muted: true),
@@ -1738,21 +1740,6 @@ class _CourseInfoCard extends StatelessWidget {
               _statRow(theme, 'Outstanding Balance',
                   '₹${outstanding.toStringAsFixed(0)}',
                   bold: true, color: theme.colorScheme.error),
-              if (subjects.isNotEmpty) ...[
-                Divider(
-                    height: 16,
-                    color: theme.colorScheme.outline.withValues(alpha: 0.2)),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    subjects.join('  •  '),
-                    style: TextStyle(
-                        fontSize: 11,
-                        color: theme.colorScheme.onSurface
-                            .withValues(alpha: 0.55)),
-                  ),
-                ),
-              ],
             ],
           ),
         ),
