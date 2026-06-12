@@ -78,6 +78,14 @@ export async function reconcileAcademySchemas(): Promise<void> {
         ALTER TABLE IF EXISTS courses
           ADD COLUMN IF NOT EXISTS academic_year_id UUID REFERENCES academic_years(id) ON DELETE SET NULL
       `);
+      // Per-course due-date columns — moved here so they are added even if later
+      // steps (e.g. unique-index creation) throw for an existing academy.
+      await academyExec(slug, `
+        ALTER TABLE IF EXISTS courses
+          ADD COLUMN IF NOT EXISTS fee_due_day  INT  DEFAULT NULL
+            CHECK (fee_due_day IS NULL OR (fee_due_day >= 1 AND fee_due_day <= 28)),
+          ADD COLUMN IF NOT EXISTS fee_due_date DATE DEFAULT NULL
+      `);
       // subjects — one row per subject within a course (Physics, Chemistry, …)
       await academyExec(slug, `
         CREATE TABLE IF NOT EXISTS subjects (
@@ -142,12 +150,19 @@ export async function reconcileAcademySchemas(): Promise<void> {
         CREATE INDEX IF NOT EXISTS idx_ss_subject  ON student_subjects(subject_id);
         CREATE INDEX IF NOT EXISTS idx_fr_subject  ON fee_records(subject_id)
       `);
-      // Unique partial index: prevents duplicate subject names (case-insensitive) per course
-      await academyExec(slug, `
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_subj_course_name
-        ON subjects(course_id, LOWER(name))
-        WHERE is_active = TRUE
-      `);
+      // Unique partial index — non-fatal: if duplicate subject names already exist
+      // in this academy the index creation fails, but we continue so later steps
+      // (fee_due_day / fee_due_date etc.) are not blocked.
+      try {
+        await academyExec(slug, `
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_subj_course_name
+          ON subjects(course_id, LOWER(name))
+          WHERE is_active = TRUE
+        `);
+      } catch (idxErr) {
+        console.warn(`[Reconcile] idx_subj_course_name skipped for "${slug}" (duplicate names?):`,
+          (idxErr as Error).message);
+      }
       // users: add lock-tracking columns introduced with the account-unlock feature
       await academyExec(slug, `
         ALTER TABLE IF EXISTS users
@@ -201,17 +216,6 @@ export async function reconcileAcademySchemas(): Promise<void> {
       await academyExec(slug, `
         CREATE INDEX IF NOT EXISTS idx_fri_receipt ON fee_receipt_items(receipt_id);
         CREATE INDEX IF NOT EXISTS idx_fri_record  ON fee_receipt_items(fee_record_id)
-      `);
-      // Per-course configurable due day (1-28 = that day of month; NULL = last day of month)
-      await academyExec(slug, `
-        ALTER TABLE IF EXISTS courses
-          ADD COLUMN IF NOT EXISTS fee_due_day INT DEFAULT NULL
-            CHECK (fee_due_day IS NULL OR (fee_due_day >= 1 AND fee_due_day <= 28))
-      `);
-      // Full calendar due date (supersedes fee_due_day; day portion used for monthly recurrence)
-      await academyExec(slug, `
-        ALTER TABLE IF EXISTS courses
-          ADD COLUMN IF NOT EXISTS fee_due_date DATE DEFAULT NULL
       `);
       ok++;
     } catch (err) {
