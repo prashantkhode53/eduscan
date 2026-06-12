@@ -145,22 +145,13 @@ export async function updateCourse(
 
       if (!course) return;
 
-      // If requested, bulk-update due_date on pending/overdue course-level fee records.
-      // Derive effective day-of-month: prefer fee_due_date, fall back to fee_due_day.
-      if (update_pending_fees && (feeDueDayInBody || feeDueDateInBody)) {
-        const effectiveDueDay = feeDueDateInBody
-          ? (fee_due_date ? new Date(fee_due_date).getDate() : null)
-          : (fee_due_day ?? null);
+      // If requested, set the new fee_due_date directly on all pending/overdue fee records
+      if (update_pending_fees && feeDueDateInBody && fee_due_date) {
         await client.query(
           `UPDATE fee_records
-           SET due_date   = CASE
-             WHEN $1::int IS NOT NULL
-             THEN (DATE_TRUNC('month', due_date) + ($1::int - 1) * INTERVAL '1 day')::date
-             ELSE (DATE_TRUNC('month', due_date) + INTERVAL '1 month - 1 day')::date
-           END,
-           updated_at = NOW()
+           SET due_date = $1::date, updated_at = NOW()
            WHERE course_id = $2 AND subject_id IS NULL AND status IN ('pending', 'overdue')`,
-          [effectiveDueDay, id]
+          [fee_due_date, id]
         );
       }
     });

@@ -201,8 +201,7 @@ export async function registerStudent(
     // 4 — Generate student ID + persist in academy schema
     const studentId = await generateStudentId(academySlug);
 
-    // First fee is due based on the course's fee_due_day (or last day of current month).
-    const month = new Date().toISOString().substring(0, 7);
+    // First fee uses the course's fixed fee_due_date (may be null if not configured).
 
     // Unique course_ids derived from resolved subjects (for student_courses aggregate)
     const uniqueCourseEnrollments = new Map<string, number>();
@@ -276,9 +275,8 @@ export async function registerStudent(
              WHERE fr.student_id = $1
                AND fr.course_id  = $2
                AND fr.subject_id IS NULL
-               AND TO_CHAR(fr.due_date, 'YYYY-MM') = $5::text
            )`,
-          [studentId, courseId, totalFee, dueDate, month]
+          [studentId, courseId, totalFee, dueDate]
         );
         // Maintain student_courses aggregate (for backward-compat)
         await client.query(
@@ -942,13 +940,6 @@ export async function updateStudent(
       newQuality   = embed.quality ?? null;
     }
 
-    const month   = new Date().toISOString().substring(0, 7);
-    const dueDate = new Date(
-      new Date().getFullYear(),
-      new Date().getMonth() + 1,
-      0
-    ).toISOString().split('T')[0];
-
     await academyTransaction(academySlug, async (client) => {
       // Group desired subjects by course for targeted upsert + drop
       const desiredByCourse = new Map<string, typeof resolvedSubjects>();
@@ -1035,9 +1026,8 @@ export async function updateStudent(
            SET amount_due = $3, updated_at = NOW()
            WHERE student_id = $1 AND course_id = $2
              AND subject_id IS NULL
-             AND status IN ('pending', 'overdue')
-             AND TO_CHAR(due_date, 'YYYY-MM') = $4`,
-          [id, agg.course_id, totalFee, month]
+             AND status IN ('pending', 'overdue')`,
+          [id, agg.course_id, totalFee]
         );
       }
 
@@ -1055,9 +1045,8 @@ export async function updateStudent(
                SET amount_due = 0, updated_at = NOW()
              WHERE student_id = $1 AND course_id = $2
                AND subject_id IS NULL
-               AND status IN ('pending', 'overdue')
-               AND TO_CHAR(due_date, 'YYYY-MM') = $3`,
-            [id, courseId, month]
+               AND status IN ('pending', 'overdue')`,
+            [id, courseId]
           );
         }
       }

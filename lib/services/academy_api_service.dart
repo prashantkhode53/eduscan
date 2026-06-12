@@ -314,7 +314,6 @@ class AcademyApiService {
     String? status,
     String? studentId,
     String? courseId,
-    String? month,
     String? dueFilter,
     int page = 1,
     int limit = 50,
@@ -325,7 +324,6 @@ class AcademyApiService {
       if (status != null)    'status':     status,
       if (studentId != null) 'student_id': studentId,
       if (courseId != null)  'course_id':  courseId,
-      if (month != null)     'month':      month,
       if (dueFilter != null) 'due_filter': dueFilter,
     };
     final uri = Uri.parse(ApiEndpoints.academyFees)
@@ -375,11 +373,9 @@ class AcademyApiService {
   }
 
   static Future<Map<String, dynamic>> getFeesStudentSummary({
-    String? month,
     String? dueFilter,
   }) async {
     final params = <String, String>{
-      if (month != null)     'month':      month,
       if (dueFilter != null) 'due_filter': dueFilter,
     };
     final uri = Uri.parse('${ApiEndpoints.academyFees}/students-summary')
@@ -388,11 +384,11 @@ class AcademyApiService {
     return _parse(res) as Map<String, dynamic>;
   }
 
-  static Future<Map<String, dynamic>> generateMonthlyFees({String? month}) async {
+  static Future<Map<String, dynamic>> generateMonthlyFees() async {
     final res = await _http.post(
           Uri.parse('${ApiEndpoints.academyFees}/generate'),
           headers: await _headers(),
-          body: jsonEncode({if (month != null) 'month': month}),
+          body: jsonEncode({}),
         )
         .timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;

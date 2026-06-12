@@ -11,7 +11,7 @@ export async function listFees(
   try {
     const { academySlug } = req.academyUser!;
     const {
-      status, student_id, course_id, month,
+      status, student_id, course_id,
       due_filter,
       page = '1', limit = '50',
     } = req.query as Record<string, string>;
@@ -65,12 +65,12 @@ export async function listFees(
          WHERE ($2::text IS NULL OR fr.student_id = $2)
            AND ($3::uuid IS NULL OR fr.course_id  = $3::uuid)
            AND (
-             ($7::text IS NULL AND ($4::text IS NULL OR TO_CHAR(fr.due_date,'YYYY-MM') = $4))
-             OR ($7 = 'today'      AND fr.due_date = CURRENT_DATE)
-             OR ($7 = 'this_week'  AND fr.due_date >= CURRENT_DATE AND fr.due_date <= CURRENT_DATE + INTERVAL '6 days')
-             OR ($7 = 'this_month' AND TO_CHAR(fr.due_date,'YYYY-MM') = TO_CHAR(CURRENT_DATE,'YYYY-MM'))
-             OR ($7 = 'overdue'    AND fr.due_date < CURRENT_DATE AND fr.status IN ('pending','partial','overdue'))
-             OR ($7 = 'upcoming'   AND fr.due_date >= CURRENT_DATE AND fr.status IN ('pending','partial'))
+             $4::text IS NULL
+             OR ($4 = 'today'      AND fr.due_date = CURRENT_DATE)
+             OR ($4 = 'this_week'  AND fr.due_date >= CURRENT_DATE AND fr.due_date <= CURRENT_DATE + INTERVAL '6 days')
+             OR ($4 = 'this_month' AND TO_CHAR(fr.due_date,'YYYY-MM') = TO_CHAR(CURRENT_DATE,'YYYY-MM'))
+             OR ($4 = 'overdue'    AND fr.due_date < CURRENT_DATE AND fr.status IN ('pending','partial','overdue'))
+             OR ($4 = 'upcoming'   AND fr.due_date >= CURRENT_DATE AND fr.status IN ('pending','partial'))
            )
          GROUP BY s.id, s.first_name, s.last_name, s.mobile, c.id, c.name
        )
@@ -89,10 +89,9 @@ export async function listFees(
         status       || null,
         student_id   || null,
         course_id    || null,
-        month        || null,
+        due_filter   || null,
         parseInt(limit),
         offset,
-        due_filter   || null,
       ]
     );
 
@@ -120,12 +119,12 @@ export async function listFees(
            END AS status
          FROM fee_records fr
          WHERE (
-           ($2::text IS NULL AND ($1::text IS NULL OR TO_CHAR(fr.due_date,'YYYY-MM') = $1))
-           OR ($2 = 'today'      AND fr.due_date = CURRENT_DATE)
-           OR ($2 = 'this_week'  AND fr.due_date >= CURRENT_DATE AND fr.due_date <= CURRENT_DATE + INTERVAL '6 days')
-           OR ($2 = 'this_month' AND TO_CHAR(fr.due_date,'YYYY-MM') = TO_CHAR(CURRENT_DATE,'YYYY-MM'))
-           OR ($2 = 'overdue'    AND fr.due_date < CURRENT_DATE AND fr.status IN ('pending','partial','overdue'))
-           OR ($2 = 'upcoming'   AND fr.due_date >= CURRENT_DATE AND fr.status IN ('pending','partial'))
+           $1::text IS NULL
+           OR ($1 = 'today'      AND fr.due_date = CURRENT_DATE)
+           OR ($1 = 'this_week'  AND fr.due_date >= CURRENT_DATE AND fr.due_date <= CURRENT_DATE + INTERVAL '6 days')
+           OR ($1 = 'this_month' AND TO_CHAR(fr.due_date,'YYYY-MM') = TO_CHAR(CURRENT_DATE,'YYYY-MM'))
+           OR ($1 = 'overdue'    AND fr.due_date < CURRENT_DATE AND fr.status IN ('pending','partial','overdue'))
+           OR ($1 = 'upcoming'   AND fr.due_date >= CURRENT_DATE AND fr.status IN ('pending','partial'))
          )
          GROUP BY fr.student_id, fr.course_id
        )
@@ -137,7 +136,7 @@ export async function listFees(
          COUNT(*) FILTER (WHERE status='partial')  AS count_partial,
          COUNT(*) FILTER (WHERE status='paid')     AS count_paid
        FROM course_fees`,
-      [month || null, due_filter || null]
+      [due_filter || null]
     );
 
     res.json({
@@ -168,7 +167,7 @@ export async function listFeesStudentSummary(
 ): Promise<void> {
   try {
     const { academySlug } = req.academyUser!;
-    const { month, due_filter } = req.query as Record<string, string>;
+    const { due_filter } = req.query as Record<string, string>;
 
     // One query: all pending fee records joined to students/courses/subjects
     const rows = await academyQuery<{
@@ -190,18 +189,18 @@ export async function listFeesStudentSummary(
        JOIN fee_records fr ON fr.student_id = s.id
          AND fr.status IN ('pending', 'partial', 'overdue')
          AND (
-           ($2::text IS NULL AND ($1::text IS NULL OR TO_CHAR(fr.due_date,'YYYY-MM') = $1))
-           OR ($2 = 'today'      AND fr.due_date = CURRENT_DATE)
-           OR ($2 = 'this_week'  AND fr.due_date >= CURRENT_DATE AND fr.due_date <= CURRENT_DATE + INTERVAL '6 days')
-           OR ($2 = 'this_month' AND TO_CHAR(fr.due_date,'YYYY-MM') = TO_CHAR(CURRENT_DATE,'YYYY-MM'))
-           OR ($2 = 'overdue'    AND fr.due_date < CURRENT_DATE)
-           OR ($2 = 'upcoming'   AND fr.due_date >= CURRENT_DATE)
+           $1::text IS NULL
+           OR ($1 = 'today'      AND fr.due_date = CURRENT_DATE)
+           OR ($1 = 'this_week'  AND fr.due_date >= CURRENT_DATE AND fr.due_date <= CURRENT_DATE + INTERVAL '6 days')
+           OR ($1 = 'this_month' AND TO_CHAR(fr.due_date,'YYYY-MM') = TO_CHAR(CURRENT_DATE,'YYYY-MM'))
+           OR ($1 = 'overdue'    AND fr.due_date < CURRENT_DATE)
+           OR ($1 = 'upcoming'   AND fr.due_date >= CURRENT_DATE)
          )
        LEFT JOIN courses c    ON c.id   = fr.course_id
        LEFT JOIN subjects sub ON sub.id = fr.subject_id
        WHERE s.status = 'active'
        ORDER BY s.first_name, s.last_name, fr.due_date ASC`,
-      [month || null, due_filter || null]
+      [due_filter || null]
     );
 
     // Group by student
@@ -469,14 +468,9 @@ export async function generateMonthlyFees(
 ): Promise<void> {
   try {
     const { academySlug } = req.academyUser!;
-    const { month } = req.body as { month?: string };
 
-    const targetMonth = month ?? new Date().toISOString().substring(0, 7);
-    const [year, mon] = targetMonth.split('-').map(Number);
-    const dueDate = new Date(year, mon, 0).toISOString().split('T')[0];
-
-    // One fee record per student per course = sum of active subject fees.
-    // Due date uses the course's fee_due_day if set, otherwise last day of month.
+    // One fee record per student per course (fixed due date, no monthly recurrence).
+    // Skips students who already have a pending/unpaid record for the course.
     const { rowCount } = await academyExec(
       academySlug,
       `INSERT INTO fee_records (student_id, course_id, amount_due, due_date, status)
@@ -484,13 +478,7 @@ export async function generateMonthlyFees(
          t.student_id,
          t.course_id,
          t.total_fee,
-         CASE
-           WHEN c.fee_due_date IS NOT NULL
-           THEN (DATE_TRUNC('month', $1::date) + (EXTRACT(DAY FROM c.fee_due_date)::int - 1) * INTERVAL '1 day')::date
-           WHEN c.fee_due_day IS NOT NULL
-           THEN (DATE_TRUNC('month', $1::date) + (c.fee_due_day - 1) * INTERVAL '1 day')::date
-           ELSE $1::date
-         END,
+         COALESCE(c.fee_due_date, CURRENT_DATE),
          'pending'
        FROM (
          SELECT ss.student_id, sub.course_id, SUM(ss.fee_amount) AS total_fee
@@ -505,16 +493,14 @@ export async function generateMonthlyFees(
          WHERE fr.student_id = t.student_id
            AND fr.course_id  = t.course_id
            AND fr.subject_id IS NULL
-           AND TO_CHAR(fr.due_date, 'YYYY-MM') = $2
-       )`,
-      [dueDate, targetMonth]
+       )`
     );
 
     const total = rowCount ?? 0;
     res.json({
       success: true,
-      data: { generated: total, month: targetMonth },
-      message: `${total} fee records generated for ${targetMonth}`,
+      data: { generated: total },
+      message: `${total} fee record${total === 1 ? '' : 's'} generated`,
     });
   } catch (err) { next(err); }
 }

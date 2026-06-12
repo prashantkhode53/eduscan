@@ -941,7 +941,7 @@ class _CourseFormState extends State<_CourseForm> {
               readOnly: true,
               decoration: InputDecoration(
                 labelText: 'Fee Due Date',
-                helperText: 'Day of selected date recurs each month (e.g. 26 Jun → 26th every month)',
+                helperText: 'Fixed payment due date for this course (e.g. 30 Sep 2026)',
                 border: const OutlineInputBorder(),
                 suffixIcon: Row(
                   mainAxisSize: MainAxisSize.min,

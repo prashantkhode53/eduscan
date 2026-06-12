@@ -27,7 +27,6 @@ class _FeesScreenState extends State<FeesScreen>
   List<Map<String, dynamic>> _all     = [];
   Map<String, dynamic>       _summary = {};
   bool    _loading      = true;
-  String  _month        = _currentMonth();
   String? _dueFilter;   // 'today' | 'this_week' | 'this_month' | 'overdue' | 'upcoming' | null
   int     _reloadTrigger = 0;
 
@@ -38,9 +37,6 @@ class _FeesScreenState extends State<FeesScreen>
     ('overdue',    'Overdue',       Icons.warning_amber_outlined),
     ('upcoming',   'Upcoming',      Icons.schedule_outlined),
   ];
-
-  static String _currentMonth() =>
-      DateTime.now().toIso8601String().substring(0, 7);
 
   @override
   void initState() {
@@ -62,7 +58,6 @@ class _FeesScreenState extends State<FeesScreen>
     setState(() => _loading = true);
     try {
       final data = await AcademyApiService.getFees(
-        month:     _dueFilter == null ? _month : null,
         dueFilter: _dueFilter,
         limit:     200,
       );
@@ -94,7 +89,7 @@ class _FeesScreenState extends State<FeesScreen>
 
   Future<void> _generateFees() async {
     try {
-      final result = await AcademyApiService.generateMonthlyFees(month: _month);
+      final result = await AcademyApiService.generateMonthlyFees();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(result['message']?.toString() ?? 'Fee records generated'),
@@ -128,28 +123,8 @@ class _FeesScreenState extends State<FeesScreen>
     }
   }
 
-  Future<void> _pickMonth() async {
-    final now = DateTime.now();
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: DateTime(int.parse(_month.split('-')[0]),
-          int.parse(_month.split('-')[1])),
-      firstDate: DateTime(now.year - 2),
-      lastDate: DateTime(now.year + 1),
-      helpText: 'Select month',
-      initialEntryMode: DatePickerEntryMode.calendarOnly,
-    );
-    if (picked != null) {
-      setState(() {
-        _month     = '${picked.year}-${picked.month.toString().padLeft(2, '0')}';
-        _dueFilter = null;  // month picker clears time filter
-      });
-      _load();
-    }
-  }
-
   // True for Students tab (0) and status tabs (1–5) — not Receipts (6)
-  bool get _showMonthStrip => _tabCtrl.index <= _tabs.length;
+  bool get _showFilterStrip => _tabCtrl.index <= _tabs.length;
 
   @override
   Widget build(BuildContext context) {
@@ -158,12 +133,6 @@ class _FeesScreenState extends State<FeesScreen>
       appBar: AppBar(
         title: const Text('Fees Management'),
         actions: [
-          if (_showMonthStrip)
-            IconButton(
-              icon: const Icon(Icons.calendar_month_outlined),
-              onPressed: _pickMonth,
-              tooltip: 'Select month',
-            ),
           PopupMenuButton<String>(
             onSelected: (v) {
               if (v == 'generate') _generateFees();
@@ -174,7 +143,7 @@ class _FeesScreenState extends State<FeesScreen>
                   value: 'generate',
                   child: ListTile(
                       leading: Icon(Icons.add_circle_outline),
-                      title: Text('Generate Monthly Fees'),
+                      title: Text('Generate Course Fees'),
                       dense: true)),
               const PopupMenuItem(
                   value: 'overdue',
@@ -204,27 +173,27 @@ class _FeesScreenState extends State<FeesScreen>
       ),
       body: Column(
         children: [
-          if (_showMonthStrip)
+          if (_showFilterStrip)
             Container(
               color: theme.colorScheme.surfaceContainerLow,
               padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Header row: current context label + clear + loading
+                  // Header row: active filter label + clear + loading
                   Row(
                     children: [
                       Icon(
                         _dueFilter != null
                             ? _dueFilters.firstWhere((f) => f.$1 == _dueFilter).$3
-                            : Icons.calendar_today_outlined,
+                            : Icons.receipt_long_outlined,
                         size: 16, color: theme.colorScheme.primary,
                       ),
                       const SizedBox(width: 6),
                       Text(
                         _dueFilter != null
                             ? _dueFilters.firstWhere((f) => f.$1 == _dueFilter).$2
-                            : _formatMonth(_month),
+                            : 'All Fees',
                         style: TextStyle(
                             fontWeight: FontWeight.bold,
                             color: theme.colorScheme.primary),
@@ -326,7 +295,6 @@ class _FeesScreenState extends State<FeesScreen>
               children: [
                 // Tab 0: Students — collect fees
                 _StudentsTab(
-                  month:         _dueFilter == null ? _month : null,
                   dueFilter:     _dueFilter,
                   reloadTrigger: _reloadTrigger,
                   onPaymentMade: _onPaymentMade,
@@ -369,15 +337,6 @@ class _FeesScreenState extends State<FeesScreen>
     );
   }
 
-  String _formatMonth(String m) {
-    final parts = m.split('-');
-    const months = [
-      '', 'January', 'February', 'March', 'April', 'May', 'June',
-      'July', 'August', 'September', 'October', 'November', 'December'
-    ];
-    return '${months[int.parse(parts[1])]} ${parts[0]}';
-  }
-
   String _fmt(dynamic v) {
     if (v == null) return '0';
     final d = double.tryParse(v.toString()) ?? 0;
@@ -388,13 +347,11 @@ class _FeesScreenState extends State<FeesScreen>
 // ── Students tab ─────────────────────────────────────────────────────────────
 
 class _StudentsTab extends StatefulWidget {
-  final String? month;
   final String? dueFilter;
   final int reloadTrigger;
   final VoidCallback onPaymentMade;
 
   const _StudentsTab({
-    this.month,
     this.dueFilter,
     required this.reloadTrigger,
     required this.onPaymentMade,
@@ -424,8 +381,7 @@ class _StudentsTabState extends State<_StudentsTab>
   @override
   void didUpdateWidget(_StudentsTab old) {
     super.didUpdateWidget(old);
-    if (old.month != widget.month ||
-        old.dueFilter != widget.dueFilter ||
+    if (old.dueFilter != widget.dueFilter ||
         old.reloadTrigger != widget.reloadTrigger) {
       _load();
     }
@@ -442,7 +398,6 @@ class _StudentsTabState extends State<_StudentsTab>
     setState(() { _loading = true; _error = null; });
     try {
       final data = await AcademyApiService.getFeesStudentSummary(
-        month:     widget.dueFilter == null ? widget.month : null,
         dueFilter: widget.dueFilter,
       );
       if (!mounted) return;
@@ -566,7 +521,7 @@ class _StudentsTabState extends State<_StudentsTab>
                       Text(
                         _q.isEmpty
                             ? (widget.dueFilter == null
-                                ? 'No pending fees this month'
+                                ? 'No pending fees'
                                 : 'No fees match this filter')
                             : 'No students match "$_q"',
                         style: theme.textTheme.bodyMedium,
