@@ -8,6 +8,7 @@ import '../../services/academy_api_service.dart';
 import '../../services/face_service.dart';
 import '../../widgets/face_overlay_painter.dart';
 import '../../widgets/academy_course_selector.dart';
+import '../../utils/date_utils.dart' as du;
 import '../../models/subject.dart';
 
 /// 3-step wizard: (0) Personal Info  (1) Courses  (2) Face update.
@@ -1543,13 +1544,7 @@ class _LoginStatusCard extends StatelessWidget {
     String _formatDate(String? iso) {
       if (iso == null || iso.isEmpty) return 'Never';
       try {
-        final dt = DateTime.parse(iso).toLocal();
-        final d  = dt.day.toString().padLeft(2, '0');
-        final mo = dt.month.toString().padLeft(2, '0');
-        final yr = dt.year.toString();
-        final h  = dt.hour.toString().padLeft(2, '0');
-        final mi = dt.minute.toString().padLeft(2, '0');
-        return '$d/$mo/$yr $h:$mi';
+        return du.fmtDateTime(iso);
       } catch (_) {
         return 'Unknown';
       }

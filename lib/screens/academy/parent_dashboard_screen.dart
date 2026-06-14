@@ -4,6 +4,7 @@ import '../../providers/parent_auth_provider.dart';
 import '../../services/parent_api_service.dart';
 import '../../services/fcm_service.dart';
 import '../../utils/fee_format.dart';
+import '../../utils/date_utils.dart' as du;
 import 'parent_receipts_screen.dart';
 
 class ParentDashboardScreen extends StatefulWidget {
@@ -93,10 +94,7 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
     return h > 0 ? '${h}h ${r}m' : '${r}m';
   }
 
-  String _fmtDate(dynamic raw) {
-    final s = raw?.toString() ?? '';
-    return s.contains('T') ? s.split('T')[0] : s;
-  }
+  String _fmtDate(dynamic raw) => du.fmtDate(raw?.toString());
 
   String _dayLabel(String dateStr) {
     try {

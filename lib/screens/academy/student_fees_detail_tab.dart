@@ -5,6 +5,7 @@ import '../../services/academy_api_service.dart';
 import '../../services/fee_pdf_service.dart';
 import '../../providers/auth_provider.dart';
 import '../../utils/fee_format.dart';
+import '../../utils/date_utils.dart' as du;
 import 'package:provider/provider.dart';
 
 /// "By Student" tab of Fees Management.
@@ -1205,18 +1206,7 @@ String _dateStr(dynamic raw) {
   return s.contains('T') ? s.split('T')[0] : s;
 }
 
-String _fmtDate(dynamic raw) {
-  final s = _dateStr(raw);
-  if (s.isEmpty) return '—';
-  try {
-    final d = DateTime.parse(s);
-    const months = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    return '${d.day.toString().padLeft(2, '0')} ${months[d.month]} ${d.year}';
-  } catch (_) {
-    return s;
-  }
-}
+String _fmtDate(dynamic raw) => du.fmtDate(raw?.toString());
 
 /// Payment mode is stored inside the fee record's remarks as "Mode: <mode> | ...".
 String _mode(String? remarks) {

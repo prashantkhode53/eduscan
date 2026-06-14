@@ -9,6 +9,7 @@ import '../../services/academy_api_service.dart';
 import '../../services/face_service.dart';
 import '../../widgets/face_overlay_painter.dart';
 import '../../widgets/academy_course_selector.dart';
+import '../../utils/date_utils.dart' as du;
 
 class AcademyStudentRegistrationScreen extends StatefulWidget {
   const AcademyStudentRegistrationScreen({super.key});
@@ -1284,17 +1285,7 @@ class _FaceDuplicateDialog extends StatelessWidget {
     required this.onCancel,
   });
 
-  String _fmtDate(String? raw) {
-    if (raw == null || raw.isEmpty) return '';
-    try {
-      final d = DateTime.parse(raw).toLocal();
-      const m = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-                  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-      return '${d.day.toString().padLeft(2, '0')} ${m[d.month]} ${d.year}';
-    } catch (_) {
-      return raw.split('T').first;
-    }
-  }
+  String _fmtDate(String? raw) => du.fmtDate(raw);
 
   @override
   Widget build(BuildContext context) {
@@ -1448,19 +1439,7 @@ class _StudentDuplicateDialog extends StatelessWidget {
   final Map<String, dynamic> student;
   const _StudentDuplicateDialog({required this.student});
 
-  String _fmtDate(dynamic raw) {
-    final s = raw?.toString() ?? '';
-    final clean = s.contains('T') ? s.split('T')[0] : s;
-    if (clean.isEmpty) return '';
-    try {
-      final d = DateTime.parse(clean);
-      const months = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-                      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-      return '${d.day.toString().padLeft(2, '0')} ${months[d.month]} ${d.year}';
-    } catch (_) {
-      return clean;
-    }
-  }
+  String _fmtDate(dynamic raw) => du.fmtDate(raw?.toString());
 
   @override
   Widget build(BuildContext context) {

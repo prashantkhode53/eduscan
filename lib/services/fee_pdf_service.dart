@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import '../utils/fee_format.dart';
+import '../utils/date_utils.dart' as du;
 
 /// Generates professional fee PDF documents and opens them.
 ///
@@ -26,16 +27,7 @@ class FeePdfService {
   static String _m(dynamic v) =>
       _fmt(double.tryParse(v?.toString() ?? '') ?? 0);
 
-  static String _fmtDate(dynamic raw) {
-    final s     = raw?.toString() ?? '';
-    final clean = s.contains('T') ? s.split('T')[0] : s;
-    if (clean.isEmpty || clean == 'null') return '-';
-    try {
-      return DateFormat('dd MMM yyyy').format(DateTime.parse(clean));
-    } catch (_) {
-      return clean;
-    }
-  }
+  static String _fmtDate(dynamic raw) => du.fmtDate(raw?.toString());
 
   /// Accepts either a raw mode string ("cash", "upi") or the old embedded
   /// remarks format ("Mode: cash") used by the legacy fee_records controller.

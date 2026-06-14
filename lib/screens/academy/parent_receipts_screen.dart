@@ -4,6 +4,7 @@ import '../../services/parent_api_service.dart';
 import '../../services/fee_pdf_service.dart';
 import '../../providers/parent_auth_provider.dart';
 import '../../utils/fee_format.dart';
+import '../../utils/date_utils.dart' as du;
 
 class ParentReceiptsScreen extends StatefulWidget {
   const ParentReceiptsScreen({super.key});
@@ -450,19 +451,7 @@ class _StatusChip extends StatelessWidget {
 
 String _money(double v) => '₹${v.toStringAsFixed(0)}';
 
-String _fmtDate(dynamic raw) {
-  final s = raw?.toString() ?? '';
-  final clean = s.contains('T') ? s.split('T')[0] : s;
-  if (clean.isEmpty) return '—';
-  try {
-    final d = DateTime.parse(clean);
-    const months = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    return '${d.day.toString().padLeft(2, '0')} ${months[d.month]} ${d.year}';
-  } catch (_) {
-    return clean;
-  }
-}
+String _fmtDate(dynamic raw) => du.fmtDate(raw?.toString());
 
 String _parseMode(String? mode) {
   switch (mode?.toLowerCase()) {
