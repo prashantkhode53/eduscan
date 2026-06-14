@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { academyQuery, academyQueryOne } from '../../db/poolManager';
 import { batchEmbed } from '../../utils/insightface';
 import { cosineSimilarity } from '../../utils/faceMatch';
+import { getActiveEmbeddings, getThreshold, CachedStudent } from '../../db/scanCache';
 import { sendFcm } from '../../utils/fcm';
 
 // Converts "HH:MM:SS" → "hh:mm AM/PM" for human-readable notifications.
@@ -11,15 +12,6 @@ function to12Hour(timeStr: string): string {
   const ampm = h >= 12 ? 'PM' : 'AM';
   const h12  = h % 12 === 0 ? 12 : h % 12;
   return `${h12.toString().padStart(2, '0')}:${mStr} ${ampm}`;
-}
-
-interface StudentRow {
-  id: string;
-  first_name: string;
-  last_name: string;
-  mobile: string;
-  face_embedding: unknown;
-  parent_fcm_token: string | null;
 }
 
 interface AttendanceRow {
@@ -60,10 +52,12 @@ export async function scanAcademy(
     const today   = now.toISOString().split('T')[0];
     const timeStr = now.toTimeString().split(' ')[0]; // HH:MM:SS
 
-    // 1. Extract 512-D ArcFace embedding from the scan image
+    // 1. Extract 512-D ArcFace embedding from the scan image.
+    //    12 s timeout: the scan screen only fires once the service is warm, so
+    //    a long hang means a degraded service the user should retry.
     let embed;
     try {
-      embed = await batchEmbed([image_base64]);
+      embed = await batchEmbed([image_base64], 12_000);
     } catch (err) {
       console.error('[academy/scan] InsightFace error:', err);
       res.status(503).json({
@@ -87,13 +81,10 @@ export async function scanAcademy(
 
     const incoming = embed.embedding;
 
-    // 2. Load all active academy students with stored face embeddings
-    const students = await academyQuery<StudentRow>(
-      academySlug,
-      `SELECT id, first_name, last_name, mobile, face_embedding, parent_fcm_token
-       FROM students
-       WHERE status = 'active' AND face_embedding IS NOT NULL`
-    );
+    // 2. Active students with embeddings — served from an in-process cache
+    //    (60 s TTL, invalidated on register/face-update/delete) so we don't
+    //    transfer and JSON.parse every embedding from Neon on each scan.
+    const students = await getActiveEmbeddings(academySlug);
 
     if (students.length === 0) {
       res.json({
@@ -104,24 +95,14 @@ export async function scanAcademy(
       return;
     }
 
-    // 3. Cosine similarity matching
-    const settingRow = await academyQueryOne<{ value: string }>(
-      academySlug,
-      `SELECT value FROM settings WHERE key = 'face_threshold'`
-    );
-    const threshold = parseFloat(settingRow?.value ?? '0.75');
+    // 3. Cosine similarity matching (threshold cached in-process too).
+    const threshold = await getThreshold(academySlug);
 
-    let best: { student: StudentRow; confidence: number } | null = null;
+    let best: { student: CachedStudent; confidence: number } | null = null;
     let secondBest = 0;
 
     for (const s of students) {
-      const raw = s.face_embedding;
-      const embedding: number[] = typeof raw === 'string'
-        ? JSON.parse(raw)
-        : (raw as number[]);
-      if (!Array.isArray(embedding) || embedding.length === 0) continue;
-
-      const score = cosineSimilarity(incoming, embedding);
+      const score = cosineSimilarity(incoming, s.emb);
       if (!best || score > best.confidence) {
         secondBest = best?.confidence ?? 0;
         best = { student: s, confidence: score };
@@ -156,15 +137,24 @@ export async function scanAcademy(
     const student    = best.student;
     const confidence = Math.round(best.confidence * 10000) / 10000;
 
-    // 4. Load enrolled courses for display
-    const courses = await academyQuery<{ name: string }>(
-      academySlug,
-      `SELECT c.name FROM courses c
-       JOIN student_courses sc ON sc.course_id = c.id
-       WHERE sc.student_id = $1 AND sc.status = 'active'
-       ORDER BY c.name LIMIT 3`,
-      [student.id]
-    );
+    // 4 + 5. Fetch courses (display only) and today's attendance in parallel so
+    //         the display lookup never delays attendance marking.
+    const [courses, existing] = await Promise.all([
+      academyQuery<{ name: string }>(
+        academySlug,
+        `SELECT c.name FROM courses c
+         JOIN student_courses sc ON sc.course_id = c.id
+         WHERE sc.student_id = $1 AND sc.status = 'active'
+         ORDER BY c.name LIMIT 3`,
+        [student.id]
+      ),
+      academyQueryOne<AttendanceRow>(
+        academySlug,
+        `SELECT id, time_in, time_out, duration_mins FROM attendance
+         WHERE student_id = $1 AND date = $2`,
+        [student.id, today]
+      ),
+    ]);
     const courseNames = courses.map(c => c.name).join(', ');
 
     const studentPayload = {
@@ -173,14 +163,6 @@ export async function scanAcademy(
       last_name:  student.last_name,
       courses:    courseNames,
     };
-
-    // 5. Duplicate-scan prevention (10-minute window)
-    const existing = await academyQueryOne<AttendanceRow>(
-      academySlug,
-      `SELECT id, time_in, time_out, duration_mins FROM attendance
-       WHERE student_id = $1 AND date = $2`,
-      [student.id, today]
-    );
 
     if (mode === 'checkin' && existing?.time_in) {
       const diffMins = minutesSince(existing.time_in, timeStr);

@@ -509,16 +509,23 @@ export async function runAcademyMigrations(
 
     await client.query(`
       INSERT INTO settings (key, value) VALUES
-        ('kiosk_api_key',    gen_random_uuid()::text),
-        ('face_threshold',   '0.75'),
-        ('auto_mark_absent', 'true'),
-        ('app_version',      '1.0.0')
+        ('kiosk_api_key',            gen_random_uuid()::text),
+        ('face_threshold',           '0.75'),
+        ('face_duplicate_threshold', '0.88'),
+        ('auto_mark_absent',         'true'),
+        ('app_version',              '1.0.0')
       ON CONFLICT (key) DO NOTHING
     `);
 
     // ── Indexes ───────────────────────────────────────────────────────────
     await client.query(`CREATE INDEX IF NOT EXISTS idx_att_date     ON attendance(date)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_att_student  ON attendance(student_id)`);
+    // Speeds the "active faces in this schema" scan used by attendance matching
+    // and registration duplicate detection.
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_students_face
+      ON students(status) WHERE face_embedding IS NOT NULL
+    `);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_sc_student   ON student_courses(student_id)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_sc_course    ON student_courses(course_id)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_fee_student  ON fee_records(student_id)`);

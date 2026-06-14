@@ -69,15 +69,19 @@ export async function checkReady(timeoutMs = 5_000): Promise<{ reachable: boolea
 
 /**
  * Send multiple base64-encoded JPEG images to Python and get back a 512-D
- * averaged ArcFace embedding.  Called during student registration.
- * Timeout is 90 s to survive a cold-start on Render's free tier.
+ * averaged ArcFace embedding.
+ *
+ * Default timeout is 90 s to survive a cold-start during student registration.
+ * The real-time scan path should pass a much shorter timeout (e.g. 12 s) — by
+ * then the service is warmed (the scan screen gates on readiness), so a long
+ * hang means a degraded service the user should retry rather than wait on.
  */
-export async function batchEmbed(imagesB64: string[]): Promise<EmbedResult> {
+export async function batchEmbed(imagesB64: string[], timeoutMs = 90_000): Promise<EmbedResult> {
   const response = await fetch(`${BASE_URL}/embed/batch`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ images_b64: imagesB64 }),
-    signal: AbortSignal.timeout(90_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok) {
     throw new Error(`InsightFace /embed/batch returned ${response.status}`);

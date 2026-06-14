@@ -2,7 +2,11 @@ import { Request, Response, NextFunction } from 'express';
 import bcrypt from 'bcrypt';
 import { academyQuery, academyQueryOne, academyTransaction, academyExec } from '../../db/poolManager';
 import { AppError } from '../../middleware/errorHandler';
-import { batchEmbed, matchFace, cacheUpsert, cacheDelete, warmup } from '../../utils/insightface';
+import { batchEmbed, cacheUpsert, cacheDelete, warmup } from '../../utils/insightface';
+import { invalidateScanCache, getDuplicateThreshold } from '../../db/scanCache';
+import {
+  findSchemaDuplicate, findSchemaDuplicateTx, FACE_LOCK_KEY,
+} from '../../utils/faceDuplicate';
 
 /**
  * Lightweight, structured step logging for the registration flow. Lets us see
@@ -94,6 +98,7 @@ export async function registerStudent(
     // create that includes face_images still behaves exactly as before.
     let embedding: number[] | null = null;
     let quality:   number | null   = null;
+    let dupThreshold = 0.88;  // set from settings when a face is provided
     if (!face_images?.length) {
       // Phase 1 (details-only save): ping InsightFace now so it wakes up on
       // Render's free tier while the admin is capturing the face (30-60 s window).
@@ -119,58 +124,30 @@ export async function registerStudent(
         ));
       }
 
-      // 2 — Duplicate check (confidence >= 0.88 = already registered)
-      let matchResult: Awaited<ReturnType<typeof matchFace>>;
-      try {
-        matchResult = await matchFace(face_images[0]);
-      } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : String(e);
+      // 2 — Duplicate check: SCHEMA-SCOPED and DB-authoritative.
+      //     Compare the just-computed embedding against THIS academy's active
+      //     faces only (cross-schema duplicates are allowed by business rule).
+      //     This reuses the embedding we already have — no second face-service
+      //     round-trip — and reads from PostgreSQL, so a student missing from
+      //     the shared Redis cache can't slip through. A final authoritative
+      //     re-check runs under an advisory lock inside the insert transaction.
+      dupThreshold = await getDuplicateThreshold(academySlug);
+      const dup = await findSchemaDuplicate(academySlug, embedResult.embedding, dupThreshold);
+      if (dup) {
+        regLog(academySlug, 'duplicate-blocked', {
+          matchedStudentId: dup.student_id,
+          matchedName:      dup.student_name,
+          confidence:       dup.confidence,
+        });
+        console.warn(
+          `[register] DUPLICATE FACE BLOCKED academy=${academySlug} ` +
+          `matched=${dup.student_id} (${dup.student_name}) score=${dup.confidence}`
+        );
         return next(new AppError(
-          `Face service error: ${msg}. Please try again in a moment.`, 503
+          'This face is already registered to another student in the current schema.',
+          409,
+          { code: 'FACE_DUPLICATE', duplicate: dup }
         ));
-      }
-      if (matchResult.matched && (matchResult.confidence ?? 0) >= 0.88) {
-        // Only block if the matched student is in THIS academy's schema.
-        // The Redis cache is shared across all academies, so a match against a
-        // student registered in a different academy must be allowed through.
-        const dup = matchResult.student_id
-          ? await academyQueryOne<{
-              id: string; first_name: string; last_name: string;
-              created_at: string; course_names: string[];
-            }>(
-              academySlug,
-              `SELECT s.id, s.first_name, s.last_name, s.created_at,
-                      COALESCE(
-                        json_agg(c.name ORDER BY c.name)
-                        FILTER (WHERE c.id IS NOT NULL), '[]'
-                      ) AS course_names
-               FROM students s
-               LEFT JOIN student_courses sc
-                 ON sc.student_id = s.id AND sc.status = 'active'
-               LEFT JOIN courses c ON c.id = sc.course_id
-               WHERE s.id = $1
-               GROUP BY s.id`,
-              [matchResult.student_id]
-            )
-          : null;
-
-        if (dup) {
-          return next(new AppError(
-            `Face already registered — ${(matchResult.confidence! * 100).toFixed(1)}% match with an existing student.`,
-            409,
-            {
-              code: 'FACE_DUPLICATE',
-              duplicate: {
-                student_id:    dup.id,
-                student_name:  `${dup.first_name} ${dup.last_name}`,
-                courses:       dup.course_names ?? [],
-                registered_at: dup.created_at  ?? null,
-                confidence:    matchResult.confidence,
-              },
-            }
-          ));
-        }
-        // Match is from a different academy — allow registration to proceed.
       }
 
       embedding = embedResult.embedding;
@@ -296,6 +273,32 @@ export async function registerStudent(
     regLog(academySlug, 'db-insert', { studentId, courses: uniqueCourseEnrollments.size });
     try {
     await academyTransaction(academySlug, async (client) => {
+      // Serialize face enrollment per academy: an advisory lock (auto-released
+      // at COMMIT/ROLLBACK) stops two concurrent registrations of the same face
+      // from both passing the duplicate check. The lock is a no-op for
+      // face-less Phase-1 saves but harmless to take unconditionally.
+      await client.query(
+        `SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`,
+        [`${academySlug}:${FACE_LOCK_KEY}`]
+      );
+
+      // Authoritative duplicate re-check UNDER the lock — closes the race
+      // window between the pre-insert check above and this insert.
+      if (embedding) {
+        const raceDup = await findSchemaDuplicateTx(client, embedding, dupThreshold);
+        if (raceDup) {
+          regLog(academySlug, 'duplicate-blocked-race', {
+            matchedStudentId: raceDup.student_id,
+            confidence:       raceDup.confidence,
+          });
+          throw new AppError(
+            'This face is already registered to another student in the current schema.',
+            409,
+            { code: 'FACE_DUPLICATE', duplicate: raceDup }
+          );
+        }
+      }
+
       await client.query(
         `INSERT INTO students
            (id, first_name, last_name, dob, gender, mobile, email,
@@ -347,6 +350,9 @@ export async function registerStudent(
       }
     });
     } catch (dbErr) {
+      // A duplicate block thrown by the in-lock re-check is intentional, not a
+      // DB fault — rethrow it as-is so the handler returns the 409 payload.
+      if (dbErr instanceof AppError) throw dbErr;
       // Log the failing step + slug so it can be matched to the error_ref the
       // central handler emits, then rethrow so the handler categorises the pg
       // error into a specific client message (e.g. "Database save failed ...").
@@ -372,6 +378,7 @@ export async function registerStudent(
       } catch (e) {
         console.error('[register] cacheUpsert failed (non-fatal):', e);
       }
+      invalidateScanCache(academySlug);
     }
 
     regLog(academySlug, 'done', { studentId });
@@ -1208,6 +1215,7 @@ export async function updateStudent(
         division:    academySlug.substring(0, 8),
         roll_no:     null,
       });
+      invalidateScanCache(academySlug);
     }
 
     res.json({ success: true, message: 'Student updated successfully' });
@@ -1256,64 +1264,47 @@ export async function updateStudentFace(
       ));
     }
 
-    // Duplicate check — a high-confidence match to a DIFFERENT student means
-    // this face is already registered to someone else.
-    let match: Awaited<ReturnType<typeof matchFace>>;
-    try {
-      match = await matchFace(face_images[0]);
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return next(new AppError(
-        `Face service error: ${msg}. Please try again in a moment.`, 503
-      ));
-    }
-    if (match.matched && match.student_id && match.student_id !== id &&
-        (match.confidence ?? 0) >= 0.88) {
-      // Only block if the matched student is in THIS academy — the Redis cache
-      // is shared, so a cross-academy match should be allowed through.
-      const dup = await academyQueryOne<{
-        id: string; first_name: string; last_name: string;
-        created_at: string; course_names: string[];
-      }>(
-        academySlug,
-        `SELECT s.id, s.first_name, s.last_name, s.created_at,
-                COALESCE(
-                  json_agg(c.name ORDER BY c.name)
-                  FILTER (WHERE c.id IS NOT NULL), '[]'
-                ) AS course_names
-         FROM students s
-         LEFT JOIN student_courses sc
-           ON sc.student_id = s.id AND sc.status = 'active'
-         LEFT JOIN courses c ON c.id = sc.course_id
-         WHERE s.id = $1
-         GROUP BY s.id`,
-        [match.student_id]
-      );
-      if (dup) return next(new AppError(
-        `Face already registered to another student — ${(match.confidence! * 100).toFixed(1)}% match.`,
-        409,
-        {
-          code: 'FACE_DUPLICATE',
-          duplicate: {
-            student_id:    dup.id,
-            student_name:  `${dup.first_name} ${dup.last_name}`,
-            courses:       dup.course_names ?? [],
-            registered_at: dup.created_at  ?? null,
-            confidence:    match.confidence,
-          },
-        }
-      ));
-    }
-
+    // Duplicate check + write, atomic under a per-academy advisory lock so a
+    // concurrent enrollment of the same face can't slip in between. The check
+    // is SCHEMA-SCOPED and DB-authoritative (excludes THIS student so a
+    // re-capture of their own face isn't flagged); cross-schema duplicates are
+    // allowed by business rule.
+    const dupThreshold = await getDuplicateThreshold(academySlug);
     regLog(academySlug, 'face:db-update', { studentId: id });
     try {
-      await academyExec(
-        academySlug,
-        `UPDATE students SET face_embedding = $1, face_quality = $2, updated_at = NOW()
-         WHERE id = $3`,
-        [JSON.stringify(embed.embedding), embed.quality ?? null, id]
-      );
+      await academyTransaction(academySlug, async (client) => {
+        await client.query(
+          `SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`,
+          [`${academySlug}:${FACE_LOCK_KEY}`]
+        );
+
+        const dup = await findSchemaDuplicateTx(client, embed.embedding!, dupThreshold, id);
+        if (dup) {
+          regLog(academySlug, 'duplicate-blocked', {
+            studentId:        id,
+            matchedStudentId: dup.student_id,
+            matchedName:      dup.student_name,
+            confidence:       dup.confidence,
+          });
+          console.warn(
+            `[updateStudentFace] DUPLICATE FACE BLOCKED academy=${academySlug} ` +
+            `student=${id} matched=${dup.student_id} (${dup.student_name}) score=${dup.confidence}`
+          );
+          throw new AppError(
+            'This face is already registered to another student in the current schema.',
+            409,
+            { code: 'FACE_DUPLICATE', duplicate: dup }
+          );
+        }
+
+        await client.query(
+          `UPDATE students SET face_embedding = $1, face_quality = $2, updated_at = NOW()
+           WHERE id = $3`,
+          [JSON.stringify(embed.embedding), embed.quality ?? null, id]
+        );
+      });
     } catch (dbErr) {
+      if (dbErr instanceof AppError) throw dbErr;  // intentional duplicate block
       console.error(`[register] academy=${academySlug} phase=face:db-update FAILED studentId=${id}:`, dbErr);
       throw dbErr;
     }
@@ -1332,6 +1323,7 @@ export async function updateStudentFace(
     } catch (e) {
       console.error('[updateStudentFace] cacheUpsert failed (non-fatal):', e);
     }
+    invalidateScanCache(academySlug);
 
     regLog(academySlug, 'face:done', { studentId: id });
     res.json({ success: true, message: 'Face saved successfully' });
@@ -1374,6 +1366,7 @@ export async function deleteStudent(
         err instanceof Error ? err.message : err
       );
     }
+    invalidateScanCache(academySlug);
 
     res.json({ success: true, message: 'Student deleted successfully' });
   } catch (err) { next(err); }

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../services/academy_api_service.dart';
 import '../../services/face_service.dart';
+import '../../services/voice_feedback_service.dart';
 import '../../widgets/face_overlay_painter.dart';
 
 class AcademyFaceScanScreen extends StatefulWidget {
@@ -55,6 +56,7 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen> {
     _now = DateTime.now();
     _initCamera();
     _startWarmup();
+    VoiceFeedbackService.warmUp();  // pre-init TTS so first "Thank you" is instant
     _clockTimer = Timer.periodic(
         const Duration(seconds: 1), (_) {
       if (mounted) setState(() => _now = DateTime.now());
@@ -112,7 +114,9 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen> {
       );
       final ctrl = CameraController(
         _frontCamera!,
-        ResolutionPreset.medium,
+        // 640×480 is ample for a 112×112 ArcFace crop and cuts upload/encode
+        // time ~4× vs. medium (1280×720) with no recognition-accuracy loss.
+        ResolutionPreset.low,
         enableAudio: false,
         imageFormatGroup: ImageFormatGroup.nv21,
       );
@@ -254,6 +258,14 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen> {
       HapticFeedback.heavyImpact();
     }
 
+    // Spoken "Thank you" — ONLY for a newly recorded check-in/out. Deliberately
+    // excludes 'duplicate' (no replay within the 10-min window) and every
+    // failure/validation case. Fire-and-forget + error-safe, so it can never
+    // block the UI, delay scanning, or affect the attendance result.
+    if (success && (action == 'checkin' || action == 'checkout')) {
+      VoiceFeedbackService.thankYou();
+    }
+
     final statusText = switch (action) {
       'checkin'   => 'Face matched! Check-in recorded.',
       'checkout'  => 'Face matched! Check-out recorded.',
@@ -314,6 +326,7 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen> {
     _overlayTimer = null;
     _warmupTimer?.cancel();
     _warmupTimer = null;
+    VoiceFeedbackService.stop();  // silence any in-flight "Thank you" on exit
     if (_streamRunning && _cameraCtrl != null &&
         _cameraCtrl!.value.isInitialized) {
       try { _cameraCtrl!.stopImageStream(); } catch (_) {}
