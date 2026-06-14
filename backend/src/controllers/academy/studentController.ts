@@ -5,7 +5,7 @@ import { AppError } from '../../middleware/errorHandler';
 import { batchEmbed, cacheUpsert, cacheDelete, warmup } from '../../utils/insightface';
 import { invalidateScanCache, getDuplicateThreshold } from '../../db/scanCache';
 import {
-  findSchemaDuplicate, findSchemaDuplicateTx, FACE_LOCK_KEY,
+  findSchemaDuplicate, findSchemaDuplicateTx, FACE_LOCK_KEY, slugToLockId,
 } from '../../utils/faceDuplicate';
 
 /**
@@ -278,8 +278,8 @@ export async function registerStudent(
       // from both passing the duplicate check. The lock is a no-op for
       // face-less Phase-1 saves but harmless to take unconditionally.
       await client.query(
-        `SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`,
-        [`${academySlug}:${FACE_LOCK_KEY}`]
+        `SELECT pg_advisory_xact_lock($1::bigint)`,
+        [slugToLockId(`${academySlug}:${FACE_LOCK_KEY}`)]
       );
 
       // Authoritative duplicate re-check UNDER the lock — closes the race
@@ -1274,8 +1274,8 @@ export async function updateStudentFace(
     try {
       await academyTransaction(academySlug, async (client) => {
         await client.query(
-          `SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`,
-          [`${academySlug}:${FACE_LOCK_KEY}`]
+          `SELECT pg_advisory_xact_lock($1::bigint)`,
+          [slugToLockId(`${academySlug}:${FACE_LOCK_KEY}`)]
         );
 
         const dup = await findSchemaDuplicateTx(client, embed.embedding!, dupThreshold, id);

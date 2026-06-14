@@ -18,12 +18,30 @@
  * faces straight from PostgreSQL (the source of truth), so both holes close.
  */
 
+import { createHash } from 'crypto';
 import { PoolClient } from 'pg';
 import { academyQuery } from '../db/poolManager';
 import { cosineSimilarity } from './faceMatch';
 
 /** Stable per-academy key component for pg_advisory_xact_lock. */
 export const FACE_LOCK_KEY = 'face_register';
+
+/**
+ * Convert a lock key string to a stable int64 for pg_advisory_xact_lock.
+ *
+ * We compute this in Node.js (not via hashtext() in SQL) because hashtext()
+ * returns int4 and the cast to int8 triggers PG error 42883 on Neon/PgBouncer
+ * transaction-mode connections that resolve function overloads differently.
+ * SHA-256 → take first 8 bytes as a signed BigInt → clamp to JS safe integer.
+ */
+export function slugToLockId(key: string): string {
+  const buf = createHash('sha256').update(key).digest();
+  // Read first 8 bytes as a signed 64-bit big-endian integer.
+  const hi = buf.readInt32BE(0);
+  const lo = buf.readUInt32BE(4);
+  const big = (BigInt(hi) << 32n) | BigInt(lo);
+  return big.toString();
+}
 
 export interface DuplicateMatch {
   student_id: string;
