@@ -278,7 +278,7 @@ export async function registerStudent(
       // from both passing the duplicate check. The lock is a no-op for
       // face-less Phase-1 saves but harmless to take unconditionally.
       const lockId = slugToLockId(`${academySlug}:${FACE_LOCK_KEY}`);
-      await client.query(`SELECT pg_advisory_xact_lock(${lockId})`);
+      await client.query(`SELECT pg_advisory_xact_lock($1::bigint)`, [lockId]);
 
       // Authoritative duplicate re-check UNDER the lock — closes the race
       // window between the pre-insert check above and this insert.
@@ -1272,7 +1272,7 @@ export async function updateStudentFace(
     try {
       await academyTransaction(academySlug, async (client) => {
         const lockId = slugToLockId(`${academySlug}:${FACE_LOCK_KEY}`);
-        await client.query(`SELECT pg_advisory_xact_lock(${lockId})`);
+        await client.query(`SELECT pg_advisory_xact_lock($1::bigint)`, [lockId]);
 
         const dup = await findSchemaDuplicateTx(client, embed.embedding!, dupThreshold, id);
         if (dup) {
