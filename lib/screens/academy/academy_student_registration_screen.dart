@@ -1,6 +1,8 @@
 ﻿import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:camera/camera.dart';
+import 'package:image/image.dart' as img_lib;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show FilteringTextInputFormatter, TextInputFormatter;
 import 'package:provider/provider.dart';
@@ -83,7 +85,8 @@ class _AcademyStudentRegistrationScreenState
   // _studentId holds the created record; the face is attached afterwards.
   String? _studentId;
   bool _savingDetails = false;
-  Future<void>? _detailsSave; // in-flight Phase 1 (runs in the background)
+  Future<void>? _detailsSave;  // in-flight Phase 1 (runs in the background)
+  Future<void>? _embedDone;   // pre-started embed kicked off after 5th capture
 
   @override
   void initState() {
@@ -386,6 +389,7 @@ class _AcademyStudentRegistrationScreenState
       _captureCount  = 0;
     });
     _faceImages.clear();
+    _embedDone = null;
 
     // 2 — Stop the image stream explicitly BEFORE dispose. Without this,
     //     some Android HALs leave the stream open internally, causing the
@@ -545,13 +549,27 @@ class _AcademyStudentRegistrationScreenState
     if (mounted) setState(() => _holdProgress = 0.0);
   }
 
+  /// Compress a raw JPEG to max 640 px on the long edge at 85 % quality.
+  /// InsightFace crops the face region internally — full resolution is wasted.
+  /// Runs on the calling isolate; the image package is pure Dart so no
+  /// platform-channel overhead.
+  static List<int> _compressJpeg(List<int> rawBytes) {
+    final decoded = img_lib.decodeImage(Uint8List.fromList(rawBytes));
+    if (decoded == null) return rawBytes;
+    final resized = decoded.width > decoded.height
+        ? img_lib.copyResize(decoded, width: 640)
+        : img_lib.copyResize(decoded, height: 640);
+    return img_lib.encodeJpg(resized, quality: 85);
+  }
+
   Future<void> _doCapture() async {
     if (_camCtrl == null || _done) { _autoCapturing = false; return; }
     try {
       await _camCtrl!.stopImageStream();
-      final xFile = await _camCtrl!.takePicture();
-      final bytes = await xFile.readAsBytes();
-      _faceImages.add(base64Encode(bytes));
+      final xFile  = await _camCtrl!.takePicture();
+      final raw    = await xFile.readAsBytes();
+      final compressed = await Future(() => _compressJpeg(raw));
+      _faceImages.add(base64Encode(compressed));
       _captureCount++;
       _holdProgress = 0.0;
       // Each successful capture resets the stall clock.
@@ -561,6 +579,9 @@ class _AcademyStudentRegistrationScreenState
         _done          = true;
         _autoCapturing = false;
         setState(() => _overlayState = FaceOverlayState.successCheckin);
+        // Start embedding immediately — hides InsightFace latency while the
+        // user reads the success state and reaches for the button.
+        _embedDone = _beginEmbed();
       } else {
         _autoCapturing = false;
         setState(() {});
@@ -575,6 +596,20 @@ class _AcademyStudentRegistrationScreenState
     }
   }
 
+  /// Background embed: called immediately after the 5th capture so the
+  /// InsightFace round-trip runs while the user taps "Register Student".
+  /// Errors are NOT swallowed — _submit() awaits this and handles them.
+  Future<void> _beginEmbed() async {
+    if (_detailsSave != null) {
+      try { await _detailsSave; } catch (_) {}
+    }
+    if (_studentId != null) {
+      await AcademyApiService.updateStudentFace(_studentId!, _faceImages);
+    }
+    // If _studentId is still null (rare Phase-1 failure), _submit() falls
+    // through to the one-shot create path which also embeds.
+  }
+
   // â”€â”€ Submit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   /// Phase 2: attach the captured face and finish.
@@ -586,24 +621,28 @@ class _AcademyStudentRegistrationScreenState
   Future<void> _submit() async {
     setState(() => _submitting = true);
     try {
-      // Wait for the background Phase-1 save to finish (usually already done by
-      // the time 5 photos are captured). Swallow its error — the fallback
-      // one-shot create below handles a failed/incomplete Phase 1.
-      if (_detailsSave != null) {
-        try { await _detailsSave; } catch (_) {}
-      }
-      if (_studentId != null) {
-        debugPrint('[register] submit: attaching face to existing student '
-            '$_studentId (${_faceImages.length} images)');
-        await AcademyApiService.updateStudentFace(_studentId!, _faceImages);
+      if (_embedDone != null && _studentId != null) {
+        // Pre-embed already in flight since the 5th capture — just await it.
+        debugPrint('[register] submit: awaiting pre-started embed for $_studentId');
+        await _embedDone;
       } else {
-        debugPrint('[register] submit: one-shot create with face '
-            '(${_faceImages.length} images) — Phase 1 had not produced an id');
-        final res = await AcademyApiService.registerStudent({
-          ..._detailsBody(),
-          'face_images': _faceImages,
-        });
-        _studentId = res['id'] as String?;
+        // Fallback: pre-embed didn't start (Phase 1 hadn't produced an id yet).
+        if (_detailsSave != null) {
+          try { await _detailsSave; } catch (_) {}
+        }
+        if (_studentId != null) {
+          debugPrint('[register] submit: attaching face to existing student '
+              '$_studentId (${_faceImages.length} images)');
+          await AcademyApiService.updateStudentFace(_studentId!, _faceImages);
+        } else {
+          debugPrint('[register] submit: one-shot create with face '
+              '(${_faceImages.length} images) — Phase 1 had not produced an id');
+          final res = await AcademyApiService.registerStudent({
+            ..._detailsBody(),
+            'face_images': _faceImages,
+          });
+          _studentId = res['id'] as String?;
+        }
       }
 
       if (mounted) {
