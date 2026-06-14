@@ -120,7 +120,7 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen> {
             FaceService.cameraImageToInputImage(image, _frontCamera!);
         if (inputImage == null) return;
 
-        final faces = await FaceService.detectFaces(inputImage);
+        final faces = await FaceService.detectFacesForScan(inputImage);
         if (!mounted) return;
 
         if (faces.isEmpty) {
@@ -218,9 +218,9 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen> {
       };
     });
 
-    // Reset overlay after 3 s
+    // Result card visible for 2.5 s — stream restarts independently at 0.8 s.
     _overlayTimer?.cancel();
-    _overlayTimer = Timer(const Duration(seconds: 3), () {
+    _overlayTimer = Timer(const Duration(milliseconds: 2500), () {
       if (mounted) {
         setState(() {
           _overlayState = FaceOverlayState.idle;
@@ -229,13 +229,16 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen> {
       }
     });
 
-    final debounceSecs = (success &&
+    // Success: 800 ms is enough to prevent the same person re-triggering before
+    // they step away; the result card stays visible for the full overlay timer.
+    // Failure: 500 ms gives quick retry without hammering the API.
+    final debounceMs = (success &&
             (action == 'checkin' || action == 'checkout' || action == 'duplicate'))
-        ? 3
-        : 2;
+        ? 800
+        : 500;
 
     _debounceTimer?.cancel();
-    _debounceTimer = Timer(Duration(seconds: debounceSecs), () {
+    _debounceTimer = Timer(Duration(milliseconds: debounceMs), () {
       _debouncing = false;
       if (!_streamRunning && mounted && _cameraCtrl != null) {
         _startScanning();

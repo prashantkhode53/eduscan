@@ -4,12 +4,25 @@ import 'package:camera/camera.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 
 class FaceService {
+  // Accurate detector with full geometry — used only during student registration.
   static final FaceDetector _detector = FaceDetector(
     options: FaceDetectorOptions(
-      enableLandmarks: true,
-      enableContours: true,
+      enableLandmarks:      true,
+      enableContours:       true,
       enableClassification: true,
-      performanceMode: FaceDetectorMode.accurate,
+      performanceMode:      FaceDetectorMode.accurate,
+    ),
+  );
+
+  // Fast, lightweight detector — used during live attendance scanning.
+  // Contours/landmarks are not needed here; scanQualityHint only reads
+  // headEulerAngle* and boundingBox, both available in fast mode.
+  static final FaceDetector _scanDetector = FaceDetector(
+    options: FaceDetectorOptions(
+      enableLandmarks:      false,
+      enableContours:       false,
+      enableClassification: false,
+      performanceMode:      FaceDetectorMode.fast,
     ),
   );
 
@@ -35,8 +48,15 @@ class FaceService {
     );
   }
 
+  /// Full-accuracy detection — use during student registration only.
   static Future<List<Face>> detectFaces(InputImage inputImage) async {
     return _detector.processImage(inputImage);
+  }
+
+  /// Fast detection — use during live attendance scanning.
+  /// Skips contours/landmarks; only euler angles and bounding box are needed.
+  static Future<List<Face>> detectFacesForScan(InputImage inputImage) async {
+    return _scanDetector.processImage(inputImage);
   }
 
   /// Generates a 128-D embedding that is invariant to:
@@ -222,5 +242,8 @@ class FaceService {
   static double _magnitude(List<double> v) =>
       sqrt(v.fold(0.0, (s, x) => s + x * x));
 
-  static void dispose() => _detector.close();
+  static void dispose() {
+    _detector.close();
+    _scanDetector.close();
+  }
 }
