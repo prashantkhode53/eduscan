@@ -331,6 +331,25 @@ class AcademyApiService {
     return _parse(res) as Map<String, dynamic>;
   }
 
+  /// Probes whether the face-recognition service is awake and its model loaded.
+  /// Returns true only when InsightFace reports ready. The probe itself nudges
+  /// a sleeping Render container to wake, so repeated calls converge to ready.
+  /// Best-effort: returns false (never throws) on any timeout/network error so
+  /// the scan screen can simply keep polling.
+  static Future<bool> checkScanReady() async {
+    try {
+      final uri = Uri.parse(ApiEndpoints.health)
+          .replace(queryParameters: {'include': 'insightface'});
+      final res = await _http.get(uri).timeout(const Duration(seconds: 12));
+      if (res.statusCode != 200) return false;
+      final body = jsonDecode(res.body) as Map<String, dynamic>;
+      final insightface = body['insightface'] as Map<String, dynamic>?;
+      return insightface?['ready'] == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   static Future<Map<String, dynamic>> updateStudent(
       String id, Map<String, dynamic> body) async {
     final res = await _http.patch(Uri.parse('${ApiEndpoints.academyStudents}/$id'),

@@ -32,6 +32,15 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen> {
   Timer? _debounceTimer;
   Timer? _overlayTimer;
 
+  // ── InsightFace warmup ─────────────────────────────────────────────────────
+  // Render's free tier sleeps the Python face service after ~15 min idle, and a
+  // cold start takes 60-90 s to load the ArcFace model. We poll readiness on
+  // entry and gate scanning until the service confirms it's awake, so the first
+  // student doesn't hit a silent "service unavailable" failure.
+  bool _scanReady     = false;
+  bool _checkingReady = false;
+  Timer? _warmupTimer;
+
   int _checkedIn  = 0;
   int _checkedOut = 0;
 
@@ -45,10 +54,45 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen> {
     super.initState();
     _now = DateTime.now();
     _initCamera();
+    _startWarmup();
     _clockTimer = Timer.periodic(
         const Duration(seconds: 1), (_) {
       if (mounted) setState(() => _now = DateTime.now());
     });
+  }
+
+  /// Polls InsightFace readiness every 3 s until it reports awake. Runs in
+  /// parallel with camera init so the warm-up overlaps the camera permission /
+  /// start latency. The probe itself wakes a sleeping Render container.
+  void _startWarmup() {
+    _pollReady();
+    _warmupTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      if (_scanReady) {
+        _warmupTimer?.cancel();
+        return;
+      }
+      _pollReady();
+    });
+  }
+
+  Future<void> _pollReady() async {
+    if (_checkingReady || _scanReady) return;
+    _checkingReady = true;
+    try {
+      final ready = await AcademyApiService.checkScanReady();
+      if (!mounted) return;
+      if (ready) {
+        setState(() {
+          _scanReady = true;
+          if (_overlayState == FaceOverlayState.idle) {
+            _scanStatus = 'Looking for face...';
+          }
+        });
+        _warmupTimer?.cancel();
+      }
+    } finally {
+      _checkingReady = false;
+    }
   }
 
   Future<void> _initCamera() async {
@@ -147,6 +191,18 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen> {
             _overlayState = FaceOverlayState.idle;
             _scanStatus   = hint;
           });
+          return;
+        }
+
+        // Face is good, but hold off until the recognition service is awake —
+        // otherwise the capture would fail with "service unavailable". Nudge
+        // the readiness check so we wake the container while the user waits.
+        if (!_scanReady) {
+          setState(() {
+            _overlayState = FaceOverlayState.idle;
+            _scanStatus   = 'Warming up face recognition…';
+          });
+          _pollReady();
           return;
         }
 
@@ -256,6 +312,8 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen> {
     _debounceTimer = null;
     _overlayTimer?.cancel();
     _overlayTimer = null;
+    _warmupTimer?.cancel();
+    _warmupTimer = null;
     if (_streamRunning && _cameraCtrl != null &&
         _cameraCtrl!.value.isInitialized) {
       try { _cameraCtrl!.stopImageStream(); } catch (_) {}
@@ -319,6 +377,35 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen> {
                   ],
                 ),
               ),
+
+              // ── Warmup banner ──────────────────────────────────────────
+              if (!_scanReady)
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 8),
+                  color: Colors.amber.shade900,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white),
+                      ),
+                      const SizedBox(width: 10),
+                      Flexible(
+                        child: Text(
+                          'Warming up face recognition… first scan may take '
+                          'up to a minute.',
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 12),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
 
               // ── Camera preview ─────────────────────────────────────────
               SizedBox(

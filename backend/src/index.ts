@@ -10,6 +10,7 @@ import { runMigrations } from './db/migrations';
 import { reconcileAcademySchemas } from './db/academyMigrations';
 import { errorHandler, notFound } from './middleware/errorHandler';
 import { startKeepAlive } from './utils/keepAlive';
+import { checkReady } from './utils/insightface';
 
 import authRoutes from './routes/auth';
 import academyRoutes from './routes/academy';
@@ -43,10 +44,10 @@ app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 
 // Health check — exempt from rate limiting
-app.get('/api/health', async (_req, res) => {
+app.get('/api/health', async (req, res) => {
   try {
     await pool.query('SELECT 1');
-    res.json({
+    const base = {
       success: true,
       status: 'ok',
       db: 'connected',
@@ -54,7 +55,15 @@ app.get('/api/health', async (_req, res) => {
       database: 'Neon PostgreSQL',
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
-    });
+    };
+    // Optional InsightFace readiness probe — used by the scan-screen warmup.
+    // Gated behind ?include=insightface so the keep-alive ping stays cheap.
+    if (req.query.include === 'insightface') {
+      const insightface = await checkReady();
+      res.json({ ...base, insightface });
+      return;
+    }
+    res.json(base);
   } catch (err) {
     res.status(500).json({ success: false, status: 'error', db: 'disconnected' });
   }

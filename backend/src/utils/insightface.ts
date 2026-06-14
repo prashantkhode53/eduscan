@@ -46,6 +46,28 @@ export function warmup(): void {
 }
 
 /**
+ * Probe InsightFace readiness for the scan-screen warmup.
+ *
+ * Returns:
+ *   reachable — the container answered (HTTP responded) within the timeout
+ *   ready     — the container answered AND the ArcFace model is loaded
+ *
+ * On a cold Render container the fetch will time out; we report
+ * { reachable:false, ready:false } but the request itself nudges Render to
+ * start spinning the container up, so repeated polls converge to ready.
+ */
+export async function checkReady(timeoutMs = 5_000): Promise<{ reachable: boolean; ready: boolean }> {
+  try {
+    const res = await fetch(`${BASE_URL}/health`, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) return { reachable: true, ready: false };
+    const data = await res.json() as { ready?: boolean };
+    return { reachable: true, ready: data.ready === true };
+  } catch {
+    return { reachable: false, ready: false };
+  }
+}
+
+/**
  * Send multiple base64-encoded JPEG images to Python and get back a 512-D
  * averaged ArcFace embedding.  Called during student registration.
  * Timeout is 90 s to survive a cold-start on Render's free tier.
