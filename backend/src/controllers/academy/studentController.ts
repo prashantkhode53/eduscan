@@ -1099,16 +1099,16 @@ export async function updateStudent(
         // preserved; status + paid_date are recomputed from the new balance.
         const { rowCount: updated } = await client.query(
           `UPDATE fee_records
-           SET amount_due = $3,
+           SET amount_due = $3::numeric,
                status = CASE
-                          WHEN amount_paid >= $3       THEN 'paid'
-                          WHEN due_date < CURRENT_DATE THEN 'overdue'
-                          WHEN amount_paid > 0         THEN 'partial'
+                          WHEN amount_paid >= $3::numeric THEN 'paid'
+                          WHEN due_date < CURRENT_DATE     THEN 'overdue'
+                          WHEN amount_paid > 0             THEN 'partial'
                           ELSE 'pending'
                         END,
-               paid_date  = CASE WHEN amount_paid >= $3 THEN paid_date ELSE NULL END,
+               paid_date  = CASE WHEN amount_paid >= $3::numeric THEN paid_date ELSE NULL END,
                updated_at = NOW()
-           WHERE student_id = $1 AND course_id = $2
+           WHERE student_id = $1 AND course_id = $2::uuid
              AND subject_id IS NULL`,
           [id, agg.course_id, totalFee]
         );
@@ -1117,13 +1117,13 @@ export async function updateStudent(
         if (!updated) {
           await client.query(
             `INSERT INTO fee_records (student_id, course_id, amount_due, due_date, status)
-             SELECT $1, $2, $3, COALESCE(c.fee_due_date, CURRENT_DATE),
-                    CASE WHEN $3 <= 0 THEN 'paid' ELSE 'pending' END
+             SELECT $1::varchar, $2::uuid, $3::numeric, COALESCE(c.fee_due_date, CURRENT_DATE),
+                    CASE WHEN $3::numeric <= 0 THEN 'paid' ELSE 'pending' END
              FROM courses c
-             WHERE c.id = $2
+             WHERE c.id = $2::uuid
                AND NOT EXISTS (
                  SELECT 1 FROM fee_records fr
-                 WHERE fr.student_id = $1 AND fr.course_id = $2 AND fr.subject_id IS NULL
+                 WHERE fr.student_id = $1::varchar AND fr.course_id = $2::uuid AND fr.subject_id IS NULL
                )`,
             [id, agg.course_id, totalFee]
           );
