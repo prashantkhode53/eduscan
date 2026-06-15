@@ -66,7 +66,7 @@ class _AcademyStudentRegistrationScreenState
   String _qualityHint   = '';
   FaceOverlayState _overlayState = FaceOverlayState.idle;
   final List<String> _faceImages = [];
-  static const int _requiredSamples = 5;
+  static const int _requiredSamples = 3;
   int _captureCount = 0;
   Timer? _progressTicker;
 
@@ -86,7 +86,7 @@ class _AcademyStudentRegistrationScreenState
   String? _studentId;
   bool _savingDetails = false;
   Future<void>? _detailsSave;  // in-flight Phase 1 (runs in the background)
-  Future<void>? _embedDone;   // pre-started embed kicked off after 5th capture
+  Future<void>? _embedDone;   // pre-started embed kicked off after last capture
 
   @override
   void initState() {
@@ -596,7 +596,7 @@ class _AcademyStudentRegistrationScreenState
     }
   }
 
-  /// Background embed: called immediately after the 5th capture so the
+  /// Background embed: called immediately after the final capture so the
   /// InsightFace round-trip runs while the user taps "Register Student".
   /// Errors are NOT swallowed — _submit() awaits this and handles them.
   Future<void> _beginEmbed() async {
@@ -622,7 +622,7 @@ class _AcademyStudentRegistrationScreenState
     setState(() => _submitting = true);
     try {
       if (_embedDone != null && _studentId != null) {
-        // Pre-embed already in flight since the 5th capture — just await it.
+        // Pre-embed already in flight since the final capture — just await it.
         debugPrint('[register] submit: awaiting pre-started embed for $_studentId');
         await _embedDone;
       } else {

@@ -86,7 +86,7 @@ class _AcademyStudentEditScreenState
   String _qualityHint   = '';
   FaceOverlayState _overlayState = FaceOverlayState.idle;
   final List<String> _faceImages = [];
-  static const int _requiredSamples = 5;
+  static const int _requiredSamples = 3;
   int _captureCount = 0;
   Timer? _progressTicker;
   Timer? _stallTimer;
