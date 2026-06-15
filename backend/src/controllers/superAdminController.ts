@@ -2,6 +2,48 @@ import { Request, Response, NextFunction } from 'express';
 import bcrypt from 'bcrypt';
 import { sharedPool, academyQuery, academyQueryOne, academyExec } from '../db/poolManager';
 import { AppError } from '../middleware/errorHandler';
+import { cacheDelete } from '../utils/insightface';
+
+// ── Internal: purge a deleted academy's faces from the Redis cache ────────────
+
+/**
+ * Collect the student IDs of an academy that have a face cached, so they can be
+ * removed from Redis AFTER the schema is dropped. Must run BEFORE the drop while
+ * the schema still exists. Returns [] on any error (non-fatal).
+ *
+ * Why capture-then-delete (not reconcile-against-survivors): student IDs are
+ * generated PER ACADEMY (e.g. ACF-2026-00001) and the Redis cache key is just
+ * `face_emb:<id>` with no schema scope, so the same id can exist in two
+ * academies. Reconciling against surviving IDs would wrongly KEEP a deleted
+ * academy's face when another academy happens to share the id. Deleting the
+ * captured ids directly removes exactly this academy's faces.
+ */
+async function collectAcademyFaceIds(slug: string): Promise<string[]> {
+  try {
+    const rows = await academyQuery<{ id: string }>(
+      slug, `SELECT id FROM students WHERE face_embedding IS NOT NULL`
+    );
+    return rows.map(r => r.id);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Delete the given student IDs from the InsightFace Redis cache. Non-fatal:
+ * a cache hiccup must never fail the academy delete, which has already
+ * succeeded in PostgreSQL (the hourly reconcile self-heals any leftovers).
+ */
+async function purgeFaceIdsFromCache(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  let removed = 0;
+  for (const id of ids) {
+    try { await cacheDelete(id); removed++; } catch { /* skip — self-heals hourly */ }
+  }
+  if (removed > 0) {
+    console.log(`🧹 Academy delete: removed ${removed}/${ids.length} face(s) from Redis`);
+  }
+}
 
 // ── Internal: audit log ───────────────────────────────────────────────────────
 
@@ -338,8 +380,16 @@ export async function deleteAcademy(
       return next(new AppError('Invalid academy slug format', 400));
     }
 
+    // Capture this academy's cached face IDs BEFORE dropping the schema — once
+    // it's gone we can no longer look them up.
+    const faceIds = await collectAcademyFaceIds(slug);
+
     await sharedPool.query(`DROP SCHEMA IF EXISTS "${slug}" CASCADE`);
     await sharedPool.query(`DELETE FROM academies WHERE slug = $1`, [slug]);
+
+    // Remove this academy's faces from the Redis cache so they can no longer
+    // surface in scans. Runs AFTER the DB delete and is non-fatal.
+    await purgeFaceIdsFromCache(faceIds);
 
     await auditLog(
       req.admin!.id, 'DELETE_ACADEMY', slug,
