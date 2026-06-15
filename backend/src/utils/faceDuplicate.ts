@@ -27,20 +27,27 @@ import { cosineSimilarity } from './faceMatch';
 export const FACE_LOCK_KEY = 'face_register';
 
 /**
- * Convert a lock key string to a stable int64 for pg_advisory_xact_lock.
+ * Convert a lock key string to a stable pair of signed int4 classid/objid for
+ * the two-arg `pg_advisory_xact_lock(int4, int4)` overload.
  *
  * We compute this in Node.js (not via hashtext() in SQL) because hashtext()
- * returns int4 and the cast to int8 triggers PG error 42883 on Neon/PgBouncer
- * transaction-mode connections that resolve function overloads differently.
- * SHA-256 → take first 8 bytes as a signed BigInt → clamp to JS safe integer.
+ * returns int4 and casting to int8 triggers PG error 42883 on Neon/PgBouncer.
+ * We deliberately use the (int4, int4) overload — NOT (bigint) — because a
+ * single bigint argument requires either a runtime cast or a typed parameter,
+ * and on PgBouncer transaction-mode connections that surfaces as 42883
+ * (overload ambiguity, small positive ints) or 42P08 (indeterminate parameter
+ * type for `$1::bigint`). Two plain int4 values bind unambiguously as JS
+ * numbers with no cast, so neither error can occur.
+ *
+ * SHA-256 → first 4 bytes = classid (int4), next 4 bytes = objid (int4),
+ * both read as signed so they always fit Postgres' int4 range.
  */
-export function slugToLockId(key: string): string {
+export function slugToLockId(key: string): { classId: number; objId: number } {
   const buf = createHash('sha256').update(key).digest();
-  // Read first 8 bytes as a signed 64-bit big-endian integer.
-  const hi = buf.readInt32BE(0);
-  const lo = buf.readUInt32BE(4);
-  const big = (BigInt(hi) << 32n) | BigInt(lo);
-  return big.toString();
+  return {
+    classId: buf.readInt32BE(0),
+    objId:   buf.readInt32BE(4),
+  };
 }
 
 export interface DuplicateMatch {
