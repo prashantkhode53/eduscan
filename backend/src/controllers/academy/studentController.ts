@@ -23,9 +23,28 @@ function regLog(slug: string, phase: string, extra?: Record<string, unknown>): v
 
 // ── ID generation ─────────────────────────────────────────────────────────────
 
+/**
+ * Build the stable per-academy student-ID prefix, e.g. "BRIG-58-".
+ *
+ * Globally unique across academies because it is derived from the academy
+ * slug, which is itself globally unique:
+ *   - letters:  first 4 alphabetic chars of the slug, uppercased (padded with
+ *               'X' if the slug has <4 letters; "ACAD" if it has none).
+ *   - 2-digit:  deterministic slug hash mod 100, zero-padded — fixed for the
+ *               academy, requires no stored column.
+ * The letters carry the real uniqueness guarantee, so even two academies that
+ * hash to the same 2-digit number (e.g. BRIG-58 vs PRIN-58) never collide.
+ */
+function studentIdPrefix(slug: string): string {
+  const letters = (slug.replace(/[^a-z]/g, '').toUpperCase() + 'XXXX').slice(0, 4);
+  let h = 0;
+  for (let i = 0; i < slug.length; i++) h = (h * 31 + slug.charCodeAt(i)) >>> 0;
+  const num = (h % 100).toString().padStart(2, '0');
+  return `${letters}-${num}-`;
+}
+
 async function generateStudentId(slug: string): Promise<string> {
-  const year   = new Date().getFullYear();
-  const prefix = `ACF-${year}-`;
+  const prefix = studentIdPrefix(slug);
   // Use MAX over the numeric suffix of existing IDs, not COUNT. COUNT causes
   // primary-key collisions when there are gaps (e.g. orphaned face-less
   // students from abandoned two-phase registrations).
@@ -463,25 +482,10 @@ export async function bulkUploadStudents(
       courseMap.set(c.name.trim().toLowerCase(), { id: c.id, default_fee: Number(c.default_fee) });
     }
 
-    // Fetch first active subject per course so bulk-uploaded students receive
-    // student_subjects entries (required for the edit-screen auto-restore and
-    // subject-level fee generation). The migration seeds existing students but
-    // new bulk uploads after the migration must be handled here.
-    const allCourseIds = [...courseMap.values()].map(c => c.id);
-    const bulkSubjectRows = allCourseIds.length > 0
-      ? await academyQuery<{ id: string; course_id: string }>(
-          academySlug,
-          `SELECT DISTINCT ON (course_id) id, course_id
-           FROM subjects WHERE course_id = ANY($1::uuid[]) AND is_active = TRUE
-           ORDER BY course_id, created_at`,
-          [allCourseIds]
-        )
-      : [];
-    const subjectByCourseId = new Map(bulkSubjectRows.map(s => [s.course_id, s.id]));
-
-    // Current max ID sequence for bulk ID generation.
-    const year = new Date().getFullYear();
-    const prefix = `ACF-${year}-`;
+    // Current max ID sequence for bulk ID generation. Uses the same stable
+    // per-academy prefix (e.g. "BRIG-58-") as single registration so bulk and
+    // single-import IDs share one continuous sequence and stay globally unique.
+    const prefix = studentIdPrefix(academySlug);
     const maxRow = await academyQueryOne<{ max_seq: string | null }>(
       academySlug,
       `SELECT MAX(CAST(SUBSTRING(id FROM LENGTH($1) + 1) AS INTEGER)) AS max_seq
@@ -623,19 +627,11 @@ export async function bulkUploadStudents(
                   [row.params[0], course.id, course.default_fee]
                 );
                 results.course_assignments++;
-
-                // Also enrol in the first active subject for this course so
-                // subject-level fee generation and edit-screen restore work.
-                const bulkSubjectId = subjectByCourseId.get(course.id);
-                if (bulkSubjectId) {
-                  await client.query(
-                    `INSERT INTO student_subjects
-                       (student_id, subject_id, fee_amount, start_date, status)
-                     VALUES ($1, $2, $3, CURRENT_DATE, 'active')
-                     ON CONFLICT (student_id, subject_id) DO NOTHING`,
-                    [row.params[0], bulkSubjectId, course.default_fee]
-                  );
-                }
+                // NOTE: subjects are intentionally NOT auto-assigned here.
+                // Bulk upload enrols the student in the COURSE only; subject
+                // selection (and per-subject fees) is done later by the user in
+                // the Student Register/Edit screen. Auto-assigning the "first"
+                // subject previously created unwanted ₹0 subject entries.
               }
             }
           } else {
