@@ -78,7 +78,7 @@ function selectSql(hasExclude: boolean): string {
     LEFT JOIN student_courses sc ON sc.student_id = s.id AND sc.status = 'active'
     LEFT JOIN courses c ON c.id = sc.course_id
     WHERE s.status = 'active' AND s.face_embedding IS NOT NULL
-      ${hasExclude ? 'AND s.id <> $1::uuid' : ''}
+      ${hasExclude ? 'AND s.id <> $1' : ''}
     GROUP BY s.id`;
 }
 
