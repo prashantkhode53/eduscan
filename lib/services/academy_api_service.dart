@@ -461,6 +461,23 @@ class AcademyApiService {
     return _parse(res) as Map<String, dynamic>;
   }
 
+  /// Installment-wise export data for the selected Academic Year + Course(s).
+  /// Returns { academic_year_name, course_label, start_month, students: [...] }
+  /// where each student has a `monthly` map (YYYY-MM → amount, IST) and `total`.
+  static Future<Map<String, dynamic>> getFeesExportData({
+    required String academicYearId,
+    required List<String> courseIds,
+  }) async {
+    final uri = Uri.parse('${ApiEndpoints.academyFees}/export-data').replace(
+      queryParameters: {
+        'academic_year_id': academicYearId,
+        'course_ids':       courseIds.join(','),
+      },
+    );
+    final res = await _http.get(uri, headers: await _headers()).timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
   static Future<Map<String, dynamic>> generateMonthlyFees() async {
     final res = await _http.post(
           Uri.parse('${ApiEndpoints.academyFees}/generate'),

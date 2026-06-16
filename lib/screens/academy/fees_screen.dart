@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../services/academy_api_service.dart';
 import '../../services/fee_pdf_service.dart';
+import '../../services/fee_excel_service.dart';
 import '../../providers/auth_provider.dart';
 import '../../utils/fee_format.dart';
 import '../../utils/date_utils.dart' as du;
@@ -58,8 +59,8 @@ class _FeesScreenState extends State<FeesScreen>
   @override
   void initState() {
     super.initState();
-    // Tabs: Students + 5 status tabs + Receipts = 7
-    _tabCtrl = TabController(length: _tabs.length + 2, vsync: this);
+    // Tabs: Students + 5 status tabs + Receipts + Export Excel = 8
+    _tabCtrl = TabController(length: _tabs.length + 3, vsync: this);
     _tabCtrl.addListener(() { if (mounted) setState(() {}); });
     _loadMeta();
   }
@@ -254,6 +255,7 @@ class _FeesScreenState extends State<FeesScreen>
                         ),
                       )),
                   const Tab(text: 'Receipts'),
+                  const Tab(text: 'Export Excel'),
                 ],
               )
             : null,
@@ -429,6 +431,17 @@ class _FeesScreenState extends State<FeesScreen>
                   yearId:    _yearId,
                   courseIds: _courseIds.toList(),
                   reloadTrigger: _reloadTrigger,
+                ),
+                // Tab 7: Export Excel
+                _ExportExcelTab(
+                  yearId:    _yearId,
+                  courseIds: _courseIds.toList(),
+                  yearName:  _years.firstWhere(
+                        (y) => y['id'] == _yearId,
+                        orElse: () => const {},
+                      )['academic_year_name'] as String? ??
+                      '',
+                  courseCount: _courseIds.length,
                 ),
               ],
             ),
@@ -2160,6 +2173,173 @@ class _Tab {
   final String label;
   final String? status;
   const _Tab(this.label, this.status);
+}
+
+// ── Export Excel tab ──────────────────────────────────────────────────────────
+
+class _ExportExcelTab extends StatefulWidget {
+  final String? yearId;
+  final List<String> courseIds;
+  final String yearName;
+  final int courseCount;
+
+  const _ExportExcelTab({
+    required this.yearId,
+    required this.courseIds,
+    required this.yearName,
+    required this.courseCount,
+  });
+
+  @override
+  State<_ExportExcelTab> createState() => _ExportExcelTabState();
+}
+
+class _ExportExcelTabState extends State<_ExportExcelTab>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  bool _generating = false;
+
+  Future<void> _download() async {
+    if (_generating) return;
+    final yearId = widget.yearId;
+    if (yearId == null || widget.courseIds.isEmpty) return;
+    setState(() => _generating = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final data = await AcademyApiService.getFeesExportData(
+        academicYearId: yearId,
+        courseIds:      widget.courseIds,
+      );
+      final students = (data['students'] as List? ?? []);
+      if (students.isEmpty) {
+        if (mounted) {
+          messenger.showSnackBar(const SnackBar(
+            content: Text('No students found for the selected year and course(s).'),
+            backgroundColor: Colors.orange,
+          ));
+        }
+        return;
+      }
+      final path = await FeeExcelService.generate(data);
+      if (mounted) {
+        messenger.showSnackBar(SnackBar(
+          content: Text('Exported ${students.length} students • ${path.split(RegExp(r'[\\/]')).last}'),
+          backgroundColor: Colors.green,
+        ));
+      }
+    } catch (e) {
+      if (mounted) {
+        messenger.showSnackBar(SnackBar(
+          content: Text(e.toString().replaceFirst('Exception: ', '')),
+          backgroundColor: Colors.red,
+        ));
+      }
+    } finally {
+      if (mounted) setState(() => _generating = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    final theme = Theme.of(context);
+    final courseLabel = widget.courseCount == 1
+        ? '1 course'
+        : '${widget.courseCount} courses';
+
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.table_view_outlined,
+                size: 64, color: theme.colorScheme.primary),
+            const SizedBox(height: 16),
+            Text('Export Fee Collection',
+                style: theme.textTheme.titleLarge
+                    ?.copyWith(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            Text(
+              'Download an installment-wise (month-by-month) fee collection '
+              'ledger for the selected scope.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  fontSize: 13,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.65)),
+            ),
+            const SizedBox(height: 20),
+
+            // Active scope summary
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainerLow,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: theme.colorScheme.outlineVariant),
+              ),
+              child: Column(
+                children: [
+                  _scopeRow(theme, Icons.calendar_today_outlined,
+                      'Academic Year', widget.yearName.isEmpty ? '—' : widget.yearName),
+                  const SizedBox(height: 8),
+                  _scopeRow(theme, Icons.menu_book_outlined, 'Courses', courseLabel),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: _generating ? null : _download,
+                icon: _generating
+                    ? const SizedBox(
+                        width: 18, height: 18,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white))
+                    : const Icon(Icons.download_outlined),
+                label: Text(_generating ? 'Generating…' : 'Download Excel'),
+                style: FilledButton.styleFrom(
+                    minimumSize: const Size.fromHeight(52)),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Includes monthly installments, per-student totals, and a grand '
+              'total row. Exported as .xlsx.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  fontSize: 11,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.5)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _scopeRow(ThemeData theme, IconData icon, String label, String value) =>
+      Row(
+        children: [
+          Icon(icon, size: 16, color: theme.colorScheme.primary),
+          const SizedBox(width: 8),
+          Text(label,
+              style: TextStyle(
+                  fontSize: 13,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.7))),
+          const Spacer(),
+          Flexible(
+            child: Text(value,
+                textAlign: TextAlign.right,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    fontSize: 13, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      );
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────────

@@ -905,3 +905,150 @@ export async function resendReceipt(
     });
   } catch (err) { next(err); }
 }
+
+// ── GET /api/academy/fees/export-data ─────────────────────────────────────────
+// Returns the data for the installment-wise Excel ledger: every active student
+// enrolled in the selected academic year + course(s), with their fee collections
+// bucketed by the IST month of payment (fee_receipts.generated_at). The client
+// builds the .xlsx. Scoped to the same Academic Year + Courses as the rest of
+// Fees Management so the grand total reconciles with the dashboard's collected
+// figure (both derive from fee_receipt_items.amount_paid over the same scope).
+
+export async function getFeesExportData(
+  req: Request, res: Response, next: NextFunction
+): Promise<void> {
+  try {
+    const { academySlug } = req.academyUser!;
+    const { academic_year_id, course_ids } = req.query as Record<string, string>;
+
+    const yearId = academic_year_id || null;
+    const courseIds: string[] | null =
+      course_ids ? course_ids.split(',').map(s => s.trim()).filter(Boolean) : null;
+
+    if (!yearId)            return next(new AppError('academic_year_id is required', 400));
+    if (!courseIds?.length) return next(new AppError('course_ids is required', 400));
+
+    // Academic-year label for the filename/header.
+    const year = await academyQueryOne<{ academic_year_name: string; start_date: Date | string }>(
+      academySlug,
+      `SELECT academic_year_name, start_date FROM academic_years WHERE id = $1`,
+      [yearId]
+    );
+    if (!year) return next(new AppError('Academic year not found', 404));
+
+    // Course label(s) for the header — "NEET (Physics, Chemistry)". When more
+    // than one course is selected, the per-student label still lists that
+    // student's own course+subjects; this header value is a coarse summary.
+    const courseRows = await academyQuery<{ id: string; name: string }>(
+      academySlug,
+      `SELECT id, name FROM courses WHERE id = ANY($1::uuid[]) ORDER BY name`,
+      [courseIds]
+    );
+    const courseHeaderLabel = courseRows.length === 1
+      ? courseRows[0].name
+      : courseRows.length > 1 ? 'Multiple Courses' : '';
+
+    // Students in scope: active students with at least one active enrollment in
+    // one of the selected courses (which themselves belong to the selected year).
+    // course_label = "Course (Subject1, Subject2)" for each course the student is
+    // enrolled in within the selected set.
+    const students = await academyQuery<{
+      student_id: string; name: string; mobile: string | null;
+      course_label: string | null;
+    }>(
+      academySlug,
+      `SELECT
+         s.id        AS student_id,
+         TRIM(s.first_name || ' ' || s.last_name) AS name,
+         s.mobile,
+         (
+           SELECT STRING_AGG(lbl, '; ' ORDER BY lbl)
+           FROM (
+             SELECT c.name ||
+               COALESCE(
+                 ' (' || ${subjectNamesSql('s.id', 'c.id')} || ')', ''
+               ) AS lbl
+             FROM courses c
+             WHERE c.id = ANY($2::uuid[])
+               AND c.academic_year_id = $1
+               AND EXISTS (
+                 SELECT 1 FROM student_subjects ss2
+                 JOIN subjects sub2 ON sub2.id = ss2.subject_id
+                 WHERE ss2.student_id = s.id
+                   AND sub2.course_id = c.id
+                   AND ss2.status = 'active'
+               )
+           ) labels
+         ) AS course_label
+       FROM students s
+       WHERE s.status = 'active'
+         AND EXISTS (
+           SELECT 1
+           FROM student_subjects ss
+           JOIN subjects sub ON sub.id = ss.subject_id
+           JOIN courses  c   ON c.id   = sub.course_id
+           WHERE ss.student_id = s.id
+             AND ss.status = 'active'
+             AND c.id = ANY($2::uuid[])
+             AND c.academic_year_id = $1
+         )
+       ORDER BY s.first_name, s.last_name, s.id`,
+      [yearId, courseIds]
+    );
+
+    // Monthly collections per student: sum receipt-item amounts bucketed by the
+    // IST month of the receipt's payment timestamp, restricted to the selected
+    // courses. AT TIME ZONE on a timestamptz yields the wall-clock time in IST,
+    // so the YYYY-MM bucket is the Indian calendar month of collection.
+    const monthly = await academyQuery<{
+      student_id: string; ym: string; amount: string;
+    }>(
+      academySlug,
+      `SELECT
+         r.student_id,
+         TO_CHAR(r.generated_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM') AS ym,
+         SUM(fri.amount_paid) AS amount
+       FROM fee_receipts r
+       JOIN fee_receipt_items fri ON fri.receipt_id = r.id
+       WHERE fri.course_id = ANY($1::uuid[])
+       GROUP BY r.student_id, ym`,
+      [courseIds]
+    );
+
+    // Merge monthly buckets onto each student.
+    const byStudent = new Map<string, { monthly: Record<string, number>; total: number }>();
+    for (const m of monthly) {
+      const amt = parseFloat(m.amount) || 0;
+      const e = byStudent.get(m.student_id) ?? { monthly: {}, total: 0 };
+      e.monthly[m.ym] = (e.monthly[m.ym] ?? 0) + amt;
+      e.total += amt;
+      byStudent.set(m.student_id, e);
+    }
+
+    const startDate = year.start_date instanceof Date
+      ? year.start_date
+      : new Date(String(year.start_date));
+    const startMonth = `${startDate.getUTCFullYear()}-${String(startDate.getUTCMonth() + 1).padStart(2, '0')}`;
+
+    res.json({
+      success: true,
+      data: {
+        academic_year_name: year.academic_year_name,
+        course_label:       courseHeaderLabel,
+        // Fallback start month for the client when no payments exist anywhere.
+        start_month:        startMonth,
+        students: students.map(s => {
+          const agg = byStudent.get(s.student_id);
+          return {
+            student_id:   s.student_id,
+            name:         s.name,
+            mobile:       s.mobile ?? '',
+            course_label: s.course_label ?? '',
+            monthly:      agg?.monthly ?? {},
+            total:        agg?.total ?? 0,
+          };
+        }),
+      },
+    });
+  } catch (err) { next(err); }
+}

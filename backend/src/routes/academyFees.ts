@@ -3,7 +3,7 @@ import { academyAuthMiddleware, requireRole } from '../middleware/academyAuth';
 import {
   listFees, listFeesStudentSummary, collectFee,
   generateMonthlyFees, markOverdueFees, getStudentFees,
-  listReceipts, getReceipt, resendReceipt,
+  listReceipts, getReceipt, resendReceipt, getFeesExportData,
 } from '../controllers/academy/feeController';
 
 const router = Router();
@@ -11,6 +11,7 @@ router.use(academyAuthMiddleware);
 
 router.get ('/',                          listFees);
 router.get ('/students-summary',          listFeesStudentSummary);
+router.get ('/export-data',               getFeesExportData);
 router.post('/collect',  requireRole('admin', 'teacher'), collectFee);
 router.post('/generate', requireRole('admin'), generateMonthlyFees);
 router.post('/mark-overdue', requireRole('admin'), markOverdueFees);
