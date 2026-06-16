@@ -27,6 +27,13 @@ import { cosineSimilarity } from './faceMatch';
 export const FACE_LOCK_KEY = 'face_register';
 
 /**
+ * Stable per-academy key for serialising student-ID generation. Held while a
+ * registration computes MAX(suffix)+1 and INSERTs, so two concurrent
+ * registrations can't pick the same next ID.
+ */
+export const ID_LOCK_KEY = 'student_id_seq';
+
+/**
  * Convert a lock key string to a stable pair of signed int4 classid/objid for
  * the two-arg `pg_advisory_xact_lock(int4, int4)` overload.
  *

@@ -5,7 +5,7 @@ import { AppError } from '../../middleware/errorHandler';
 import { batchEmbed, cacheUpsert, cacheDelete, warmup } from '../../utils/insightface';
 import { invalidateScanCache, getDuplicateThreshold } from '../../db/scanCache';
 import {
-  findSchemaDuplicate, findSchemaDuplicateTx, FACE_LOCK_KEY, slugToLockId,
+  findSchemaDuplicate, findSchemaDuplicateTx, FACE_LOCK_KEY, ID_LOCK_KEY, slugToLockId,
 } from '../../utils/faceDuplicate';
 
 /**
@@ -43,23 +43,40 @@ function studentIdPrefix(slug: string): string {
   return `${letters}-${num}-`;
 }
 
-async function generateStudentId(slug: string): Promise<string> {
-  const prefix = studentIdPrefix(slug);
-  // Use MAX over the numeric suffix of existing IDs, not COUNT. COUNT causes
-  // primary-key collisions when there are gaps (e.g. orphaned face-less
-  // students from abandoned two-phase registrations).
-  const row = await academyQueryOne<{ max_seq: string | null }>(
-    slug,
-    `SELECT MAX(
-       CAST(SUBSTRING(id FROM LENGTH($1) + 1) AS INTEGER)
-     ) AS max_seq
-     FROM students
-     WHERE id LIKE $2`,
-    [prefix, `${prefix}%`]
-  );
-  const seq = ((parseInt(row?.max_seq ?? '0') || 0) + 1)
-    .toString().padStart(5, '0');
+// SQL that returns the highest numeric suffix currently in use for a prefix.
+// Uses MAX over the numeric suffix of existing IDs, not COUNT. COUNT causes
+// primary-key collisions when there are gaps (e.g. orphaned face-less students
+// from abandoned two-phase registrations, or soft-deleted students).
+//
+// CRITICAL: scans ALL rows regardless of status. A student ID is reserved for
+// life, so soft-deleted ('deleted') rows must keep their suffix counted here —
+// otherwise the next registration would recycle a retired ID. (This is also why
+// orphan cleanup soft-deletes rather than physically removing rows.)
+const MAX_SUFFIX_SQL =
+  `SELECT MAX(CAST(SUBSTRING(id FROM LENGTH($1) + 1) AS INTEGER)) AS max_seq
+   FROM students
+   WHERE id LIKE $2`;
+
+function nextIdFromMax(prefix: string, maxSeq: string | null): string {
+  const seq = ((parseInt(maxSeq ?? '0') || 0) + 1).toString().padStart(5, '0');
   return `${prefix}${seq}`;
+}
+
+/**
+ * Transaction-scoped ID generation. Computes MAX(suffix)+1 on the SAME client
+ * that performs the INSERT, so it must run while holding the ID advisory lock
+ * (ID_LOCK_KEY) — that serialises concurrent registrations and guarantees two
+ * of them can't read the same MAX and mint the same ID. The PK on students.id
+ * is the final backstop.
+ */
+async function generateStudentIdTx(
+  client: import('pg').PoolClient, slug: string
+): Promise<string> {
+  const prefix = studentIdPrefix(slug);
+  const r = await client.query<{ max_seq: string | null }>(
+    MAX_SUFFIX_SQL, [prefix, `${prefix}%`]
+  );
+  return nextIdFromMax(prefix, r.rows[0]?.max_seq ?? null);
 }
 
 // ── POST /api/academy/students ────────────────────────────────────────────────
@@ -100,14 +117,21 @@ export async function registerStudent(
       courses: courses?.length ?? 0,
     });
 
-    // Remove any orphaned face-less students for this mobile number created by
+    // Retire any orphaned face-less students for this mobile number created by
     // previous abandoned two-phase registrations. They have no face_embedding,
-    // so they cannot be recognised — removing them before inserting the new
-    // record prevents duplicate-mobile confusion and cleans up the DB.
+    // so they cannot be recognised — excluding them before inserting the new
+    // record prevents duplicate-mobile confusion.
+    //
+    // IMPORTANT: soft-delete (status='deleted'), never physically DELETE. A
+    // student ID, once generated and assigned, is reserved for life and must
+    // never be recycled. Physically removing the row would drop it from the
+    // MAX(suffix) used to mint the next ID and let the next registration
+    // reuse that exact ID — a rule violation. Soft-deleting keeps the row (and
+    // thus its ID) counted forever while still excluding it from active queries.
     await academyExec(
       academySlug,
-      `DELETE FROM students
-       WHERE mobile = $1 AND face_embedding IS NULL`,
+      `UPDATE students SET status = 'deleted', updated_at = NOW()
+       WHERE mobile = $1 AND face_embedding IS NULL AND status <> 'deleted'`,
       [mobile]
     );
 
@@ -221,8 +245,10 @@ export async function registerStudent(
       }
     }
 
-    // 4 — Generate student ID + persist in academy schema
-    const studentId = await generateStudentId(academySlug);
+    // 4 — Persist in academy schema. The student ID is generated INSIDE the
+    // transaction (under the ID advisory lock) so two concurrent registrations
+    // can't read the same MAX(suffix) and mint the same ID — see the lock below.
+    let studentId = '';
 
     // First fee uses the course's fixed fee_due_date (may be null if not configured).
 
@@ -289,7 +315,7 @@ export async function registerStudent(
       return toYmd(new Date(now.getFullYear(), now.getMonth() + 1, 0));
     };
 
-    regLog(academySlug, 'db-insert', { studentId, courses: uniqueCourseEnrollments.size });
+    regLog(academySlug, 'db-insert', { courses: uniqueCourseEnrollments.size });
     try {
     await academyTransaction(academySlug, async (client) => {
       // Serialize face enrollment per academy: an advisory lock (auto-released
@@ -298,6 +324,15 @@ export async function registerStudent(
       // face-less Phase-1 saves but harmless to take unconditionally.
       const { classId, objId } = slugToLockId(`${academySlug}:${FACE_LOCK_KEY}`);
       await client.query(`SELECT pg_advisory_xact_lock($1, $2)`, [classId, objId]);
+
+      // Serialize ID generation per academy with a separate lock, then mint the
+      // ID on THIS client so MAX(suffix)+1 and the INSERT are atomic w.r.t. other
+      // registrations — no two can pick the same next ID. The students.id PK is
+      // the final backstop if anything still slips through.
+      const idLock = slugToLockId(`${academySlug}:${ID_LOCK_KEY}`);
+      await client.query(`SELECT pg_advisory_xact_lock($1, $2)`, [idLock.classId, idLock.objId]);
+      studentId = await generateStudentIdTx(client, academySlug);
+      regLog(academySlug, 'id-generated', { studentId });
 
       // Authoritative duplicate re-check UNDER the lock — closes the race
       // window between the pre-insert check above and this insert.
