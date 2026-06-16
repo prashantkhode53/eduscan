@@ -5,10 +5,9 @@ import 'package:camera/camera.dart';
 import 'package:image/image.dart' as img_lib;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show FilteringTextInputFormatter, TextInputFormatter;
-import 'package:provider/provider.dart';
-import '../../providers/academic_year_provider.dart';
 import '../../services/academy_api_service.dart';
 import '../../services/face_service.dart';
+import '../../widgets/academic_year_filter.dart';
 import '../../widgets/face_overlay_painter.dart';
 import '../../widgets/academy_course_selector.dart';
 import '../../utils/date_utils.dart' as du;
@@ -41,7 +40,13 @@ class _AcademyStudentRegistrationScreenState
   final _parentMobCtrl  = TextEditingController();
   final _addressCtrl    = TextEditingController();
 
-  // â”€â”€ Step 3: Courses â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // â”€â”€ Step 3: Academic Year filter + Courses â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // Academic Year is selected at the top of the Courses step and is used ONLY to
+  // filter the available course list (and is saved as the student's
+  // academic_year_id). No default — the admin must pick a year before courses load.
+  List<Map<String, dynamic>> _academicYears = [];
+  bool _yearsLoading = false;
+  String? _selectedYearId;
   List<Map<String, dynamic>> _availableCourses = [];
   // subjectId → custom fee (primary enrollment state)
   final Map<String, double> _selectedSubjectFees = {};
@@ -91,15 +96,50 @@ class _AcademyStudentRegistrationScreenState
   @override
   void initState() {
     super.initState();
+    _loadAcademicYears();
+  }
+
+  // Load the academic-year options for the Courses-step filter. No year is
+  // pre-selected — the admin must choose one before any courses are loaded.
+  Future<void> _loadAcademicYears() async {
+    if (!mounted) return;
+    setState(() => _yearsLoading = true);
+    try {
+      final years = await AcademyApiService.getAcademicYears();
+      if (!mounted) return;
+      setState(() {
+        _academicYears = years.where((y) => y['status'] == 'active').toList();
+        _yearsLoading  = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _yearsLoading = false);
+    }
+  }
+
+  // Called when the admin picks a year in the Courses step. Filters the course
+  // list to that year and resets any course/subject selections made under a
+  // previously chosen year.
+  void _onYearSelected(String? yearId) {
+    if (yearId == null || yearId == _selectedYearId) return;
+    setState(() {
+      _selectedYearId = yearId;
+      _availableCourses = [];
+      _selectedSubjectFees.clear();
+      _subjectsByCourse.clear();
+      _expandedCourses.clear();
+      _subjectsError.clear();
+      _courseError = null;
+    });
     _loadCourses();
   }
 
   Future<void> _loadCourses() async {
-    if (!mounted) return;
+    if (!mounted || _selectedYearId == null) return;
     setState(() { _loadingCourses = true; _courseError = null; });
     try {
-      final yearId = context.read<AcademicYearProvider>().selectedId;
-      final data = await AcademyApiService.getCourses(academicYearId: yearId);
+      final data =
+          await AcademyApiService.getCourses(academicYearId: _selectedYearId);
       if (!mounted) return;
       setState(() {
         _availableCourses = data.cast<Map<String, dynamic>>();
@@ -113,6 +153,31 @@ class _AcademyStudentRegistrationScreenState
       });
     }
   }
+
+  // Shown on the Courses step before an academic year is chosen.
+  Widget _buildPickYearPrompt(ThemeData theme) => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.event_note_outlined,
+                  size: 56,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.3)),
+              const SizedBox(height: 12),
+              Text('Select an academic year',
+                  style: theme.textTheme.titleMedium
+                      ?.copyWith(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
+              Text('Choose an academic year above to see its courses.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                      fontSize: 13,
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.6))),
+            ],
+          ),
+        ),
+      );
 
   Future<void> _loadSubjects(String courseId) async {
     if (_subjectsByCourse.containsKey(courseId) &&
@@ -203,6 +268,12 @@ class _AcademyStudentRegistrationScreenState
       if (s2Valid == false) return;
     }
     if (_step == 2) {
+      if (_selectedYearId == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Select an academic year')),
+        );
+        return;
+      }
       if (_selectedSubjectFees.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Select at least one subject')),
@@ -218,9 +289,8 @@ class _AcademyStudentRegistrationScreenState
     setState(() => _step++);
     _pageCtrl.animateToPage(_step,
         duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
-    // Reload courses each time the user enters the Courses step so a previous
-    // API failure doesn't permanently block them.
-    if (_step == 2) _loadCourses();
+    // Courses load when the admin picks an academic year on the Courses step
+    // (see _onYearSelected) — nothing to fetch on step entry.
     if (_step == 3) _initCamera();
   }
 
@@ -238,8 +308,7 @@ class _AcademyStudentRegistrationScreenState
         'subjects': _selectedSubjectFees.entries
             .map((e) => {'subject_id': e.key, 'fee_amount': e.value})
             .toList(),
-        'academic_year_id':
-            context.read<AcademicYearProvider>().selectedId,
+        'academic_year_id': _selectedYearId,
       };
 
   /// Phase 1: persist the student's details before the face scan so they are
@@ -792,29 +861,43 @@ class _AcademyStudentRegistrationScreenState
             addressCtrl: _addressCtrl,
             onNext: _goNext,
           ),
-          AcademyCourseSelector(
-            loading:            _loadingCourses,
-            error:              _courseError,
-            courses:            _availableCourses,
-            subjectsByCourse:   _subjectsByCourse,
-            selectedSubjectFees: _selectedSubjectFees,
-            expandedCourses:    _expandedCourses,
-            subjectsLoadingFor: _subjectsLoadingFor,
-            subjectsError:      _subjectsError,
-            onCourseExpand:     _loadSubjects,
-            onSubjectToggle: (subjectId, defaultFee, selected) {
-              setState(() {
-                if (selected) {
-                  _selectedSubjectFees[subjectId] = defaultFee;
-                } else {
-                  _selectedSubjectFees.remove(subjectId);
-                }
-              });
-            },
-            onSubjectFeeChanged: (subjectId, fee) =>
-                setState(() => _selectedSubjectFees[subjectId] = fee),
-            onNext:  _goNext,
-            onRetry: _loadCourses,
+          Column(
+            children: [
+              AcademicYearFilter(
+                years:      _academicYears,
+                loading:    _yearsLoading,
+                selectedId: _selectedYearId,
+                onChanged:  _onYearSelected,
+              ),
+              Expanded(
+                child: _selectedYearId == null
+                    ? _buildPickYearPrompt(theme)
+                    : AcademyCourseSelector(
+                        loading:            _loadingCourses,
+                        error:              _courseError,
+                        courses:            _availableCourses,
+                        subjectsByCourse:   _subjectsByCourse,
+                        selectedSubjectFees: _selectedSubjectFees,
+                        expandedCourses:    _expandedCourses,
+                        subjectsLoadingFor: _subjectsLoadingFor,
+                        subjectsError:      _subjectsError,
+                        onCourseExpand:     _loadSubjects,
+                        onSubjectToggle: (subjectId, defaultFee, selected) {
+                          setState(() {
+                            if (selected) {
+                              _selectedSubjectFees[subjectId] = defaultFee;
+                            } else {
+                              _selectedSubjectFees.remove(subjectId);
+                            }
+                          });
+                        },
+                        onSubjectFeeChanged: (subjectId, fee) =>
+                            setState(() => _selectedSubjectFees[subjectId] = fee),
+                        onNext:  _goNext,
+                        onRetry: _loadCourses,
+                      ),
+              ),
+            ],
           ),
           _Step4(
             camCtrl:         _camCtrl,

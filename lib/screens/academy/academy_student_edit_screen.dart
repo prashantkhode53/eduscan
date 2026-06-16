@@ -8,6 +8,7 @@ import '../../services/academy_api_service.dart';
 import '../../services/face_service.dart';
 import '../../widgets/face_overlay_painter.dart';
 import '../../widgets/academy_course_selector.dart';
+import '../../widgets/academic_year_filter.dart';
 import '../../utils/date_utils.dart' as du;
 import '../../models/subject.dart';
 
@@ -65,8 +66,13 @@ class _AcademyStudentEditScreenState
   final Map<String, String> _subjectsError = {};
   bool _loadingCourses = false;
   String? _courseError;
-  // The academic year the student was enrolled under (drives course filter)
+  // The academic year the student was enrolled under (drives course filter).
+  // Pre-selected from the student's record; the admin can change it on the
+  // Courses step to re-filter the course list.
   String? _studentAcademicYearId;
+  // Academic-year options for the Courses-step dropdown.
+  List<Map<String, dynamic>> _academicYears = [];
+  bool _yearsLoading = false;
 
   // ── Step 2: Face ───────────────────────────────────────────────────────────
   bool _hasFaceData   = false;
@@ -122,7 +128,16 @@ class _AcademyStudentEditScreenState
     try {
       final studentData = await AcademyApiService.getStudentById(widget.studentId);
 
+      // Academic-year options for the Courses-step dropdown. Non-fatal on error.
+      List<Map<String, dynamic>> years = [];
+      try {
+        years = (await AcademyApiService.getAcademicYears())
+            .where((y) => y['status'] == 'active')
+            .toList();
+      } catch (_) {}
+
       // Use the student's own academic_year_id to filter courses correctly.
+      // This pre-selects the dropdown so the existing course's year shows up.
       final yearId = studentData['academic_year_id'] as String?;
 
       // Load courses filtered to the student's academic year (parallel with subject loads).
@@ -197,6 +212,7 @@ class _AcademyStudentEditScreenState
 
       if (!mounted) return;
       setState(() {
+        _academicYears = years;
         _studentAcademicYearId = yearId;
         _availableCourses = courses;
         _selectedSubjectFees
@@ -241,6 +257,22 @@ class _AcademyStudentEditScreenState
         _loadingCourses = false;
       });
     }
+  }
+
+  // Admin changed the academic year on the Courses step → re-filter the course
+  // list. Existing (locked) enrollments are preserved; only newly-toggled, not
+  // yet saved subject selections from the previous year are dropped so the list
+  // stays consistent with the chosen year. Nothing is persisted until the admin
+  // saves on the final step.
+  void _onYearChanged(String? yearId) {
+    if (yearId == null || yearId == _studentAcademicYearId) return;
+    setState(() {
+      _studentAcademicYearId = yearId;
+      _selectedSubjectFees.removeWhere((id, _) => !_lockedSubjectIds.contains(id));
+      _expandedCourses.clear();
+      _subjectsError.clear();
+    });
+    _reloadCourses();
   }
 
   Future<void> _loadSubjects(String courseId) async {
@@ -833,8 +865,17 @@ class _AcademyStudentEditScreenState
           // ── Step 0: Personal Info ──────────────────────────────────────────
           _buildPersonalInfoStep(theme),
 
-          // ── Step 1: Courses ────────────────────────────────────────────────
-          AcademyCourseSelector(
+          // ── Step 1: Academic Year filter + Courses ─────────────────────────
+          Column(
+            children: [
+              AcademicYearFilter(
+                years:      _academicYears,
+                loading:    _yearsLoading,
+                selectedId: _studentAcademicYearId,
+                onChanged:  _onYearChanged,
+              ),
+              Expanded(
+                child: AcademyCourseSelector(
             loading:             _loadingCourses,
             error:               _courseError,
             courses:             _availableCourses,
@@ -884,6 +925,9 @@ class _AcademyStudentEditScreenState
             onNext:    _goNext,
             onRetry:   _reloadCourses,
             nextLabel: 'Continue to Face Update',
+                ),
+              ),
+            ],
           ),
 
           // ── Step 2: Face ───────────────────────────────────────────────────
