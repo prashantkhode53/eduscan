@@ -6,6 +6,7 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import '../models/attendance.dart';
 import '../models/student.dart';
+import '../utils/date_utils.dart' as du;
 
 class PdfService {
   static Future<void> exportAttendanceReport({
@@ -75,9 +76,9 @@ class PdfService {
                 r['student_id'] ?? '',
                 '${r['first_name'] ?? ''} ${r['last_name'] ?? ''}'.trim(),
                 '${r['class_grade'] ?? ''}-${r['division'] ?? ''}',
-                r['date'] ?? '',
-                r['time_in'] ?? '-',
-                r['time_out'] ?? '-',
+                du.fmtDate(r['date']?.toString()),
+                r['time_in'] != null ? du.fmtTimeOfDay(r['time_in'] as String?) : '-',
+                r['time_out'] != null ? du.fmtTimeOfDay(r['time_out'] as String?) : '-',
                 durationLabel,
                 (r['status'] ?? '').toString().toUpperCase(),
               ];
@@ -103,7 +104,8 @@ class PdfService {
     final pdf = pw.Document();
     final font = pw.Font.helvetica();
     final boldFont = pw.Font.helveticaBold();
-    final dateFmt = DateFormat('dd MMM yyyy, HH:mm');
+    // generatedAt is the device-local clock (already IST), so format directly.
+    final dateFmt = DateFormat('dd-MM-yyyy hh:mm a');
 
     pdf.addPage(
       pw.MultiPage(
@@ -222,10 +224,10 @@ class PdfService {
               headerStyle: pw.TextStyle(font: boldFont, fontSize: 9),
               cellStyle: pw.TextStyle(font: font, fontSize: 8),
               data: history.map((r) => [
-                    r.date,
+                    du.fmtDate(r.date),
                     r.status.toUpperCase(),
-                    r.timeIn ?? '-',
-                    r.timeOut ?? '-',
+                    r.timeIn != null ? du.fmtTimeOfDay(r.timeIn) : '-',
+                    r.timeOut != null ? du.fmtTimeOfDay(r.timeOut) : '-',
                     r.durationLabel,
                   ]).toList(),
             ),

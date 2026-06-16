@@ -8,6 +8,7 @@ import '../services/api_service.dart';
 import '../widgets/offline_banner.dart';
 import '../widgets/stat_card.dart';
 import '../constants/app_colors.dart';
+import '../utils/date_utils.dart' as du;
 import 'manage_academies_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -341,16 +342,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  String _fmt12(String? t) {
-    if (t == null || t.isEmpty) return '';
-    final parts = t.split(':');
-    if (parts.length < 2) return t;
-    final h    = int.tryParse(parts[0]) ?? 0;
-    final m    = parts[1];
-    final ampm = h >= 12 ? 'PM' : 'AM';
-    final h12  = h % 12 == 0 ? 12 : h % 12;
-    return '${h12.toString().padLeft(2, '0')}:$m $ampm';
-  }
+  String _fmt12(String? t) =>
+      (t == null || t.isEmpty) ? '' : du.fmtTimeOfDay(t);
 
   String _greeting() {
     final h = DateTime.now().hour;

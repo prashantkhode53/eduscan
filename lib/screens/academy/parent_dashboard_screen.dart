@@ -76,16 +76,7 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
 
   // ── Helpers ──────────────────────────────────────────────────────────────
 
-  String _fmtTime(String? t) {
-    if (t == null || t.isEmpty) return '--:--';
-    final parts = t.split(':');
-    if (parts.length < 2) return t;
-    final h   = int.tryParse(parts[0]) ?? 0;
-    final m   = parts[1];
-    final ampm = h >= 12 ? 'PM' : 'AM';
-    final h12  = h % 12 == 0 ? 12 : h % 12;
-    return '$h12:$m $ampm';
-  }
+  String _fmtTime(String? t) => du.fmtTimeOfDay(t);
 
   String _fmtDuration(dynamic mins) {
     final m = (mins as num?)?.toInt() ?? 0;

@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import '../../services/academy_api_service.dart';
 import '../../services/face_service.dart';
 import '../../services/voice_feedback_service.dart';
+import '../../utils/date_utils.dart' as du;
 import '../../widgets/face_overlay_painter.dart';
 
 class AcademyFaceScanScreen extends StatefulWidget {
@@ -700,12 +701,12 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis),
                 if (timeIn != null)
-                  Text('In: $timeIn',
+                  Text('In: ${du.fmtTimeOfDay(timeIn)}',
                       style: const TextStyle(
                           color: Colors.white70, fontSize: 12)),
                 if (timeOut != null)
                   Text(
-                    'Out: $timeOut${durationLabel != null ? '  ($durationLabel)' : ''}',
+                    'Out: ${du.fmtTimeOfDay(timeOut)}${durationLabel != null ? '  ($durationLabel)' : ''}',
                     style: const TextStyle(
                         color: Colors.white70, fontSize: 12),
                   ),
