@@ -848,7 +848,10 @@ class _AcademyStudentRegistrationScreenState
         children: [
           _Step1(
             formKey: _s1Key,
-            firstNameCtrl: _firstNameCtrl, lastNameCtrl: _lastNameCtrl,
+            firstNameCtrl: _firstNameCtrl,
+            // "Middle Name" UI field is bound to the existing parent_name controller.
+            middleNameCtrl: _parentNameCtrl,
+            lastNameCtrl: _lastNameCtrl,
             dobCtrl: _dobCtrl, mobileCtrl: _mobileCtrl, emailCtrl: _emailCtrl,
             gender: _gender,
             onGenderChanged: (v) => setState(() => _gender = v),
@@ -857,7 +860,7 @@ class _AcademyStudentRegistrationScreenState
           ),
           _Step2(
             formKey: _s2Key,
-            parentNameCtrl: _parentNameCtrl, parentMobCtrl: _parentMobCtrl,
+            parentMobCtrl: _parentMobCtrl,
             addressCtrl: _addressCtrl,
             onNext: _goNext,
           ),
@@ -993,6 +996,9 @@ class _Step1 extends StatelessWidget {
   final GlobalKey<FormState> formKey;
   final TextEditingController firstNameCtrl, lastNameCtrl, dobCtrl,
       mobileCtrl, emailCtrl;
+  // "Middle Name" in the UI is bound to the existing parent_name field/controller
+  // (intentional per the field-repositioning request — no new DB field).
+  final TextEditingController middleNameCtrl;
   final String? gender;
   final ValueChanged<String?> onGenderChanged;
   final VoidCallback onNext;
@@ -1000,6 +1006,7 @@ class _Step1 extends StatelessWidget {
 
   const _Step1({
     required this.formKey, required this.firstNameCtrl,
+    required this.middleNameCtrl,
     required this.lastNameCtrl, required this.dobCtrl,
     required this.mobileCtrl, required this.emailCtrl,
     required this.gender, required this.onGenderChanged,
@@ -1017,13 +1024,15 @@ class _Step1 extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Row(children: [
-              Expanded(child: _tf(firstNameCtrl, 'First Name *',
-                  v: (v) => v!.trim().isEmpty ? 'Required' : null)),
-              const SizedBox(width: 12),
-              Expanded(child: _tf(lastNameCtrl, 'Last Name *',
-                  v: (v) => v!.trim().isEmpty ? 'Required' : null)),
-            ]),
+            _tf(firstNameCtrl, 'First Name *',
+                v: (v) => v!.trim().isEmpty ? 'Required' : null),
+            const SizedBox(height: 12),
+            // "Middle Name" is bound to the existing parent_name controller
+            // (field repositioned from Parent Info — same DB field, new label).
+            _tf(middleNameCtrl, 'Middle Name'),
+            const SizedBox(height: 12),
+            _tf(lastNameCtrl, 'Last Name *',
+                v: (v) => v!.trim().isEmpty ? 'Required' : null),
             const SizedBox(height: 12),
             DropdownButtonFormField<String>(
               value: gender,
@@ -1103,11 +1112,12 @@ class _Step1 extends StatelessWidget {
 
 class _Step2 extends StatelessWidget {
   final GlobalKey<FormState> formKey;
-  final TextEditingController parentNameCtrl, parentMobCtrl, addressCtrl;
+  // parent_name moved to the Personal Info step (shown as "Middle Name").
+  final TextEditingController parentMobCtrl, addressCtrl;
   final VoidCallback onNext;
 
   const _Step2({
-    required this.formKey, required this.parentNameCtrl,
+    required this.formKey,
     required this.parentMobCtrl, required this.addressCtrl,
     required this.onNext,
   });
@@ -1122,13 +1132,6 @@ class _Step2 extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            TextFormField(
-              controller: parentNameCtrl,
-              decoration: const InputDecoration(
-                  labelText: 'Parent / Guardian Name',
-                  border: OutlineInputBorder()),
-            ),
-            const SizedBox(height: 12),
             TextFormField(
               controller: parentMobCtrl,
               keyboardType: TextInputType.phone,

@@ -493,11 +493,16 @@ export async function collectFee(
         ? 'All fees are now cleared.'
         : `Payment of ₹${totalAmountPaid.toFixed(0)} recorded.`;
 
+      // Greeting uses "[Middle] [Last]" — parent_name holds the value entered in
+      // the "Middle Name" UI field; combine with the student's last name.
+      const greetName =
+        [student.parent_name?.trim(), student.last_name?.trim()]
+          .filter(Boolean).join(' ') || 'Parent';
       void sendFcm({
         token: student.parent_fcm_token,
         title: 'Fee Payment Received',
         body:
-          `Dear ${student.parent_name ?? 'Parent'}, ` +
+          `Dear ${greetName}, ` +
           `₹${totalAmountPaid.toFixed(0)} received for ` +
           `${student.first_name} ${student.last_name}` +
           (subjectLine ? ` (${subjectLine})` : '') +
@@ -883,11 +888,16 @@ export async function resendReceipt(
 
     const subLine    = [receipt.course_name, receipt.subject_name].filter(Boolean).join(' › ');
     const amountStr  = parseFloat(receipt.amount_paid.toString()).toFixed(0);
+    // Greeting uses "[Middle] [Last]" — parent_name holds the value entered in
+    // the "Middle Name" UI field; combine with the student's last name.
+    const greetName =
+      [student.parent_name?.trim(), student.last_name?.trim()]
+        .filter(Boolean).join(' ') || 'Parent';
     const sent = await sendFcm({
       token: student.parent_fcm_token,
       title: 'Fee Payment Receipt',
       body:
-        `Dear ${student.parent_name ?? 'Parent'}, fee receipt for ` +
+        `Dear ${greetName}, fee receipt for ` +
         `${student.first_name} ${student.last_name}` +
         (subLine ? ` (${subLine})` : '') +
         ` ready. Amount: ₹${amountStr}. Receipt No: ${receipt.receipt_number}.`,

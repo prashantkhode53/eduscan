@@ -1028,13 +1028,15 @@ class _AcademyStudentEditScreenState
             ),
             const SizedBox(height: 16),
 
-            Row(children: [
-              Expanded(child: _tf(_firstNameCtrl, 'First Name *',
-                  v: (v) => v!.trim().isEmpty ? 'Required' : null)),
-              const SizedBox(width: 12),
-              Expanded(child: _tf(_lastNameCtrl, 'Last Name *',
-                  v: (v) => v!.trim().isEmpty ? 'Required' : null)),
-            ]),
+            _tf(_firstNameCtrl, 'First Name *',
+                v: (v) => v!.trim().isEmpty ? 'Required' : null),
+            const SizedBox(height: 12),
+            // "Middle Name" is bound to the existing parent_name controller
+            // (field repositioned from Parent Info — same DB field, new label).
+            _tf(_parentNameCtrl, 'Middle Name'),
+            const SizedBox(height: 12),
+            _tf(_lastNameCtrl, 'Last Name *',
+                v: (v) => v!.trim().isEmpty ? 'Required' : null),
             const SizedBox(height: 12),
 
             _tf(_mobileCtrl, 'Mobile *',
@@ -1086,9 +1088,6 @@ class _AcademyStudentEditScreenState
                 }
               },
             ),
-            const SizedBox(height: 12),
-
-            _tf(_parentNameCtrl, 'Parent / Guardian Name'),
             const SizedBox(height: 12),
 
             _tf(_parentMobCtrl, 'Parent Mobile',
