@@ -21,7 +21,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _passwordCtrl = TextEditingController();
   bool _obscure = true;
 
-  // 5-tap logo easter egg — counter resets if no tap within 2 s
+  // 10-tap logo easter egg — counter resets if no tap within 2 s
   int    _tapCount = 0;
   Timer? _tapResetTimer;
 
@@ -34,21 +34,19 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  // ── 5-tap detection ───────────────────────────────────────────────────────
+  // ── 10-tap detection ──────────────────────────────────────────────────────
 
   void _onLogoTap() {
     _tapResetTimer?.cancel();
     _tapCount++;
 
-    if (_tapCount >= 5) {
+    if (_tapCount >= 10) {
       _tapCount = 0;
-      HapticFeedback.mediumImpact();
       _showAdminSheet();
       return;
     }
 
-    // Subtle haptic on each tap — no visual feedback (keeps it invisible)
-    HapticFeedback.lightImpact();
+    // No haptic feedback — keeps the easter egg fully silent and invisible.
 
     // Reset count if user stops tapping for 2 s
     _tapResetTimer = Timer(const Duration(seconds: 2), () {
@@ -118,7 +116,7 @@ class _LoginScreenState extends State<LoginScreen> {
             children: [
               const SizedBox(height: 56),
 
-              // ── Logo — tap 5× to reveal admin panel ───────────────────────
+              // ── Logo — tap 10× to reveal admin panel ──────────────────────
               Center(
                 child: GestureDetector(
                   onTap: _onLogoTap,
@@ -295,7 +293,7 @@ class _LoginScreenState extends State<LoginScreen> {
 }
 
 // ── Super Admin login sheet ───────────────────────────────────────────────────
-// Revealed only by tapping the logo 5 times. No visible entry point.
+// Revealed only by tapping the logo 10 times. No visible entry point.
 
 class _AdminLoginSheet extends StatefulWidget {
   const _AdminLoginSheet();
