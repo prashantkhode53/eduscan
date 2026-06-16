@@ -5,13 +5,23 @@ import { cosineSimilarity } from '../../utils/faceMatch';
 import { getActiveEmbeddings, getThreshold, CachedStudent } from '../../db/scanCache';
 import { sendFcm } from '../../utils/fcm';
 
-// Converts "HH:MM:SS" → "hh:mm AM/PM" for human-readable notifications.
+// Converts a "HH:MM:SS" clock string stored in UTC (the attendance TIME columns
+// are written from the server clock, which is UTC on Render) → "hh:mm AM/PM" in
+// IST for human-readable parent notifications. Adds the +5:30 offset with
+// wraparound into the next day.
 function to12Hour(timeStr: string): string {
   const [hStr, mStr = '00'] = timeStr.split(':');
-  const h    = parseInt(hStr, 10);
-  const ampm = h >= 12 ? 'PM' : 'AM';
-  const h12  = h % 12 === 0 ? 12 : h % 12;
-  return `${h12.toString().padStart(2, '0')}:${mStr} ${ampm}`;
+  const h = parseInt(hStr, 10);
+  const m = parseInt(mStr, 10);
+  if (Number.isNaN(h) || Number.isNaN(m)) return timeStr;
+
+  const istTotal = (h * 60 + m + 330) % (24 * 60); // +05:30
+  const istH     = Math.floor(istTotal / 60);
+  const istM     = istTotal % 60;
+
+  const ampm = istH >= 12 ? 'PM' : 'AM';
+  const h12  = istH % 12 === 0 ? 12 : istH % 12;
+  return `${h12.toString().padStart(2, '0')}:${istM.toString().padStart(2, '0')} ${ampm}`;
 }
 
 interface AttendanceRow {
