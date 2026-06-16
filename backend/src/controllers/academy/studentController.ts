@@ -1376,6 +1376,28 @@ export async function deleteStudent(
     if (!student) return next(new AppError('Student not found', 404));
     if (student.status === 'deleted') return next(new AppError('Student already deleted', 409));
 
+    // Block deletion once fee collection has started (partial or full). Two
+    // independent signals — any fee_record with amount_paid > 0, or any receipt
+    // on file — so a payment can never be lost from the audit trail even if a
+    // record's paid amount was later recalculated.
+    const paid = await academyQueryOne<{ has_payment: boolean }>(
+      academySlug,
+      `SELECT (
+         EXISTS (SELECT 1 FROM fee_records   WHERE student_id = $1 AND amount_paid > 0)
+         OR
+         EXISTS (SELECT 1 FROM fee_receipts  WHERE student_id = $1)
+       ) AS has_payment`,
+      [id]
+    );
+    if (paid?.has_payment) {
+      return next(new AppError(
+        'Student cannot be deleted because fee collection has already been initiated. ' +
+        'Please maintain the existing records for audit and reporting purposes.',
+        409,
+        { code: 'FEE_COLLECTION_STARTED' }
+      ));
+    }
+
     await academyExec(
       academySlug,
       `UPDATE students SET status = 'deleted', updated_at = NOW() WHERE id = $1`,
