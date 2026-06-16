@@ -51,12 +51,20 @@ export async function listFees(
   try {
     const { academySlug } = req.academyUser!;
     const {
-      status, student_id, course_id,
+      status, student_id, course_id, course_ids, academic_year_id,
       due_filter,
       page = '1', limit = '50',
     } = req.query as Record<string, string>;
 
     const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    // Course scope: prefer the multi-select `course_ids` (comma-joined UUIDs);
+    // fall back to the legacy single `course_id`. null = no course filter.
+    const courseIds: string[] | null =
+      course_ids ? course_ids.split(',').map(s => s.trim()).filter(Boolean)
+      : course_id ? [course_id]
+      : null;
+    const yearId = academic_year_id || null;
 
     // Course-level aggregation: one row per (student, course)
     const rows = await academyQuery(
@@ -104,6 +112,8 @@ export async function listFees(
          LEFT JOIN subjects sub ON sub.id = fr.subject_id
          WHERE ($2::text IS NULL OR fr.student_id = $2)
            AND ($3::uuid IS NULL OR fr.course_id  = $3::uuid)
+           AND ($7::uuid[] IS NULL OR fr.course_id = ANY($7::uuid[]))
+           AND ($8::uuid IS NULL OR c.academic_year_id = $8::uuid)
            AND (
              $4::text IS NULL
              OR ($4 = 'today'      AND fr.due_date = CURRENT_DATE)
@@ -132,6 +142,8 @@ export async function listFees(
         due_filter   || null,
         parseInt(limit),
         offset,
+        courseIds,
+        yearId,
       ]
     );
 
@@ -158,6 +170,7 @@ export async function listFees(
              ELSE 'pending'
            END AS status
          FROM fee_records fr
+         LEFT JOIN courses c ON c.id = fr.course_id
          WHERE (
            $1::text IS NULL
            OR ($1 = 'today'      AND fr.due_date = CURRENT_DATE)
@@ -166,6 +179,8 @@ export async function listFees(
            OR ($1 = 'overdue'    AND fr.due_date < CURRENT_DATE AND fr.status IN ('pending','partial','overdue'))
            OR ($1 = 'upcoming'   AND fr.due_date >= CURRENT_DATE AND fr.status IN ('pending','partial'))
          )
+           AND ($2::uuid[] IS NULL OR fr.course_id = ANY($2::uuid[]))
+           AND ($3::uuid IS NULL OR c.academic_year_id = $3::uuid)
          GROUP BY fr.student_id, fr.course_id
        )
        SELECT
@@ -176,7 +191,7 @@ export async function listFees(
          COUNT(*) FILTER (WHERE status='partial')  AS count_partial,
          COUNT(*) FILTER (WHERE status='paid')     AS count_paid
        FROM course_fees`,
-      [due_filter || null]
+      [due_filter || null, courseIds, yearId]
     );
 
     res.json({
@@ -207,7 +222,11 @@ export async function listFeesStudentSummary(
 ): Promise<void> {
   try {
     const { academySlug } = req.academyUser!;
-    const { due_filter } = req.query as Record<string, string>;
+    const { due_filter, course_ids, academic_year_id } = req.query as Record<string, string>;
+
+    const courseIds: string[] | null =
+      course_ids ? course_ids.split(',').map(s => s.trim()).filter(Boolean) : null;
+    const yearId = academic_year_id || null;
 
     // One query: all pending fee records joined to students/courses/subjects
     const rows = await academyQuery<{
@@ -242,8 +261,10 @@ export async function listFeesStudentSummary(
        LEFT JOIN courses c    ON c.id   = fr.course_id
        LEFT JOIN subjects sub ON sub.id = fr.subject_id
        WHERE s.status = 'active'
+         AND ($2::uuid[] IS NULL OR fr.course_id = ANY($2::uuid[]))
+         AND ($3::uuid IS NULL OR c.academic_year_id = $3::uuid)
        ORDER BY s.first_name, s.last_name, fr.due_date ASC`,
-      [due_filter || null]
+      [due_filter || null, courseIds, yearId]
     );
 
     // Group by student
@@ -638,11 +659,15 @@ export async function listReceipts(
   try {
     const { academySlug } = req.academyUser!;
     const {
-      student_id, from, to, q,
+      student_id, from, to, q, course_ids, academic_year_id,
       page = '1', limit = '50',
     } = req.query as Record<string, string>;
 
     const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    const courseIds: string[] | null =
+      course_ids ? course_ids.split(',').map(s => s.trim()).filter(Boolean) : null;
+    const yearId = academic_year_id || null;
 
     const rows = await academyQuery(
       academySlug,
@@ -666,6 +691,12 @@ export async function listReceipts(
               r.receipt_number ILIKE '%' || $4 || '%' OR
               s.first_name ILIKE '%' || $4 || '%' OR
               s.last_name  ILIKE '%' || $4 || '%')
+         AND (($7::uuid[] IS NULL AND $8::uuid IS NULL) OR EXISTS (
+              SELECT 1 FROM fee_receipt_items fri
+              LEFT JOIN courses c ON c.id = fri.course_id
+              WHERE fri.receipt_id = r.id
+                AND ($7::uuid[] IS NULL OR fri.course_id = ANY($7::uuid[]))
+                AND ($8::uuid   IS NULL OR c.academic_year_id = $8::uuid)))
        ORDER BY r.generated_at DESC
        LIMIT $5 OFFSET $6`,
       [
@@ -675,6 +706,8 @@ export async function listReceipts(
         q          || null,
         parseInt(limit),
         offset,
+        courseIds,
+        yearId,
       ]
     );
 

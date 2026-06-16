@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../services/academy_api_service.dart';
@@ -32,6 +33,20 @@ class _FeesScreenState extends State<FeesScreen>
   String? _dueFilter;   // 'today' | 'this_week' | 'this_month' | 'overdue' | 'upcoming' | null
   int     _reloadTrigger = 0;
 
+  // ── Entry-level Academic Year + Course scope ────────────────────────────────
+  // The whole module is gated behind a single Academic Year + one-or-more
+  // Courses. Tabs/data load only once both are chosen; selection lives here so
+  // it persists across tab switches.
+  List<Map<String, dynamic>> _years   = [];
+  List<Map<String, dynamic>> _courses = [];   // courses for the selected year
+  String?       _yearId;
+  final Set<String> _courseIds = {};
+  bool _metaLoading   = true;   // loading years/courses for the gate
+  bool _coursesBusy   = false;  // reloading courses after a year change
+  bool _scopeApplied  = false;  // true once the user taps Continue
+
+  bool get _ready => _scopeApplied && _yearId != null && _courseIds.isNotEmpty;
+
   static const _dueFilters = [
     ('today',      'Due Today',     Icons.today_outlined),
     ('this_week',  'This Week',     Icons.date_range_outlined),
@@ -46,7 +61,7 @@ class _FeesScreenState extends State<FeesScreen>
     // Tabs: Students + 5 status tabs + Receipts = 7
     _tabCtrl = TabController(length: _tabs.length + 2, vsync: this);
     _tabCtrl.addListener(() { if (mounted) setState(() {}); });
-    _load();
+    _loadMeta();
   }
 
   @override
@@ -55,13 +70,79 @@ class _FeesScreenState extends State<FeesScreen>
     super.dispose();
   }
 
-  Future<void> _load() async {
+  // Load academic years + the current year's courses for the gate dropdowns.
+  // Defaults the year to the academy's current year (if flagged) but never
+  // auto-selects a course — the gate stays closed until the user picks one.
+  Future<void> _loadMeta() async {
     if (!mounted) return;
+    setState(() => _metaLoading = true);
+    try {
+      final years = await AcademyApiService.getAcademicYears();
+      String? defaultYear;
+      for (final y in years) {
+        if (y['is_current_year'] == true) { defaultYear = y['id'] as String?; break; }
+      }
+      defaultYear ??= years.isNotEmpty ? years.first['id'] as String? : null;
+      if (!mounted) return;
+      setState(() {
+        _years  = years;
+        _yearId = defaultYear;
+      });
+      if (defaultYear != null) await _loadCoursesForYear(defaultYear);
+    } catch (_) {
+      // Non-fatal: the gate shows empty dropdowns with a retry option.
+    } finally {
+      if (mounted) setState(() => _metaLoading = false);
+    }
+  }
+
+  Future<void> _loadCoursesForYear(String yearId) async {
+    if (!mounted) return;
+    setState(() => _coursesBusy = true);
+    try {
+      final courses = await AcademyApiService.getCourses(academicYearId: yearId);
+      if (!mounted) return;
+      setState(() => _courses = courses.cast<Map<String, dynamic>>());
+    } catch (_) {
+      if (mounted) setState(() => _courses = []);
+    } finally {
+      if (mounted) setState(() => _coursesBusy = false);
+    }
+  }
+
+  void _onYearChanged(String? yearId) {
+    if (yearId == null || yearId == _yearId) return;
+    setState(() {
+      _yearId = yearId;
+      _courseIds.clear();   // courses belong to a year — reset on change
+      _courses = [];
+    });
+    _loadCoursesForYear(yearId);
+  }
+
+  void _applyScope() {
+    if (_yearId == null || _courseIds.isEmpty) return;
+    setState(() {
+      _scopeApplied = true;
+      _reloadTrigger++;   // force keep-alive tabs to reload with new scope
+    });
+    _load();
+  }
+
+  void _editScope() {
+    // Return to the gate; current selections are preserved.
+    setState(() => _scopeApplied = false);
+  }
+
+  Future<void> _load() async {
+    if (!mounted || !_ready) return;
     setState(() => _loading = true);
     try {
       final data = await AcademyApiService.getFees(
-        dueFilter: _dueFilter,
-        limit:     200,
+        dueFilter:      _dueFilter,
+        academicYearId: _yearId,
+        courseIds:      _courseIds.toList(),
+        limit:          200,
       );
       if (!mounted) return;
       setState(() {
@@ -134,47 +215,59 @@ class _FeesScreenState extends State<FeesScreen>
     return Scaffold(
       appBar: AppBar(
         title: const Text('Fees Management'),
-        actions: [
-          PopupMenuButton<String>(
-            onSelected: (v) {
-              if (v == 'generate') _generateFees();
-              if (v == 'overdue')  _markOverdue();
-            },
-            itemBuilder: (_) => [
-              const PopupMenuItem(
-                  value: 'generate',
-                  child: ListTile(
-                      leading: Icon(Icons.add_circle_outline),
-                      title: Text('Generate Course Fees'),
-                      dense: true)),
-              const PopupMenuItem(
-                  value: 'overdue',
-                  child: ListTile(
-                      leading: Icon(Icons.warning_amber_outlined,
-                          color: Colors.orange),
-                      title: Text('Mark Overdue'),
-                      dense: true)),
-            ],
-          ),
-        ],
-        bottom: TabBar(
-          controller: _tabCtrl,
-          isScrollable: true,
-          tabs: [
-            const Tab(text: 'Students'),
-            ..._tabs.map((t) => Tab(
-                  child: Text(
-                    t.status == null
-                        ? 'All (${_all.length})'
-                        : '${t.label} (${_filtered(t.status).length})',
-                  ),
-                )),
-            const Tab(text: 'Receipts'),
-          ],
-        ),
+        actions: _ready
+            ? [
+                PopupMenuButton<String>(
+                  onSelected: (v) {
+                    if (v == 'generate') _generateFees();
+                    if (v == 'overdue')  _markOverdue();
+                  },
+                  itemBuilder: (_) => [
+                    const PopupMenuItem(
+                        value: 'generate',
+                        child: ListTile(
+                            leading: Icon(Icons.add_circle_outline),
+                            title: Text('Generate Course Fees'),
+                            dense: true)),
+                    const PopupMenuItem(
+                        value: 'overdue',
+                        child: ListTile(
+                            leading: Icon(Icons.warning_amber_outlined,
+                                color: Colors.orange),
+                            title: Text('Mark Overdue'),
+                            dense: true)),
+                  ],
+                ),
+              ]
+            : null,
+        bottom: _ready
+            ? TabBar(
+                controller: _tabCtrl,
+                isScrollable: true,
+                tabs: [
+                  const Tab(text: 'Students'),
+                  ..._tabs.map((t) => Tab(
+                        child: Text(
+                          t.status == null
+                              ? 'All (${_all.length})'
+                              : '${t.label} (${_filtered(t.status).length})',
+                        ),
+                      )),
+                  const Tab(text: 'Receipts'),
+                ],
+              )
+            : null,
       ),
-      body: Column(
+      body: _ready ? _buildTabsBody(theme) : _buildGate(theme),
+    );
+  }
+
+  // ── Tabs body (shown after a scope is applied) ──────────────────────────────
+
+  Widget _buildTabsBody(ThemeData theme) {
+    return Column(
         children: [
+          _buildScopeBar(theme),
           if (_showFilterStrip)
             Container(
               color: theme.colorScheme.surfaceContainerLow,
@@ -298,6 +391,8 @@ class _FeesScreenState extends State<FeesScreen>
                 // Tab 0: Students — collect fees
                 _StudentsTab(
                   dueFilter:     _dueFilter,
+                  yearId:        _yearId,
+                  courseIds:     _courseIds.toList(),
                   reloadTrigger: _reloadTrigger,
                   onPaymentMade: _onPaymentMade,
                 ),
@@ -330,13 +425,16 @@ class _FeesScreenState extends State<FeesScreen>
                       },
                     )),
                 // Tab 6: Receipts
-                const _ReceiptsTab(),
+                _ReceiptsTab(
+                  yearId:    _yearId,
+                  courseIds: _courseIds.toList(),
+                  reloadTrigger: _reloadTrigger,
+                ),
               ],
             ),
           ),
         ],
-      ),
-    );
+      );
   }
 
   String _fmt(dynamic v) {
@@ -344,17 +442,276 @@ class _FeesScreenState extends State<FeesScreen>
     final d = double.tryParse(v.toString()) ?? 0;
     return d.toStringAsFixed(0);
   }
+
+  // ── Entry gate: pick Academic Year + Course(s) before loading any fee data ───
+
+  Widget _buildGate(ThemeData theme) {
+    if (_metaLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    final selectedCourses = _courses
+        .where((c) => _courseIds.contains(c['id'] as String?))
+        .toList();
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const SizedBox(height: 8),
+          Icon(Icons.tune, size: 44, color: theme.colorScheme.primary),
+          const SizedBox(height: 8),
+          Text('Select Academic Year & Course',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.titleMedium
+                  ?.copyWith(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 4),
+          Text('Choose a year and at least one course to view fee records.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  fontSize: 13,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.6))),
+          const SizedBox(height: 24),
+
+          // Academic Year (single)
+          DropdownButtonFormField<String>(
+            value: _yearId,
+            isExpanded: true,
+            decoration: const InputDecoration(
+              labelText: 'Academic Year',
+              prefixIcon: Icon(Icons.calendar_today_outlined),
+              border: OutlineInputBorder(),
+            ),
+            items: _years
+                .map((y) => DropdownMenuItem<String>(
+                      value: y['id'] as String?,
+                      child: Text(
+                        '${y['academic_year_name'] ?? ''}'
+                        '${y['is_current_year'] == true ? '  (Current)' : ''}',
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ))
+                .toList(),
+            onChanged: _onYearChanged,
+          ),
+          const SizedBox(height: 16),
+
+          // Courses (multi-select)
+          InkWell(
+            onTap: (_yearId == null || _coursesBusy) ? null : _openCoursePicker,
+            borderRadius: BorderRadius.circular(4),
+            child: InputDecorator(
+              decoration: InputDecoration(
+                labelText: 'Courses',
+                prefixIcon: const Icon(Icons.menu_book_outlined),
+                border: const OutlineInputBorder(),
+                suffixIcon: _coursesBusy
+                    ? const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: SizedBox(
+                            width: 16, height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2)))
+                    : const Icon(Icons.arrow_drop_down),
+              ),
+              child: _courseIds.isEmpty
+                  ? Text(
+                      _yearId == null
+                          ? 'Select a year first'
+                          : 'Tap to select courses',
+                      style: TextStyle(
+                          color:
+                              theme.colorScheme.onSurface.withValues(alpha: 0.5)),
+                    )
+                  : Wrap(
+                      spacing: 6, runSpacing: 4,
+                      children: selectedCourses
+                          .map((c) => Chip(
+                                label: Text(c['name'] as String? ?? '',
+                                    style: const TextStyle(fontSize: 12)),
+                                onDeleted: () => setState(
+                                    () => _courseIds.remove(c['id'] as String?)),
+                                materialTapTargetSize:
+                                    MaterialTapTargetSize.shrinkWrap,
+                                visualDensity: VisualDensity.compact,
+                              ))
+                          .toList(),
+                    ),
+            ),
+          ),
+          if (_yearId != null && !_coursesBusy && _courses.isEmpty) ...[
+            const SizedBox(height: 8),
+            Text('No courses found for this academic year.',
+                style: TextStyle(
+                    fontSize: 12,
+                    color: theme.colorScheme.error)),
+          ],
+          const SizedBox(height: 24),
+
+          FilledButton.icon(
+            onPressed:
+                (_yearId != null && _courseIds.isNotEmpty) ? _applyScope : null,
+            icon: const Icon(Icons.arrow_forward),
+            label: const Text('Continue'),
+            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(50)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _openCoursePicker() async {
+    // Multi-select checkable menu over the selected year's courses.
+    final temp = Set<String>.from(_courseIds);
+    final result = await showModalBottomSheet<Set<String>>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) {
+          final allSelected =
+              _courses.isNotEmpty && temp.length == _courses.length;
+          return SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 8, 4),
+                  child: Row(
+                    children: [
+                      const Text('Select Courses',
+                          style: TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.bold)),
+                      const Spacer(),
+                      TextButton(
+                        onPressed: () => setSheet(() {
+                          if (allSelected) {
+                            temp.clear();
+                          } else {
+                            temp
+                              ..clear()
+                              ..addAll(_courses.map((c) => c['id'] as String));
+                          }
+                        }),
+                        child: Text(allSelected ? 'Clear all' : 'Select all'),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1),
+                Flexible(
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: _courses.map((c) {
+                      final id = c['id'] as String;
+                      return CheckboxListTile(
+                        dense: true,
+                        value: temp.contains(id),
+                        title: Text(c['name'] as String? ?? ''),
+                        onChanged: (v) => setSheet(() {
+                          if (v == true) {
+                            temp.add(id);
+                          } else {
+                            temp.remove(id);
+                          }
+                        }),
+                      );
+                    }).toList(),
+                  ),
+                ),
+                const Divider(height: 1),
+                Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: FilledButton(
+                    onPressed: () => Navigator.pop(ctx, temp),
+                    style:
+                        FilledButton.styleFrom(minimumSize: const Size.fromHeight(46)),
+                    child: Text('Done (${temp.length} selected)'),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+    if (result != null && mounted) {
+      setState(() {
+        _courseIds
+          ..clear()
+          ..addAll(result);
+      });
+    }
+  }
+
+  // ── Persistent scope bar (shown above the tabs) ─────────────────────────────
+
+  Widget _buildScopeBar(ThemeData theme) {
+    final yearName = _years.firstWhere(
+      (y) => y['id'] == _yearId,
+      orElse: () => const {},
+    )['academic_year_name'] as String? ?? '';
+    final courseLabel = _courseIds.length == 1
+        ? (_courses.firstWhere(
+              (c) => c['id'] == _courseIds.first,
+              orElse: () => const {},
+            )['name'] as String? ?? '1 course')
+        : '${_courseIds.length} courses';
+
+    return Material(
+      color: theme.colorScheme.primaryContainer.withValues(alpha: 0.4),
+      child: InkWell(
+        onTap: _editScope,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Row(
+            children: [
+              Icon(Icons.calendar_today_outlined,
+                  size: 15, color: theme.colorScheme.primary),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  '$yearName  ·  $courseLabel',
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: theme.colorScheme.onSurface),
+                ),
+              ),
+              const Spacer(),
+              TextButton.icon(
+                onPressed: _editScope,
+                icon: const Icon(Icons.edit_outlined, size: 16),
+                label: const Text('Change', style: TextStyle(fontSize: 13)),
+                style: TextButton.styleFrom(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                    minimumSize: const Size(0, 32)),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 // ── Students tab ─────────────────────────────────────────────────────────────
 
 class _StudentsTab extends StatefulWidget {
   final String? dueFilter;
+  final String? yearId;
+  final List<String> courseIds;
   final int reloadTrigger;
   final VoidCallback onPaymentMade;
 
   const _StudentsTab({
     this.dueFilter,
+    this.yearId,
+    this.courseIds = const [],
     required this.reloadTrigger,
     required this.onPaymentMade,
   });
@@ -384,7 +741,9 @@ class _StudentsTabState extends State<_StudentsTab>
   void didUpdateWidget(_StudentsTab old) {
     super.didUpdateWidget(old);
     if (old.dueFilter != widget.dueFilter ||
-        old.reloadTrigger != widget.reloadTrigger) {
+        old.reloadTrigger != widget.reloadTrigger ||
+        old.yearId != widget.yearId ||
+        !listEquals(old.courseIds, widget.courseIds)) {
       _load();
     }
   }
@@ -400,7 +759,9 @@ class _StudentsTabState extends State<_StudentsTab>
     setState(() { _loading = true; _error = null; });
     try {
       final data = await AcademyApiService.getFeesStudentSummary(
-        dueFilter: widget.dueFilter,
+        dueFilter:      widget.dueFilter,
+        academicYearId: widget.yearId,
+        courseIds:      widget.courseIds,
       );
       if (!mounted) return;
       setState(() {
@@ -750,7 +1111,15 @@ class _StudentFeeCard extends StatelessWidget {
 // ── Receipts admin tab ────────────────────────────────────────────────────────
 
 class _ReceiptsTab extends StatefulWidget {
-  const _ReceiptsTab();
+  final String? yearId;
+  final List<String> courseIds;
+  final int reloadTrigger;
+
+  const _ReceiptsTab({
+    this.yearId,
+    this.courseIds = const [],
+    this.reloadTrigger = 0,
+  });
 
   @override
   State<_ReceiptsTab> createState() => _ReceiptsTabState();
@@ -774,6 +1143,16 @@ class _ReceiptsTabState extends State<_ReceiptsTab>
   }
 
   @override
+  void didUpdateWidget(_ReceiptsTab old) {
+    super.didUpdateWidget(old);
+    if (old.reloadTrigger != widget.reloadTrigger ||
+        old.yearId != widget.yearId ||
+        !listEquals(old.courseIds, widget.courseIds)) {
+      _load();
+    }
+  }
+
+  @override
   void dispose() {
     _searchCtrl.dispose();
     super.dispose();
@@ -783,7 +1162,11 @@ class _ReceiptsTabState extends State<_ReceiptsTab>
     if (!mounted) return;
     setState(() { _loading = true; _error = null; });
     try {
-      final data = await AcademyApiService.listReceipts(limit: 200);
+      final data = await AcademyApiService.listReceipts(
+        limit:          200,
+        academicYearId: widget.yearId,
+        courseIds:      widget.courseIds,
+      );
       if (!mounted) return;
       setState(() {
         _receipts = (data['receipts'] as List? ?? []).cast<Map<String, dynamic>>();

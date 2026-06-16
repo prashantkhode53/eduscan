@@ -381,6 +381,8 @@ class AcademyApiService {
     String? status,
     String? studentId,
     String? courseId,
+    List<String>? courseIds,
+    String? academicYearId,
     String? dueFilter,
     int page = 1,
     int limit = 50,
@@ -391,6 +393,9 @@ class AcademyApiService {
       if (status != null)    'status':     status,
       if (studentId != null) 'student_id': studentId,
       if (courseId != null)  'course_id':  courseId,
+      if (courseIds != null && courseIds.isNotEmpty)
+        'course_ids': courseIds.join(','),
+      if (academicYearId != null) 'academic_year_id': academicYearId,
       if (dueFilter != null) 'due_filter': dueFilter,
     };
     final uri = Uri.parse(ApiEndpoints.academyFees)
@@ -441,9 +446,14 @@ class AcademyApiService {
 
   static Future<Map<String, dynamic>> getFeesStudentSummary({
     String? dueFilter,
+    List<String>? courseIds,
+    String? academicYearId,
   }) async {
     final params = <String, String>{
       if (dueFilter != null) 'due_filter': dueFilter,
+      if (courseIds != null && courseIds.isNotEmpty)
+        'course_ids': courseIds.join(','),
+      if (academicYearId != null) 'academic_year_id': academicYearId,
     };
     final uri = Uri.parse('${ApiEndpoints.academyFees}/students-summary')
         .replace(queryParameters: params.isEmpty ? null : params);
@@ -482,6 +492,8 @@ class AcademyApiService {
     String? from,
     String? to,
     String? q,
+    List<String>? courseIds,
+    String? academicYearId,
     int page = 1,
     int limit = 50,
   }) async {
@@ -492,6 +504,9 @@ class AcademyApiService {
       if (from != null)      'from':       from,
       if (to != null)        'to':         to,
       if (q != null && q.isNotEmpty) 'q': q,
+      if (courseIds != null && courseIds.isNotEmpty)
+        'course_ids': courseIds.join(','),
+      if (academicYearId != null) 'academic_year_id': academicYearId,
     };
     final uri = Uri.parse(ApiEndpoints.academyFeeReceipts)
         .replace(queryParameters: params);
