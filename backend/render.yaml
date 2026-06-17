@@ -4,7 +4,6 @@ services:
     runtime: node
     rootDir: backend
 
-    # Puppeteer/Chrome removed — WhatsApp now lives in a standalone service.
     buildCommand: npm install && npm run build
 
     startCommand: npm start

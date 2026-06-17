@@ -10,7 +10,6 @@ This file locks conventions, architecture decisions, and critical rules for all 
 - The following files must never be committed:
   - `backend/.env`
   - Any file containing real secrets or credentials
-  - `whatsapp-api/.env`
 - Use `git add <specific-files>` — never `git add -A` or `git add .`
 
 ---
@@ -25,7 +24,6 @@ EduScan is a multi-tenant SaaS platform for face-recognition attendance manageme
 | Backend REST API | Node.js + TypeScript + Express | `backend/` |
 | Mobile App | Flutter (Dart) | `lib/` |
 | Face Recognition | Python FastAPI + InsightFace | `insightface-service/` |
-| WhatsApp Notifications | Node.js (standalone) | `whatsapp-api/` |
 
 **Live backend:** `https://eduscan-j4cg.onrender.com`
 
@@ -116,7 +114,6 @@ EduScan is a multi-tenant SaaS platform for face-recognition attendance manageme
 ### Rate Limiting
 
 - Auth endpoints: 30 requests / 60s (configurable).
-- WhatsApp: 30 requests / 60s (via `WA_RATE_LIMIT_*` env vars).
 
 ---
 
@@ -204,18 +201,8 @@ Two `render.yaml` files exist in the repo (root + possibly backend). Failing `bu
 | `MARGIN_THRESHOLD` | Ambiguous match margin (0.05) |
 | `SMTP_HOST/PORT/USER/PASS/FROM` | Email (Gmail SMTP) |
 | `FIREBASE_SERVICE_ACCOUNT_JSON` | FCM push notifications |
-| `WA_SESSION_PATH` | WhatsApp session storage path |
-| `WA_CLIENT_ID` | WhatsApp client identifier |
 | `NODE_ENV` | `production` or `development` |
 | `PORT` | Server port (default 3000) |
-
----
-
-## WhatsApp Microservice
-
-Standalone Node.js service in `whatsapp-api/`. Added 2026-05-27.
-Flutter has a dedicated WhatsApp tab for this feature.
-Runs independently — does not share the main backend process.
 
 ---
 
