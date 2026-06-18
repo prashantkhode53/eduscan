@@ -1,8 +1,13 @@
 class ApiEndpoints {
-  // ── CHANGE THIS to your Render URL after deployment ───────────────────────
-  // Example: https://eduscan-backend.onrender.com
-  // Do NOT use localhost or 192.168.x.x — those only work on local network.
-  static const String baseUrl = 'https://eduscan-j4cg.onrender.com';
+  // ── Backend URL is chosen at BUILD/RUN time, not hardcoded ────────────────
+  // Pass it with:  --dart-define-from-file=dev.json   (dev/staging backend)
+  //           or:  --dart-define-from-file=prod.json  (production backend)
+  // If no flag is passed, it defaults to PRODUCTION (Hetzner) below, so a
+  // plain `flutter build apk --release` is always safe.
+  static const String baseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'http://167.233.94.60:3000', // production (Hetzner)
+  );
   // ──────────────────────────────────────────────────────────────────────────
 
   // Academy (multi-tenant)
@@ -20,6 +25,7 @@ class ApiEndpoints {
   static const String academyAttendanceScan = '$baseUrl/api/academy/attendance/scan';
   static const String academyQrCodes        = '$baseUrl/api/academy/qr-codes';
   static const String academyAcademicYears  = '$baseUrl/api/academy/academic-years';
+  static const String academyNotifications  = '$baseUrl/api/academy/notifications';
 
   // Super Admin
   static const String superAdminAcademies  = '$baseUrl/api/super-admin/academies';
@@ -33,6 +39,9 @@ class ApiEndpoints {
   static const String parentAttendance       = '$baseUrl/api/academy/parent/attendance';
   static const String parentReceipts         = '$baseUrl/api/academy/parent/receipts';
   static String parentReceiptById(String id) => '$baseUrl/api/academy/parent/receipts/$id';
+  static const String parentNotifications        = '$baseUrl/api/academy/parent/notifications';
+  static const String parentNotificationsLatest  = '$baseUrl/api/academy/parent/notifications/latest';
+  static String parentNotificationRead(String id) => '$baseUrl/api/academy/parent/notifications/$id/read';
 
   // Admin — student master password
   static String studentMasterPassword(String id) => '$baseUrl/api/academy/students/$id/master-password';
