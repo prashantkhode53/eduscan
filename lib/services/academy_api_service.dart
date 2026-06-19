@@ -195,11 +195,35 @@ class AcademyApiService {
   }
 
   /// Admin notification history (newest first, paginated).
-  static Future<Map<String, dynamic>> getSentNotifications({int page = 1}) async {
+  /// [limit] is clamped server-side to 50; defaults to the backend's 20.
+  static Future<Map<String, dynamic>> getSentNotifications(
+      {int page = 1, int? limit}) async {
+    final params = <String, String>{
+      'page': page.toString(),
+      if (limit != null) 'limit': limit.toString(),
+    };
     final uri = Uri.parse(ApiEndpoints.academyNotifications)
-        .replace(queryParameters: {'page': page.toString()});
+        .replace(queryParameters: params);
     final res = await _http.get(uri, headers: await _headers()).timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
+  }
+
+  /// Fetch the ENTIRE sent-notification history by walking the paginated
+  /// endpoint at its max page size (50). Used only for the Excel export, where
+  /// the full dataset is needed; the in-app list shows just the latest few.
+  /// Caps total pages so a runaway history can never loop unbounded.
+  static Future<List<Map<String, dynamic>>> getAllSentNotifications() async {
+    const pageLimit = 50;     // backend hard cap
+    const maxPages  = 200;    // safety bound (≤10k rows)
+    final all = <Map<String, dynamic>>[];
+    for (var page = 1; page <= maxPages; page++) {
+      final data = await getSentNotifications(page: page, limit: pageLimit);
+      final list = (data['notifications'] as List? ?? [])
+          .cast<Map<String, dynamic>>();
+      all.addAll(list);
+      if (list.length < pageLimit) break; // last page reached
+    }
+    return all;
   }
 
   // ── Courses ───────────────────────────────────────────────────────────────

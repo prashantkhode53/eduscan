@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import '../../services/academy_api_service.dart';
+import '../../services/notification_excel_service.dart';
 import '../../utils/date_utils.dart' as du;
 
 /// Admin → Send Notifications → "Sent" tab.
-/// History of broadcasts sent by this academy, newest-first, paginated.
+/// Shows only the LATEST 10 broadcasts in-app to keep the list light, and
+/// offers an Excel download of the FULL history for when there are more.
 /// Each row shows the message, when it was sent + by whom, and a delivery
 /// breakdown (recipients / delivered / failed) with a status chip.
 ///
@@ -18,16 +20,14 @@ class SentNotificationsTab extends StatefulWidget {
 
 class SentNotificationsTabState extends State<SentNotificationsTab>
     with AutomaticKeepAliveClientMixin {
-  // Backend caps limit at 50; its default page size is 20.
-  static const int _pageSize = 20;
+  // Cap the in-app list to the latest few so a large history never loads a
+  // heavy list into memory; the full set is available via Excel download.
+  static const int _previewLimit = 10;
 
   final List<Map<String, dynamic>> _items = [];
-  final _scrollCtrl = ScrollController();
 
-  int  _page        = 1;
   bool _loading     = true;   // first load
-  bool _loadingMore = false;
-  bool _hasMore     = true;
+  bool _downloading = false;
   String? _error;
 
   // Keep the list alive while the user is on the Send tab so switching back
@@ -38,33 +38,18 @@ class SentNotificationsTabState extends State<SentNotificationsTab>
   @override
   void initState() {
     super.initState();
-    _scrollCtrl.addListener(_onScroll);
-    _loadFirst();
+    _load();
   }
 
-  @override
-  void dispose() {
-    _scrollCtrl.dispose();
-    super.dispose();
-  }
+  /// Public entry point — reload. Called by the parent after a send.
+  Future<void> refresh() => _load();
 
-  void _onScroll() {
-    if (_scrollCtrl.position.pixels >=
-            _scrollCtrl.position.maxScrollExtent - 200 &&
-        !_loadingMore &&
-        _hasMore) {
-      _loadMore();
-    }
-  }
-
-  /// Public entry point — reload from page 1. Called by the parent after a send.
-  Future<void> refresh() => _loadFirst();
-
-  Future<void> _loadFirst() async {
+  Future<void> _load() async {
     if (!mounted) return;
     setState(() { _loading = true; _error = null; });
     try {
-      final data = await AcademyApiService.getSentNotifications(page: 1);
+      final data = await AcademyApiService.getSentNotifications(
+          page: 1, limit: _previewLimit);
       if (!mounted) return;
       final list = (data['notifications'] as List? ?? [])
           .cast<Map<String, dynamic>>();
@@ -72,8 +57,6 @@ class SentNotificationsTabState extends State<SentNotificationsTab>
         _items
           ..clear()
           ..addAll(list);
-        _page    = 1;
-        _hasMore = list.length == _pageSize;
         _loading = false;
       });
     } catch (e) {
@@ -85,33 +68,82 @@ class SentNotificationsTabState extends State<SentNotificationsTab>
     }
   }
 
-  Future<void> _loadMore() async {
-    if (_loadingMore || !_hasMore) return;
-    setState(() => _loadingMore = true);
+  Future<void> _downloadExcel() async {
+    if (_downloading) return;
+    setState(() => _downloading = true);
+    final messenger = ScaffoldMessenger.of(context);
     try {
-      final next = _page + 1;
-      final data = await AcademyApiService.getSentNotifications(page: next);
-      if (!mounted) return;
-      final list = (data['notifications'] as List? ?? [])
-          .cast<Map<String, dynamic>>();
-      setState(() {
-        _items.addAll(list);
-        _page    = next;
-        _hasMore = list.length == _pageSize;
-        _loadingMore = false;
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _loadingMore = false);
+      final rows = await AcademyApiService.getAllSentNotifications();
+      if (rows.isEmpty) {
+        if (mounted) {
+          messenger.showSnackBar(const SnackBar(
+            content: Text('No notifications to export yet.'),
+          ));
+        }
+        return;
+      }
+      final path = await NotificationExcelService.generate(rows);
+      if (mounted) {
+        messenger.showSnackBar(SnackBar(
+          content: Text('Exported ${rows.length} notification(s) • '
+              '${path.split(RegExp(r'[\\/]')).last}'),
+          backgroundColor: Colors.green,
+        ));
+      }
+    } catch (e) {
+      if (mounted) {
+        messenger.showSnackBar(SnackBar(
+          content: Text('Export failed: '
+              '${e.toString().replaceFirst('Exception: ', '')}'),
+          backgroundColor: Colors.red,
+        ));
+      }
+    } finally {
+      if (mounted) setState(() => _downloading = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
     super.build(context); // for AutomaticKeepAliveClientMixin
-    return RefreshIndicator(
-      onRefresh: _loadFirst,
-      child: _buildBody(),
+    return Column(
+      children: [
+        _downloadBar(),
+        const Divider(height: 1),
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: _load,
+            child: _buildBody(),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _downloadBar() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+      child: Row(
+        children: [
+          const Expanded(
+            child: Text(
+              'Showing the latest $_previewLimit. Download for the full history.',
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+          ),
+          const SizedBox(width: 8),
+          FilledButton.tonalIcon(
+            onPressed: _downloading ? null : _downloadExcel,
+            icon: _downloading
+                ? const SizedBox(
+                    width: 16, height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.download_outlined, size: 18),
+            label: Text(_downloading ? 'Exporting…' : 'Download Excel'),
+          ),
+        ],
+      ),
     );
   }
 
@@ -122,14 +154,14 @@ class SentNotificationsTabState extends State<SentNotificationsTab>
     if (_error != null) {
       return ListView(
         children: [
-          const SizedBox(height: 120),
+          const SizedBox(height: 100),
           const Icon(Icons.error_outline, size: 40, color: Colors.red),
           const SizedBox(height: 12),
           Center(child: Text(_error!, textAlign: TextAlign.center)),
           const SizedBox(height: 16),
           Center(
             child: FilledButton.icon(
-              onPressed: _loadFirst,
+              onPressed: _load,
               icon: const Icon(Icons.refresh),
               label: const Text('Retry'),
             ),
@@ -140,7 +172,7 @@ class SentNotificationsTabState extends State<SentNotificationsTab>
     if (_items.isEmpty) {
       return ListView(
         children: const [
-          SizedBox(height: 140),
+          SizedBox(height: 120),
           Icon(Icons.campaign_outlined, size: 48, color: Colors.grey),
           SizedBox(height: 12),
           Center(child: Text('No notifications sent yet.',
@@ -150,25 +182,15 @@ class SentNotificationsTabState extends State<SentNotificationsTab>
     }
 
     return ListView.separated(
-      controller: _scrollCtrl,
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.symmetric(vertical: 8),
-      itemCount: _items.length + (_hasMore ? 1 : 0),
+      itemCount: _items.length,
       separatorBuilder: (_, __) => const Divider(height: 1),
-      itemBuilder: (context, index) {
-        if (index >= _items.length) {
-          return const Padding(
-            padding: EdgeInsets.all(16),
-            child: Center(child: CircularProgressIndicator()),
-          );
-        }
-        return _tile(_items[index]);
-      },
+      itemBuilder: (context, index) => _tile(_items[index]),
     );
   }
 
   Widget _tile(Map<String, dynamic> item) {
-    final theme = Theme.of(context);
     final message = item['message']?.toString() ?? '';
     final created = item['created_at']?.toString();
     final sentBy  = item['sent_by_name']?.toString();
@@ -204,7 +226,7 @@ class SentNotificationsTabState extends State<SentNotificationsTab>
               runSpacing: 4,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                _statusChip(status, theme),
+                _statusChip(status),
                 _countChip(Icons.people_outline, '$total', Colors.blue),
                 _countChip(Icons.check_circle_outline, '$ok', Colors.green),
                 if (failed > 0)
@@ -218,7 +240,7 @@ class SentNotificationsTabState extends State<SentNotificationsTab>
     );
   }
 
-  Widget _statusChip(String status, ThemeData theme) {
+  Widget _statusChip(String status) {
     final (Color color, String label) = switch (status) {
       'sent'    => (Colors.green,  'Sent'),
       'partial' => (Colors.orange, 'Partial'),
