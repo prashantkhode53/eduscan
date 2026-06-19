@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../providers/parent_auth_provider.dart';
 import '../../services/parent_api_service.dart';
 import '../../services/fcm_service.dart';
 import '../../utils/fee_format.dart';
 import '../../utils/date_utils.dart' as du;
 import 'parent_receipts_screen.dart';
+import 'parent_notifications_screen.dart';
+import 'parent_attendance_screen.dart';
+import '../../widgets/notification_ticker.dart';
 
 class ParentDashboardScreen extends StatefulWidget {
   const ParentDashboardScreen({super.key});
@@ -20,10 +24,71 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
   bool _loading = true;
   String? _error;
 
+  // Latest broadcast (drives the always-visible ticker) + unread badge count.
+  String? _latestMessage;
+  int     _unreadCount = 0;
+
   @override
   void initState() {
     super.initState();
+    _loadCachedTicker();   // show last-known message instantly (persists sessions)
     _load();
+    _loadNotifications();
+    // When a parent_notification push arrives while the app is open, refresh the
+    // ticker + badge immediately so the dashboard reflects the newest message.
+    FcmService.onParentNotification = _loadNotifications;
+  }
+
+  @override
+  void dispose() {
+    if (FcmService.onParentNotification == _loadNotifications) {
+      FcmService.onParentNotification = null;
+    }
+    super.dispose();
+  }
+
+  String get _tickerCacheKey {
+    final sid = context.read<ParentAuthProvider>().user?.studentId ?? 'unknown';
+    return 'ticker_latest_$sid';
+  }
+
+  Future<void> _loadCachedTicker() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cached = prefs.getString(_tickerCacheKey);
+      if (cached != null && cached.isNotEmpty && mounted) {
+        setState(() => _latestMessage = cached);
+      }
+    } catch (_) {/* best-effort */}
+  }
+
+  Future<void> _loadNotifications() async {
+    try {
+      final results = await Future.wait([
+        ParentApiService.getLatestNotification(),
+        ParentApiService.getNotifications(page: 1, limit: 1),
+      ]);
+      if (!mounted) return;
+      final latest = results[0] as Map<String, dynamic>?;
+      final list   = results[1] as Map<String, dynamic>;
+      final message = latest?['message']?.toString();
+      setState(() {
+        _latestMessage = message ?? _latestMessage;
+        _unreadCount   = (list['unread_count'] as num?)?.toInt() ?? _unreadCount;
+      });
+      if (message != null && message.isNotEmpty) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(_tickerCacheKey, message);
+      }
+    } catch (_) {/* ticker/badge are non-critical; keep cached value */}
+  }
+
+  Future<void> _openNotifications() async {
+    final changed = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => const ParentNotificationsScreen()),
+    );
+    if (changed == true) _loadNotifications();   // refresh badge after reading
   }
 
   Future<void> _load() async {
@@ -116,6 +181,16 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
           ],
         ),
         actions: [
+          // Notifications bell with unread-count badge
+          IconButton(
+            tooltip: 'Notifications',
+            onPressed: _openNotifications,
+            icon: Badge(
+              isLabelVisible: _unreadCount > 0,
+              label: Text(_unreadCount > 99 ? '99+' : '$_unreadCount'),
+              child: const Icon(Icons.notifications_outlined),
+            ),
+          ),
           IconButton(
               icon: const Icon(Icons.receipt_long_outlined),
               tooltip: 'Fee Receipts',
@@ -127,36 +202,51 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
           IconButton(
               icon: const Icon(Icons.refresh_outlined),
               tooltip: 'Refresh',
-              onPressed: _load),
+              onPressed: () { _load(); _loadNotifications(); }),
           IconButton(
               icon: const Icon(Icons.logout_outlined),
               tooltip: 'Log Out',
               onPressed: _logout),
         ],
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _error != null
-              ? _buildError(theme)
-              : RefreshIndicator(
-                  onRefresh: _load,
-                  child: ListView(
-                    padding: EdgeInsets.fromLTRB(
-                        16, 16, 16,
-                        MediaQuery.of(context).padding.bottom + 24),
-                    children: [
-                      _buildTodayCard(theme),
-                      const SizedBox(height: 16),
-                      _buildWeekStrip(theme),
-                      const SizedBox(height: 16),
-                      if (_pendingFees.isNotEmpty) ...[
-                        _buildFeesCard(theme),
-                        const SizedBox(height: 16),
-                      ],
-                      _buildHistory(theme),
-                    ],
-                  ),
-                ),
+      body: Column(
+        children: [
+          // Always-visible latest-announcement ticker (persists across sessions).
+          if (_latestMessage != null && _latestMessage!.isNotEmpty)
+            NotificationTicker(
+              message: _latestMessage!,
+              onTap: _openNotifications,
+            ),
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : _error != null
+                    ? _buildError(theme)
+                    : RefreshIndicator(
+                        onRefresh: () async {
+                          await _load();
+                          await _loadNotifications();
+                        },
+                        child: ListView(
+                          padding: EdgeInsets.fromLTRB(
+                              16, 16, 16,
+                              MediaQuery.of(context).padding.bottom + 24),
+                          children: [
+                            _buildTodayCard(theme),
+                            const SizedBox(height: 16),
+                            _buildWeekStrip(theme),
+                            const SizedBox(height: 16),
+                            if (_pendingFees.isNotEmpty) ...[
+                              _buildFeesCard(theme),
+                              const SizedBox(height: 16),
+                            ],
+                            _buildHistory(theme),
+                          ],
+                        ),
+                      ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -478,21 +568,32 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
 
   Widget _buildHistory(ThemeData theme) {
     if (_history.isEmpty) {
+      // Still let parents open the full filterable view (e.g. to check a past month).
       return Card(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Center(
-            child: Column(
-              children: [
-                Icon(Icons.event_note_outlined,
-                    size: 40,
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.3)),
-                const SizedBox(height: 8),
-                Text('No attendance records yet',
-                    style: TextStyle(
-                        color: theme.colorScheme.onSurface
-                            .withValues(alpha: 0.5))),
-              ],
+        child: InkWell(
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const ParentAttendanceScreen()),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Center(
+              child: Column(
+                children: [
+                  Icon(Icons.event_note_outlined,
+                      size: 40,
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.3)),
+                  const SizedBox(height: 8),
+                  Text('No attendance records yet',
+                      style: TextStyle(
+                          color: theme.colorScheme.onSurface
+                              .withValues(alpha: 0.5))),
+                  const SizedBox(height: 4),
+                  Text('Tap to view other months',
+                      style: TextStyle(fontSize: 12,
+                          color: theme.colorScheme.primary)),
+                ],
+              ),
             ),
           ),
         ),
@@ -503,11 +604,25 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-            child: Text('Last 30 Days',
-                style: theme.textTheme.titleSmall
-                    ?.copyWith(fontWeight: FontWeight.bold)),
+          // Tappable header → full filterable attendance record with Excel download.
+          InkWell(
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const ParentAttendanceScreen()),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Row(children: [
+                Text('Last 30 Days',
+                    style: theme.textTheme.titleSmall
+                        ?.copyWith(fontWeight: FontWeight.bold)),
+                const Spacer(),
+                Text('View all',
+                    style: TextStyle(fontSize: 12, color: theme.colorScheme.primary,
+                        fontWeight: FontWeight.w600)),
+                Icon(Icons.chevron_right, size: 18, color: theme.colorScheme.primary),
+              ]),
+            ),
           ),
           const Divider(height: 1),
           ...(_history.take(30).map((r) {

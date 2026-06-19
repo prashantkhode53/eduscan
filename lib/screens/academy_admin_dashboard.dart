@@ -5,14 +5,17 @@ import '../providers/auth_provider.dart';
 import '../providers/academic_year_provider.dart';
 import '../models/academy_user.dart';
 import '../services/academy_api_service.dart';
+import '../utils/platform_support.dart';
 import 'academy/course_master_screen.dart';
 import 'academy/academy_student_list_screen.dart';
 import 'academy/academy_student_registration_screen.dart';
 import 'academy/bulk_upload_screen.dart';
 import 'academy/fees_screen.dart';
 import 'academy/academy_face_scan_screen.dart';
+import 'academy/attendance_hub_screen.dart';
 import 'academy/qr_code_screen.dart';
 import 'academy/academic_year_master_screen.dart';
+import 'academy/send_notification_screen.dart';
 
 class AcademyAdminDashboard extends StatefulWidget {
   const AcademyAdminDashboard({super.key});
@@ -284,28 +287,33 @@ class _HomeTabState extends State<_HomeTab> {
                   }
                 },
               ),
-              const SizedBox(height: 12),
-
-              // Option 2 — Single registration (existing flow)
-              _OptionTile(
-                icon: Icons.person_add_outlined,
-                color: Colors.blue,
-                title: 'Single Student Registration',
-                subtitle: 'Personal Info → Parent Info → Courses → Face Capture',
-                onTap: () async {
-                  Navigator.pop(ctx);
-                  final ok = await Navigator.push<bool>(
-                    ctx,
-                    MaterialPageRoute(
-                        builder: (_) =>
-                            const AcademyStudentRegistrationScreen()),
-                  );
-                  if (ok == true && ctx.mounted) {
-                    _loadStats();
-                    widget.studentReloadTrigger.value++;
-                  }
-                },
-              ),
+              // Option 2 — Single registration (existing flow).
+              // Ends in on-device Face Capture (camera + ML Kit), which is
+              // mobile-only — hidden on Windows. Bulk Excel upload above works
+              // on Windows and remains available there.
+              if (PlatformSupport.faceFeatures) ...[
+                const SizedBox(height: 12),
+                _OptionTile(
+                  icon: Icons.person_add_outlined,
+                  color: Colors.blue,
+                  title: 'Single Student Registration',
+                  subtitle:
+                      'Personal Info → Parent Info → Courses → Face Capture',
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    final ok = await Navigator.push<bool>(
+                      ctx,
+                      MaterialPageRoute(
+                          builder: (_) =>
+                              const AcademyStudentRegistrationScreen()),
+                    );
+                    if (ok == true && ctx.mounted) {
+                      _loadStats();
+                      widget.studentReloadTrigger.value++;
+                    }
+                  },
+                ),
+              ],
             ],
           ),
         ),
@@ -475,14 +483,28 @@ class _HomeTabState extends State<_HomeTab> {
                   color: Colors.blue,
                   onTap: () => _showRegisterOptions(context),
                 ),
+                // Face Scan Attendance relies on the camera image stream +
+                // on-device ML Kit, which are mobile-only. Hidden on Windows.
+                if (PlatformSupport.faceFeatures)
+                  _QuickAction(
+                    icon: Icons.face_outlined,
+                    label: 'Face Scan Attendance',
+                    color: Colors.green,
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const AcademyFaceScanScreen()),
+                    ),
+                  ),
+                // Attendance Intelligence — read-only insights over attendance data
                 _QuickAction(
-                  icon: Icons.face_outlined,
-                  label: 'Face Scan Attendance',
-                  color: Colors.green,
+                  icon: Icons.insights_outlined,
+                  label: 'Attendance',
+                  color: Colors.deepPurple,
                   onTap: () => Navigator.push(
                     context,
                     MaterialPageRoute(
-                        builder: (_) => const AcademyFaceScanScreen()),
+                        builder: (_) => const AttendanceHubScreen()),
                   ),
                 ),
                 // Row 3: financial & utilities
@@ -507,6 +529,16 @@ class _HomeTabState extends State<_HomeTab> {
                     context,
                     MaterialPageRoute(
                         builder: (_) => const QrCodeScreen()),
+                  ),
+                ),
+                _QuickAction(
+                  icon: Icons.campaign_outlined,
+                  label: 'Send Notifications',
+                  color: Colors.pink,
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const SendNotificationScreen()),
                   ),
                 ),
               ],

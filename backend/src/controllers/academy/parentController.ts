@@ -287,17 +287,50 @@ export async function getAttendanceHistory(
 ): Promise<void> {
   try {
     const { studentId, academySlug } = req.parentUser!;
-    const rawDays = parseInt((req.query['days'] as string) ?? '30', 10);
-    const days = Math.max(1, Math.min(rawDays, 90));
+
+    // Filter precedence (backward compatible — `days` remains the default when
+    // none of the new params are supplied, so the existing dashboard is unchanged):
+    //   1. month=YYYY-MM        → that whole calendar month
+    //   2. from=YYYY-MM-DD[&to] → explicit date range (to defaults to today)
+    //   3. days=N               → trailing N days (legacy default = 30)
+    const monthRaw = (req.query['month'] as string) ?? '';
+    const fromRaw  = (req.query['from']  as string) ?? '';
+    const toRaw    = (req.query['to']    as string) ?? '';
+
+    const DATE_RE  = /^\d{4}-\d{2}-\d{2}$/;
+    const MONTH_RE = /^\d{4}-\d{2}$/;
+
+    let where = 'student_id = $1';
+    const params: unknown[] = [studentId];
+
+    if (MONTH_RE.test(monthRaw)) {
+      // [first-of-month, first-of-next-month) — avoids end-of-month edge cases.
+      params.push(`${monthRaw}-01`);
+      where += ` AND date >= $${params.length}::date
+                 AND date <  ($${params.length}::date + INTERVAL '1 month')`;
+    } else if (DATE_RE.test(fromRaw)) {
+      params.push(fromRaw);
+      where += ` AND date >= $${params.length}::date`;
+      if (DATE_RE.test(toRaw)) {
+        params.push(toRaw);
+        where += ` AND date <= $${params.length}::date`;
+      } else {
+        where += ` AND date <= CURRENT_DATE`;
+      }
+    } else {
+      const rawDays = parseInt((req.query['days'] as string) ?? '30', 10);
+      const days = Math.max(1, Math.min(Number.isFinite(rawDays) ? rawDays : 30, 366));
+      params.push(days);
+      where += ` AND date >= CURRENT_DATE - MAKE_INTERVAL(days => $${params.length})`;
+    }
 
     const records = await academyQuery<Record<string, unknown>>(
       academySlug,
       `SELECT date, time_in, time_out, duration_mins, status
        FROM attendance
-       WHERE student_id = $1
-         AND date >= CURRENT_DATE - MAKE_INTERVAL(days => $2)
+       WHERE ${where}
        ORDER BY date DESC`,
-      [studentId, days]
+      params
     );
 
     res.json({ success: true, data: records });

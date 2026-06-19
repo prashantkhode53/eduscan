@@ -132,6 +132,59 @@ class AcademyApiService {
     return _parse(res) as Map<String, dynamic>;
   }
 
+  // ── Attendance Intelligence (admin/teacher) ─────────────────────────────────
+
+  /// Admin "Today" action list: students below threshold, ≥3 consecutive
+  /// absences, sharp drops, and not-seen-in-X-days, over a rolling window.
+  static Future<Map<String, dynamic>> getInsightsToday({int windowDays = 56}) async {
+    final uri = Uri.parse(ApiEndpoints.attendanceInsightsToday)
+        .replace(queryParameters: {'window': windowDays.toString()});
+    final res = await _http.get(uri, headers: await _headers()).timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
+  /// All active students with their score band + attendance % + risk level.
+  static Future<Map<String, dynamic>> getInsightsStudents({int windowDays = 56}) async {
+    final uri = Uri.parse(ApiEndpoints.attendanceInsightsStudents)
+        .replace(queryParameters: {'window': windowDays.toString()});
+    final res = await _http.get(uri, headers: await _headers()).timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
+  /// Defaulters grouped/sorted by stage (lowest attendance first).
+  static Future<Map<String, dynamic>> getInsightsDefaulters({int windowDays = 56}) async {
+    final uri = Uri.parse(ApiEndpoints.attendanceInsightsDefaulters)
+        .replace(queryParameters: {'window': windowDays.toString()});
+    final res = await _http.get(uri, headers: await _headers()).timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
+  /// Full attendance-score breakdown (factors + risk + patterns) for one student.
+  static Future<Map<String, dynamic>> getStudentInsight(
+      String studentId, {int windowDays = 56}) async {
+    final uri = Uri.parse(ApiEndpoints.attendanceInsightsScore(studentId))
+        .replace(queryParameters: {'window': windowDays.toString()});
+    final res = await _http.get(uri, headers: await _headers()).timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
+  /// Manually nudge a student's parent (single fire-and-forget FCM, server-side).
+  /// Returns the server message; throws ApiException on 404/409 (no device, etc.).
+  static Future<String> nudgeParent(String studentId, {String? message}) async {
+    final res = await _http.post(
+      Uri.parse(ApiEndpoints.attendanceInsightsNudge(studentId)),
+      headers: await _headers(),
+      body: jsonEncode({if (message != null && message.isNotEmpty) 'message': message}),
+    ).timeout(_timeout);
+    // Read message before _parse unwraps to data; re-decode for the message field.
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      return body['message'] as String? ?? 'Reminder sent';
+    }
+    _parse(res); // throws the structured ApiException
+    return '';
+  }
+
   // ── Academic Years ────────────────────────────────────────────────────────
 
   static Future<List<Map<String, dynamic>>> getAcademicYears() async {

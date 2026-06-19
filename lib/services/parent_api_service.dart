@@ -98,9 +98,30 @@ class ParentApiService {
     return _parse(res) as Map<String, dynamic>;
   }
 
-  static Future<List<Map<String, dynamic>>> getAttendance({int days = 30}) async {
+  /// Child attendance records.
+  ///
+  /// Backward compatible: with no [month]/[from]/[to] it returns the trailing
+  /// [days] (the original behaviour the dashboard uses). The backend filter
+  /// precedence is month → from/to → days.
+  ///   • [month]  'YYYY-MM' — that whole calendar month
+  ///   • [from]/[to] 'YYYY-MM-DD' — explicit range (to defaults to today)
+  static Future<List<Map<String, dynamic>>> getAttendance({
+    int days = 30,
+    String? month,
+    String? from,
+    String? to,
+  }) async {
+    final params = <String, String>{};
+    if (month != null && month.isNotEmpty) {
+      params['month'] = month;
+    } else if (from != null && from.isNotEmpty) {
+      params['from'] = from;
+      if (to != null && to.isNotEmpty) params['to'] = to;
+    } else {
+      params['days'] = days.toString();
+    }
     final uri = Uri.parse(ApiEndpoints.parentAttendance)
-        .replace(queryParameters: {'days': days.toString()});
+        .replace(queryParameters: params);
     final res = await _http.get(uri, headers: await _authHeaders())
         .timeout(_timeout);
     return (_parse(res) as List).cast<Map<String, dynamic>>();
@@ -131,5 +152,41 @@ class ParentApiService {
       headers: await _authHeaders(),
     ).timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
+  }
+
+  // ── Notifications ───────────────────────────────────────────────────────────
+
+  /// Paginated notification inbox for the logged-in parent.
+  /// Returns { notifications: [...], unread_count, page, limit }.
+  static Future<Map<String, dynamic>> getNotifications({
+    int page = 1,
+    int limit = 20,
+  }) async {
+    final uri = Uri.parse(ApiEndpoints.parentNotifications).replace(
+      queryParameters: {'page': page.toString(), 'limit': limit.toString()},
+    );
+    final res = await _http.get(uri, headers: await _authHeaders())
+        .timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
+  /// Single most-recent notification (drives the dashboard ticker).
+  /// Returns the latest map, or null if the parent has no notifications.
+  static Future<Map<String, dynamic>?> getLatestNotification() async {
+    final res = await _http.get(
+      Uri.parse(ApiEndpoints.parentNotificationsLatest),
+      headers: await _authHeaders(),
+    ).timeout(_timeout);
+    final data = _parse(res) as Map<String, dynamic>;
+    return data['latest'] as Map<String, dynamic>?;
+  }
+
+  /// Mark a notification as read for this parent.
+  static Future<void> markNotificationRead(String id) async {
+    final res = await _http.post(
+      Uri.parse(ApiEndpoints.parentNotificationRead(id)),
+      headers: await _authHeaders(),
+    ).timeout(_timeout);
+    _parse(res);
   }
 }

@@ -23,6 +23,13 @@ class ApiEndpoints {
   static String academyFeeReceiptById(String id) => '$baseUrl/api/academy/fees/receipts/$id';
   static String academyFeeReceiptResend(String id) => '$baseUrl/api/academy/fees/receipts/$id/resend';
   static const String academyAttendanceScan = '$baseUrl/api/academy/attendance/scan';
+  // Attendance Intelligence (admin/teacher) — read-only insights + manual nudge
+  static const String attendanceInsights        = '$baseUrl/api/academy/attendance-insights';
+  static const String attendanceInsightsToday   = '$baseUrl/api/academy/attendance-insights/today';
+  static const String attendanceInsightsStudents= '$baseUrl/api/academy/attendance-insights/students';
+  static const String attendanceInsightsDefaulters = '$baseUrl/api/academy/attendance-insights/defaulters';
+  static String attendanceInsightsScore(String id) => '$baseUrl/api/academy/attendance-insights/$id/score';
+  static String attendanceInsightsNudge(String id) => '$baseUrl/api/academy/attendance-insights/$id/nudge';
   static const String academyQrCodes        = '$baseUrl/api/academy/qr-codes';
   static const String academyAcademicYears  = '$baseUrl/api/academy/academic-years';
   static const String academyNotifications  = '$baseUrl/api/academy/notifications';
