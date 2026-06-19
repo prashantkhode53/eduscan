@@ -219,6 +219,44 @@ export async function reconcileAcademySchemas(): Promise<void> {
         CREATE INDEX IF NOT EXISTS idx_fri_receipt ON fee_receipt_items(receipt_id);
         CREATE INDEX IF NOT EXISTS idx_fri_record  ON fee_receipt_items(fee_record_id)
       `);
+      // ── Parent broadcast notifications (history/audit + per-parent read state) ──
+      // Additive: independent of the existing user-keyed `notifications` table.
+      await academyExec(slug, `
+        CREATE TABLE IF NOT EXISTS parent_notifications (
+          id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          message           TEXT NOT NULL,
+          academic_year_ids UUID[] NOT NULL,
+          course_ids        UUID[] NOT NULL,
+          sent_by           UUID REFERENCES users(id) ON DELETE SET NULL,
+          sent_by_name      TEXT,
+          recipient_count   INT  NOT NULL DEFAULT 0,
+          success_count     INT  NOT NULL DEFAULT 0,
+          failed_count      INT  NOT NULL DEFAULT 0,
+          status            VARCHAR(12) NOT NULL DEFAULT 'sent'
+                              CHECK (status IN ('sent','partial','failed')),
+          created_at        TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+      await academyExec(slug, `
+        CREATE TABLE IF NOT EXISTS parent_notification_recipients (
+          id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          notification_id UUID NOT NULL REFERENCES parent_notifications(id) ON DELETE CASCADE,
+          student_id      VARCHAR(20) NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+          is_read         BOOLEAN NOT NULL DEFAULT FALSE,
+          read_at         TIMESTAMPTZ,
+          created_at      TIMESTAMPTZ DEFAULT NOW(),
+          UNIQUE(notification_id, student_id)
+        )
+      `);
+      await academyExec(slug, `
+        CREATE INDEX IF NOT EXISTS idx_pnr_student ON parent_notification_recipients(student_id, is_read);
+        CREATE INDEX IF NOT EXISTS idx_pn_created  ON parent_notifications(created_at DESC)
+      `);
+      // Configurable max message length for parent broadcasts.
+      await academyExec(slug, `
+        INSERT INTO settings (key, value) VALUES ('notification_max_chars', '500')
+        ON CONFLICT (key) DO NOTHING
+      `);
       ok++;
     } catch (err) {
       console.error(`[Reconcile] schema "${slug}" failed:`, err);
@@ -498,6 +536,36 @@ export async function runAcademyMigrations(
       )
     `);
 
+    // ── Parent broadcast notifications ────────────────────────────────────
+    // History/audit row per broadcast + per-parent recipient read state.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS parent_notifications (
+        id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        message           TEXT NOT NULL,
+        academic_year_ids UUID[] NOT NULL,
+        course_ids        UUID[] NOT NULL,
+        sent_by           UUID REFERENCES users(id) ON DELETE SET NULL,
+        sent_by_name      TEXT,
+        recipient_count   INT  NOT NULL DEFAULT 0,
+        success_count     INT  NOT NULL DEFAULT 0,
+        failed_count      INT  NOT NULL DEFAULT 0,
+        status            VARCHAR(12) NOT NULL DEFAULT 'sent'
+                            CHECK (status IN ('sent','partial','failed')),
+        created_at        TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS parent_notification_recipients (
+        id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        notification_id UUID NOT NULL REFERENCES parent_notifications(id) ON DELETE CASCADE,
+        student_id      VARCHAR(20) NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+        is_read         BOOLEAN NOT NULL DEFAULT FALSE,
+        read_at         TIMESTAMPTZ,
+        created_at      TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(notification_id, student_id)
+      )
+    `);
+
     // ── Settings ──────────────────────────────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS settings (
@@ -513,6 +581,7 @@ export async function runAcademyMigrations(
         ('face_threshold',           '0.75'),
         ('face_duplicate_threshold', '0.88'),
         ('auto_mark_absent',         'true'),
+        ('notification_max_chars',   '500'),
         ('app_version',              '1.0.0')
       ON CONFLICT (key) DO NOTHING
     `);
@@ -565,6 +634,8 @@ export async function runAcademyMigrations(
     `);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_fri_receipt ON fee_receipt_items(receipt_id)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_fri_record  ON fee_receipt_items(fee_record_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_pnr_student ON parent_notification_recipients(student_id, is_read)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_pn_created  ON parent_notifications(created_at DESC)`);
 
     // Per-course configurable due day (1-28 = that day of month; NULL = last day of month)
     await client.query(`

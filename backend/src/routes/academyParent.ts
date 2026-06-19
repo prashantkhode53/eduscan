@@ -11,6 +11,11 @@ import {
   getParentReceipts,
   getParentReceipt,
 } from '../controllers/academy/parentController';
+import {
+  getParentNotifications,
+  getLatestParentNotification,
+  markNotificationRead,
+} from '../controllers/academy/notificationController';
 
 const router = Router();
 
@@ -31,5 +36,10 @@ router.get('/profile',         parentAuthMiddleware, getParentProfile);
 router.get('/attendance',      parentAuthMiddleware, getAttendanceHistory);
 router.get('/receipts',        parentAuthMiddleware, getParentReceipts);
 router.get('/receipts/:id',    parentAuthMiddleware, getParentReceipt);
+
+// ── Parent notifications (broadcast inbox + ticker) ───────────────────────────
+router.get('/notifications',         parentAuthMiddleware, getParentNotifications);
+router.get('/notifications/latest',  parentAuthMiddleware, getLatestParentNotification);
+router.post('/notifications/:id/read', parentAuthMiddleware, markNotificationRead);
 
 export default router;

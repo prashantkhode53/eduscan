@@ -86,3 +86,63 @@ export async function sendFcm(payload: FcmPayload): Promise<boolean> {
     return false;
   }
 }
+
+export interface MulticastResult {
+  successCount: number;
+  failureCount: number;
+}
+
+/**
+ * Send the same notification to many devices (parent broadcast).
+ *
+ * Uses messaging().sendEachForMulticast, which FCM caps at 500 tokens per call,
+ * so we batch. Tokens are de-duplicated and empties dropped. Never throws —
+ * returns aggregate {successCount, failureCount}; a disabled/uninitialised
+ * Firebase counts every token as a failure so callers can record an accurate
+ * delivery summary.
+ */
+export async function sendFcmMulticast(
+  tokens: string[],
+  title: string,
+  body: string,
+  data: Record<string, string> = {}
+): Promise<MulticastResult> {
+  const unique = Array.from(new Set(tokens.filter((t) => !!t)));
+  if (unique.length === 0) return { successCount: 0, failureCount: 0 };
+  if (!init()) return { successCount: 0, failureCount: unique.length };
+
+  let successCount = 0;
+  let failureCount = 0;
+
+  for (let i = 0; i < unique.length; i += 500) {
+    const batch = unique.slice(i, i + 500);
+    try {
+      const resp = await _admin.messaging().sendEachForMulticast({
+        tokens: batch,
+        notification: { title, body },
+        data,
+        android: {
+          priority: 'high',
+          notification: {
+            channelId: 'eduscan_alerts',
+            priority:  'max',
+            sound:     'default',
+            defaultSound: true,
+          },
+        },
+        apns: {
+          payload: { aps: { sound: 'default', badge: 1 } },
+        },
+      });
+      successCount += resp.successCount;
+      failureCount += resp.failureCount;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[FCM] multicast batch failed: ${msg}`);
+      failureCount += batch.length;
+    }
+  }
+
+  console.log(`[FCM] multicast sent: ${successCount} ok, ${failureCount} failed (of ${unique.length})`);
+  return { successCount, failureCount };
+}
