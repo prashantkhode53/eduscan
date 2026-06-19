@@ -171,6 +171,37 @@ class AcademyApiService {
     _parse(res);
   }
 
+  // ── Parent notifications (admin broadcast) ──────────────────────────────────
+
+  /// Broadcast a notification to all parents in the selected academic year(s)
+  /// who are enrolled in one of the selected course(s).
+  /// Returns { notification_id, total_recipients, success_count, failed_count, status }.
+  static Future<Map<String, dynamic>> sendParentNotification({
+    required List<String> academicYearIds,
+    required List<String> courseIds,
+    required String message,
+  }) async {
+    final res = await _http.post(
+          Uri.parse(ApiEndpoints.academyNotifications),
+          headers: await _headers(),
+          body: jsonEncode({
+            'academic_year_ids': academicYearIds,
+            'course_ids':        courseIds,
+            'message':           message,
+          }),
+        )
+        .timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
+  /// Admin notification history (newest first, paginated).
+  static Future<Map<String, dynamic>> getSentNotifications({int page = 1}) async {
+    final uri = Uri.parse(ApiEndpoints.academyNotifications)
+        .replace(queryParameters: {'page': page.toString()});
+    final res = await _http.get(uri, headers: await _headers()).timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
   // ── Courses ───────────────────────────────────────────────────────────────
 
   static Future<List<dynamic>> getCourses({String? academicYearId}) async {
