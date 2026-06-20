@@ -6,6 +6,7 @@ import 'package:flutter/services.dart' show SystemNavigator;
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:http/http.dart' as http;
 import 'package:jwt_decoder/jwt_decoder.dart';
+import '../config/app_mode.dart';
 import '../services/api_service.dart';
 import '../services/storage_service.dart';
 
@@ -181,12 +182,27 @@ class _SplashScreenState extends State<SplashScreen>
       setState(() => _isWakingUp = false);
 
       if (!serverReady) {
-        Navigator.of(context).pushReplacementNamed('/login');
+        Navigator.of(context).pushReplacementNamed(AppMode.loginRoute);
         return;
       }
 
       setState(() => _statusMessage = 'Loading...');
 
+      // ── Parent APK: only restore a parent session; never academy ─────────
+      // This build is dedicated to parents/guardians, so a leftover academy
+      // token is ignored and the user lands on the parent login.
+      if (AppMode.isParent) {
+        final parentToken = await StorageService.getParentToken();
+        if (!mounted) return;
+        if (parentToken != null && !JwtDecoder.isExpired(parentToken)) {
+          Navigator.of(context).pushReplacementNamed('/parent/dashboard');
+        } else {
+          Navigator.of(context).pushReplacementNamed(AppMode.loginRoute);
+        }
+        return;
+      }
+
+      // ── Academy APK: restore academy / super-admin session ───────────────
       final token = await StorageService.getToken();
       if (!mounted) return;
 
@@ -210,12 +226,12 @@ class _SplashScreenState extends State<SplashScreen>
         if (parentToken != null && !JwtDecoder.isExpired(parentToken)) {
           Navigator.of(context).pushReplacementNamed('/parent/dashboard');
         } else {
-          Navigator.of(context).pushReplacementNamed('/login');
+          Navigator.of(context).pushReplacementNamed(AppMode.loginRoute);
         }
       }
     } catch (e) {
       debugPrint('Splash init error: $e');
-      if (mounted) Navigator.of(context).pushReplacementNamed('/login');
+      if (mounted) Navigator.of(context).pushReplacementNamed(AppMode.loginRoute);
     } finally {
       _initRunning = false;
     }
