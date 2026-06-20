@@ -1,5 +1,10 @@
+import 'dart:async';
 import 'dart:io';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show SystemNavigator;
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:http/http.dart' as http;
 import 'package:jwt_decoder/jwt_decoder.dart';
 import '../services/api_service.dart';
 import '../services/storage_service.dart';
@@ -19,6 +24,10 @@ class _SplashScreenState extends State<SplashScreen>
   bool _isWakingUp   = false;
   bool _noInternet   = false;
 
+  StreamSubscription<ConnectivityResult>? _connSub;
+  bool _initRunning  = false;
+  bool _offlineDialogOpen = false;
+
   @override
   void initState() {
     super.initState();
@@ -29,22 +38,109 @@ class _SplashScreenState extends State<SplashScreen>
     _opacity = Tween<double>(begin: 0.0, end: 1.0)
         .animate(CurvedAnimation(parent: _controller, curve: Curves.easeIn));
     _controller.forward();
+
+    // Auto-retry when the OS reports the network is back while we're stuck
+    // on the offline screen.
+    _connSub = Connectivity().onConnectivityChanged.listen((result) {
+      final online = result == ConnectivityResult.mobile  ||
+                     result == ConnectivityResult.wifi     ||
+                     result == ConnectivityResult.ethernet;
+      if (online && _noInternet && !_initRunning) {
+        _retry();
+      }
+    });
+
     Future.delayed(Duration.zero, _initApp);
   }
 
+  /// Lightweight HTTP 204 reachability probes. We try several so that one
+  /// being blocked/down (corporate/edu Wi-Fi, regional blocks, carrier
+  /// filtering) doesn't produce a false "offline". A 2xx/3xx from any of them
+  /// is proof of real internet access — interface state alone is not.
+  static const List<String> _reachabilityProbes = [
+    'https://clients3.google.com/generate_204',     // Google connectivity check
+    'https://www.gstatic.com/generate_204',         // Google CDN, often unblocked
+    'https://captive.apple.com/hotspot-detect.html', // Apple captive-portal probe
+    'https://cloudflare.com/cdn-cgi/trace',          // independent of Google
+  ];
+
+  /// Returns true once real internet access is confirmed. Retries with
+  /// backoff so a cold-start race (network stack still coming up) doesn't
+  /// flip us to the offline screen on a single transient miss.
+  Future<bool> _isReallyOnline() async {
+    // 1) Cheap interface gate — if there's truly no interface, skip the probes.
+    try {
+      final conn = await Connectivity().checkConnectivity();
+      final hasInterface = conn == ConnectivityResult.mobile ||
+                           conn == ConnectivityResult.wifi    ||
+                           conn == ConnectivityResult.ethernet;
+      debugPrint('[net] interface=$conn hasInterface=$hasInterface');
+      if (!hasInterface) return false;
+    } catch (e) {
+      debugPrint('[net] connectivity check failed: $e (continuing to probes)');
+    }
+
+    // 2) HTTP reachability with retries + backoff (1.5s, 3s, 4.5s ...).
+    const maxAttempts = 4;
+    for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (await _probeAny()) {
+        debugPrint('[net] online confirmed on attempt $attempt');
+        return true;
+      }
+      // Our own backend counts too: if it answers, the user is online for our
+      // purposes even if the public probes are blocked on this network.
+      if (await ApiService.checkHealth()) {
+        debugPrint('[net] online confirmed via backend health on attempt $attempt');
+        return true;
+      }
+      debugPrint('[net] attempt $attempt/$maxAttempts failed');
+      if (attempt < maxAttempts) {
+        await Future.delayed(Duration(milliseconds: 1500 * attempt));
+      }
+    }
+    debugPrint('[net] all $maxAttempts attempts failed — treating as offline');
+    return false;
+  }
+
+  /// Hits the reachability probes; true if any returns a non-error status.
+  Future<bool> _probeAny() async {
+    for (final url in _reachabilityProbes) {
+      try {
+        final res = await http
+            .get(Uri.parse(url))
+            .timeout(const Duration(seconds: 6));
+        // 2xx/3xx = real connectivity. A captive portal typically rewrites
+        // these to a 200 with HTML, so for the strict 204 probes we also
+        // require an empty body to avoid being fooled by a portal page.
+        final ok = res.statusCode >= 200 && res.statusCode < 400;
+        final isStrict204 = url.endsWith('generate_204');
+        final passed = ok && (!isStrict204 || res.body.isEmpty);
+        debugPrint('[net] probe $url -> ${res.statusCode} '
+            '(len=${res.body.length}) passed=$passed');
+        if (passed) return true;
+      } on TimeoutException {
+        debugPrint('[net] probe $url -> TIMEOUT');
+      } on SocketException catch (e) {
+        debugPrint('[net] probe $url -> SocketException: ${e.message}');
+      } catch (e) {
+        debugPrint('[net] probe $url -> error: $e');
+      }
+    }
+    return false;
+  }
+
   Future<void> _initApp() async {
+    if (_initRunning) return;
+    _initRunning = true;
     try {
       await Future.delayed(const Duration(milliseconds: 800));
 
-      // ── Quick network reachability check ───────────────────────────────────
-      bool online = false;
-      try {
-        final result = await InternetAddress.lookup('google.com')
-            .timeout(const Duration(seconds: 5));
-        online = result.isNotEmpty && result.first.rawAddress.isNotEmpty;
-      } catch (_) {
-        online = false;
-      }
+      // ── Real internet reachability check ───────────────────────────────────
+      // Validates actual internet access (not just an interface being up) by
+      // hitting a lightweight HTTP 204 endpoint, with retries + backoff so a
+      // cold-start race (network stack not ready yet) doesn't produce a false
+      // "offline". Only after every attempt fails do we treat it as offline.
+      final online = await _isReallyOnline();
 
       if (!online) {
         if (!mounted) return;
@@ -53,6 +149,7 @@ class _SplashScreenState extends State<SplashScreen>
           _isWakingUp   = false;
           _statusMessage = '';
         });
+        _showOfflineDialog();
         return;
       }
 
@@ -119,10 +216,18 @@ class _SplashScreenState extends State<SplashScreen>
     } catch (e) {
       debugPrint('Splash init error: $e');
       if (mounted) Navigator.of(context).pushReplacementNamed('/login');
+    } finally {
+      _initRunning = false;
     }
   }
 
   void _retry() {
+    if (_initRunning) return;
+    // Dismiss the offline prompt if it's open before re-running init.
+    if (_offlineDialogOpen && mounted) {
+      Navigator.of(context, rootNavigator: true).pop();
+      _offlineDialogOpen = false;
+    }
     setState(() {
       _noInternet    = false;
       _isWakingUp    = false;
@@ -131,8 +236,43 @@ class _SplashScreenState extends State<SplashScreen>
     _initApp();
   }
 
+  /// Blocking prompt shown when the app opens with no network.
+  /// Auto-dismisses via [_retry] when connectivity returns.
+  Future<void> _showOfflineDialog() async {
+    if (_offlineDialogOpen || !mounted) return;
+    _offlineDialogOpen = true;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.wifi_off_rounded, size: 40),
+        title: const Text('No internet connection'),
+        content: const Text(
+          "EduScan needs an internet connection to start.\n\n"
+          "Please check your Wi-Fi or mobile data — we'll reconnect "
+          "automatically once you're back online.",
+          textAlign: TextAlign.center,
+        ),
+        actionsAlignment: MainAxisAlignment.spaceBetween,
+        actions: [
+          TextButton(
+            onPressed: () => SystemNavigator.pop(),
+            child: const Text('Close'),
+          ),
+          FilledButton.icon(
+            onPressed: _retry,
+            icon: const Icon(Icons.refresh_rounded, size: 18),
+            label: const Text('Try Again'),
+          ),
+        ],
+      ),
+    );
+    _offlineDialogOpen = false;
+  }
+
   @override
   void dispose() {
+    _connSub?.cancel();
     _controller.dispose();
     super.dispose();
   }
@@ -193,7 +333,8 @@ class _SplashScreenState extends State<SplashScreen>
                       size: 48, color: Colors.white70),
                   const SizedBox(height: 16),
                   const Text(
-                    'No Internet Connection',
+                    'Please connect to the network.',
+                    textAlign: TextAlign.center,
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: 18,
