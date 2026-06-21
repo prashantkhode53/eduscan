@@ -12,6 +12,8 @@ import {
   unlockAcademyUser,
   resetLoginAttempts,
   blockAcademyUser,
+  getFaceThreshold,
+  setFaceThreshold,
 } from '../controllers/superAdminController';
 
 const router = Router();
@@ -27,6 +29,8 @@ router.patch ('/:slug/activate',       activateAcademy);
 router.patch ('/:slug/unlock-user',    unlockAcademyUser);
 router.patch ('/:slug/reset-attempts', resetLoginAttempts);
 router.patch ('/:slug/block-user',     blockAcademyUser);
+router.get   ('/:slug/face-threshold', getFaceThreshold);
+router.put   ('/:slug/face-threshold', setFaceThreshold);
 router.delete('/:slug',                deleteAcademy);
 
 export default router;

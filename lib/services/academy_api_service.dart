@@ -439,6 +439,51 @@ class AcademyApiService {
     return _parse(res) as Map<String, dynamic>;
   }
 
+  /// Re-verify the logged-in academy user's password (kiosk lock-mode unlock).
+  /// Returns true only when the password matches. Does not affect lockout.
+  static Future<bool> verifyAttendancePassword(String password) async {
+    final res = await _http.post(
+          Uri.parse(ApiEndpoints.academyAttendanceVerifyPassword),
+          headers: await _headers(),
+          body: jsonEncode({'password': password}),
+        )
+        .timeout(const Duration(seconds: 20));
+    final data = _parse(res) as Map<String, dynamic>;
+    return data['valid'] == true;
+  }
+
+  // ── Academy settings ─────────────────────────────────────────────────────────
+
+  /// Fetch this academy's key/value settings (e.g. `face_scan_secure`).
+  static Future<Map<String, String>> getSettings() async {
+    final res = await _http
+        .get(Uri.parse(ApiEndpoints.academySettings), headers: await _headers())
+        .timeout(const Duration(seconds: 20));
+    final data = _parse(res) as Map<String, dynamic>;
+    return data.map((k, v) => MapEntry(k, v?.toString() ?? ''));
+  }
+
+  /// Update one allow-listed academy setting (admin only).
+  static Future<void> updateSetting(String key, String value) async {
+    final res = await _http
+        .put(Uri.parse(ApiEndpoints.academySettings),
+            headers: await _headers(),
+            body: jsonEncode({'key': key, 'value': value}))
+        .timeout(const Duration(seconds: 20));
+    _parse(res);
+  }
+
+  /// Convenience: is Face Scan Attendance password-protected for this academy?
+  /// Defaults to true (secure) if the setting is missing or unreadable.
+  static Future<bool> isFaceScanSecure() async {
+    try {
+      final s = await getSettings();
+      return (s['face_scan_secure'] ?? 'true').toLowerCase() != 'false';
+    } catch (_) {
+      return true; // fail safe: keep it secure if we can't read the flag
+    }
+  }
+
   /// Probes whether the face-recognition service is awake and its model loaded.
   /// Returns true only when InsightFace reports ready. The probe itself nudges
   /// a sleeping Render container to wake, so repeated calls converge to ready.

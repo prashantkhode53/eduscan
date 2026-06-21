@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { query, queryOne } from '../db/pool';
-import { sharedPool, academyQueryOne, academyExec } from '../db/poolManager';
+import { sharedPool, academyQuery, academyQueryOne, academyExec } from '../db/poolManager';
 import { runAcademyMigrations } from '../db/academyMigrations';
 import { AppError } from '../middleware/errorHandler';
 import { AcademyUser } from '../types';
@@ -250,5 +250,61 @@ export async function updateAcademyProfile(
       [name ?? null, phone ?? null, address ?? null, logo_url ?? null, academyId]
     );
     res.json({ success: true, message: 'Academy profile updated' });
+  } catch (err) { next(err); }
+}
+
+// ── GET /api/academy/settings ─────────────────────────────────────────────────
+
+/**
+ * Return this academy's key/value settings (the per-academy `settings` table).
+ * Used by the Settings screen and the Face Scan screen to read flags such as
+ * `face_scan_secure` (kiosk unlock requires a password).
+ */
+export async function getAcademySettings(
+  req: Request, res: Response, next: NextFunction
+): Promise<void> {
+  try {
+    const { academySlug } = req.academyUser!;
+    const rows = await academyQuery<{ key: string; value: string }>(
+      academySlug, `SELECT key, value FROM settings ORDER BY key`
+    );
+    const settings: Record<string, string> = {};
+    for (const r of rows) settings[r.key] = r.value;
+    res.json({ success: true, data: settings });
+  } catch (err) { next(err); }
+}
+
+// ── PUT /api/academy/settings ─────────────────────────────────────────────────
+
+// Settings an academy admin is allowed to change from the app. An allow-list
+// prevents the endpoint from being used to overwrite arbitrary keys (e.g.
+// kiosk_api_key, thresholds managed by the super admin).
+const EDITABLE_SETTINGS = new Set(['face_scan_secure']);
+
+/**
+ * Upsert a single allow-listed academy setting. Admin-only (Decision Maker).
+ */
+export async function updateAcademySetting(
+  req: Request, res: Response, next: NextFunction
+): Promise<void> {
+  try {
+    const { academySlug } = req.academyUser!;
+    const { key, value } = req.body as { key?: string; value?: string };
+
+    if (!key || value === undefined) {
+      return next(new AppError('key and value are required', 400));
+    }
+    if (!EDITABLE_SETTINGS.has(key)) {
+      return next(new AppError(`Setting "${key}" is not editable`, 400));
+    }
+
+    await academyExec(
+      academySlug,
+      `INSERT INTO settings (key, value, updated_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
+      [key, String(value)]
+    );
+    res.json({ success: true, data: { key, value: String(value) }, message: 'Setting updated' });
   } catch (err) { next(err); }
 }

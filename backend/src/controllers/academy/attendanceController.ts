@@ -1,5 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
+import bcrypt from 'bcrypt';
 import { academyQuery, academyQueryOne } from '../../db/poolManager';
+import { AppError } from '../../middleware/errorHandler';
 import { batchEmbed } from '../../utils/insightface';
 import { cosineSimilarity } from '../../utils/faceMatch';
 import { getActiveEmbeddings, getThreshold, CachedStudent } from '../../db/scanCache';
@@ -183,6 +185,7 @@ export async function scanAcademy(
           student: studentPayload,
           time_in: existing.time_in,
           confidence,
+          threshold,
           message: `Already checked in at ${existing.time_in} (${Math.floor(diffMins)}m ago).`,
         });
         return;
@@ -199,6 +202,7 @@ export async function scanAcademy(
           time_out:      existing.time_out,
           duration_mins: existing.duration_mins,
           confidence,
+          threshold,
           message: `Already checked out at ${existing.time_out} (${Math.floor(diffMins)}m ago).`,
         });
         return;
@@ -233,6 +237,7 @@ export async function scanAcademy(
         student: studentPayload,
         time_in: timeStr,
         confidence,
+        threshold,
         message: `Face matched! Check-in recorded for ${student.first_name} ${student.last_name}`,
       });
       return;
@@ -290,7 +295,42 @@ export async function scanAcademy(
       time_out:      timeStr,
       duration_mins: durationMins,
       confidence,
+      threshold,
       message: `Face matched! Check-out for ${student.first_name} ${student.last_name}. Duration: ${Math.floor(durationMins / 60)}h ${durationMins % 60}m`,
     });
+  } catch (err) { next(err); }
+}
+
+// ── POST /api/academy/attendance/verify-password ──────────────────────────────
+
+/**
+ * Re-verify the *currently authenticated* academy user's password. Used to
+ * unlock kiosk lock-mode on the attendance scan screen, so a student can't leave
+ * the page without an operator's password.
+ *
+ * Deliberately lightweight vs. login: identifies the user from their JWT (no
+ * email/slug in the body) and DOES NOT touch failed_attempts / lockout — a wrong
+ * unlock attempt must never lock the operator out of an unattended kiosk.
+ */
+export async function verifyAcademyPassword(
+  req: Request, res: Response, next: NextFunction
+): Promise<void> {
+  try {
+    const { userId, academySlug } = req.academyUser!;
+    const { password } = req.body as { password?: string };
+
+    if (!password || typeof password !== 'string') {
+      return next(new AppError('password is required', 400));
+    }
+
+    const user = await academyQueryOne<{ password_hash: string }>(
+      academySlug,
+      `SELECT password_hash FROM users WHERE id = $1`,
+      [userId]
+    );
+    if (!user) return next(new AppError('User not found', 404));
+
+    const match = await bcrypt.compare(password, user.password_hash);
+    res.json({ success: true, data: { valid: match } });
   } catch (err) { next(err); }
 }

@@ -578,10 +578,11 @@ export async function runAcademyMigrations(
     await client.query(`
       INSERT INTO settings (key, value) VALUES
         ('kiosk_api_key',            gen_random_uuid()::text),
-        ('face_threshold',           '0.75'),
+        ('face_threshold',           '0.60'),
         ('face_duplicate_threshold', '0.88'),
         ('auto_mark_absent',         'true'),
         ('notification_max_chars',   '500'),
+        ('face_scan_secure',         'true'),
         ('app_version',              '1.0.0')
       ON CONFLICT (key) DO NOTHING
     `);

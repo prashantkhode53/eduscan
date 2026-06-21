@@ -522,3 +522,77 @@ export async function blockAcademyUser(
     res.json({ success: true, message: 'Account blocked successfully' });
   } catch (err) { next(err); }
 }
+
+// ── GET /api/super-admin/academies/:slug/face-threshold ───────────────────────
+
+/**
+ * Read this academy's face-match threshold (the scan strictness used by
+ * attendanceController.scanAcademy). Stored per-academy in "<slug>".settings
+ * under key 'face_threshold'. Falls back to 0.60 if the row is missing.
+ */
+export async function getFaceThreshold(
+  req: Request, res: Response, next: NextFunction
+): Promise<void> {
+  try {
+    const { slug } = req.params;
+    const { rows: ac } = await sharedPool.query(
+      `SELECT id FROM academies WHERE slug = $1`, [slug]
+    );
+    if (!ac.length) return next(new AppError('Academy not found', 404));
+
+    const row = await academyQueryOne<{ value: string }>(
+      slug, `SELECT value FROM settings WHERE key = 'face_threshold'`
+    );
+    const parsed = parseFloat(row?.value ?? '0.60');
+    const value  = Number.isFinite(parsed) ? parsed : 0.60;
+
+    res.json({ success: true, data: { face_threshold: value } });
+  } catch (err) { next(err); }
+}
+
+// ── PUT /api/super-admin/academies/:slug/face-threshold ───────────────────────
+
+/**
+ * Update this academy's face-match threshold. Accepts a number in [0.50, 0.90]
+ * (the usable ArcFace range — below 0.50 invites false matches, above 0.90
+ * rejects legitimate ones). The backend scan cache picks the new value up
+ * within its 5-minute TTL (see scanCache.getThreshold).
+ */
+export async function setFaceThreshold(
+  req: Request, res: Response, next: NextFunction
+): Promise<void> {
+  try {
+    const { slug } = req.params;
+    const { value } = req.body as { value?: number | string };
+
+    const num = typeof value === 'string' ? parseFloat(value) : value;
+    if (typeof num !== 'number' || !Number.isFinite(num) || num < 0.50 || num > 0.90) {
+      return next(new AppError('value must be a number between 0.50 and 0.90', 400));
+    }
+    const rounded = Math.round(num * 100) / 100; // store at 2-decimal precision
+
+    const { rows: ac } = await sharedPool.query(
+      `SELECT name FROM academies WHERE slug = $1`, [slug]
+    );
+    if (!ac.length) return next(new AppError('Academy not found', 404));
+
+    await academyExec(
+      slug,
+      `INSERT INTO settings (key, value, updated_at)
+       VALUES ('face_threshold', $1, NOW())
+       ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()`,
+      [String(rounded)]
+    );
+
+    await auditLog(
+      req.admin!.id, 'SET_FACE_THRESHOLD', slug,
+      `Set face_threshold=${rounded} for ${ac[0].name as string}`
+    );
+
+    res.json({
+      success: true,
+      data: { face_threshold: rounded },
+      message: `Face threshold set to ${rounded}`,
+    });
+  } catch (err) { next(err); }
+}

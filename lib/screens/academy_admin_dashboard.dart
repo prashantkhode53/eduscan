@@ -594,9 +594,61 @@ class _HomeTabState extends State<_HomeTab> {
 
 // ── Settings tab ──────────────────────────────────────────────────────────────
 
-class _SettingsTab extends StatelessWidget {
+class _SettingsTab extends StatefulWidget {
   final AcademyUser user;
   const _SettingsTab({required this.user});
+
+  @override
+  State<_SettingsTab> createState() => _SettingsTabState();
+}
+
+class _SettingsTabState extends State<_SettingsTab> {
+  AcademyUser get user => widget.user;
+
+  bool? _faceScanSecure;   // null = loading
+  bool  _savingSecure = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSettings();
+  }
+
+  Future<void> _loadSettings() async {
+    try {
+      final s = await AcademyApiService.getSettings();
+      if (!mounted) return;
+      setState(() => _faceScanSecure =
+          (s['face_scan_secure'] ?? 'true').toLowerCase() != 'false');
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _faceScanSecure = true); // fail safe: show as secure
+    }
+  }
+
+  Future<void> _toggleFaceScanSecure(bool value) async {
+    final previous = _faceScanSecure;
+    setState(() { _faceScanSecure = value; _savingSecure = true; });
+    try {
+      await AcademyApiService.updateSetting(
+          'face_scan_secure', value ? 'true' : 'false');
+      if (!mounted) return;
+      setState(() => _savingSecure = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(value
+            ? 'Face Scan Attendance now requires a password to unlock.'
+            : 'Face Scan Attendance can be unlocked without a password.'),
+        backgroundColor: Colors.green,
+      ));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() { _faceScanSecure = previous; _savingSecure = false; });
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(e.toString().replaceFirst('Exception: ', '')),
+        backgroundColor: Colors.red,
+      ));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -677,6 +729,34 @@ class _SettingsTab extends StatelessWidget {
                       .pushNamedAndRemoveUntil('/login', (_) => false);
                 }
               },
+            ),
+          ),
+
+          // ── Face Scan Attendance – Secure by Password ──────────────────
+          const SizedBox(height: 16),
+          Card(
+            child: SwitchListTile(
+              secondary: Icon(
+                _faceScanSecure == false
+                    ? Icons.lock_open_outlined
+                    : Icons.lock_outline,
+                color: theme.colorScheme.primary,
+              ),
+              title: const Text('Face Scan Attendance – Secure by Password'),
+              subtitle: Text(
+                _faceScanSecure == null
+                    ? 'Loading…'
+                    : (_faceScanSecure!
+                        ? 'On — unlocking the scan screen requires the academy password.'
+                        : 'Off — the scan screen can be locked/unlocked without a password.'),
+                style: const TextStyle(fontSize: 12),
+              ),
+              value: _faceScanSecure ?? true,
+              // Disabled while loading or saving so the value can't be toggled
+              // before we know the real state or mid-write.
+              onChanged: (_faceScanSecure == null || _savingSecure)
+                  ? null
+                  : _toggleFaceScanSecure,
             ),
           ),
         ],

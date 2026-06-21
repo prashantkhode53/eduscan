@@ -1,8 +1,8 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import '../services/super_admin_api_service.dart';
+import '../utils/file_opener.dart';
 import 'academy_students_screen.dart';
 
 class AcademyDetailScreen extends StatefulWidget {
@@ -19,6 +19,10 @@ class _AcademyDetailScreenState extends State<AcademyDetailScreen> {
   bool _loading = true;
   bool _changed = false; // true when caller should refresh list
 
+  double? _faceThreshold;     // loaded current value
+  double  _thresholdDraft = 0.60; // slider position (edited, unsaved)
+  bool    _savingThreshold = false;
+
   late Map<String, dynamic> _academy;
 
   @override
@@ -32,14 +36,21 @@ class _AcademyDetailScreenState extends State<AcademyDetailScreen> {
     if (!mounted) return;
     setState(() => _loading = true);
     try {
-      final data = await SuperAdminApiService.getAcademyStats(
-          _academy['slug'] as String);
+      final slug = _academy['slug'] as String;
+      final results = await Future.wait([
+        SuperAdminApiService.getAcademyStats(slug),
+        SuperAdminApiService.getFaceThreshold(slug),
+      ]);
+      final data      = results[0] as Map<String, dynamic>;
+      final threshold = results[1] as double;
       if (!mounted) return;
       setState(() {
-        _stats       = data['stats'] as Map<String, dynamic>?;
-        _academy     = (data['academy'] as Map<String, dynamic>?) ?? _academy;
-        _loginStatus = data['admin_login_status'] as Map<String, dynamic>?;
-        _loading     = false;
+        _stats          = data['stats'] as Map<String, dynamic>?;
+        _academy        = (data['academy'] as Map<String, dynamic>?) ?? _academy;
+        _loginStatus    = data['admin_login_status'] as Map<String, dynamic>?;
+        _faceThreshold  = threshold;
+        _thresholdDraft = threshold;
+        _loading        = false;
       });
     } catch (e) {
       if (!mounted) return;
@@ -54,6 +65,34 @@ class _AcademyDetailScreenState extends State<AcademyDetailScreen> {
   bool get _isActive => _academy['status'] == 'active';
   String get _slug   => _academy['slug'] as String;
   String get _name   => _academy['name'] as String? ?? '';
+
+  // ── Face match threshold ──────────────────────────────────────────────────
+
+  Future<void> _saveThreshold() async {
+    setState(() => _savingThreshold = true);
+    try {
+      final saved = await SuperAdminApiService.setFaceThreshold(
+          _slug, _thresholdDraft);
+      if (!mounted) return;
+      setState(() {
+        _faceThreshold   = saved;
+        _thresholdDraft  = saved;
+        _savingThreshold = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Face threshold set to ${saved.toStringAsFixed(2)} '
+            '(applies within ~5 min)'),
+        backgroundColor: Colors.green,
+      ));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _savingThreshold = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(e.toString().replaceFirst('Exception: ', '')),
+        backgroundColor: Colors.red,
+      ));
+    }
+  }
 
   // ── Toggle active / inactive ──────────────────────────────────────────────
 
@@ -232,7 +271,7 @@ class _AcademyDetailScreenState extends State<AcademyDetailScreen> {
         backgroundColor: Colors.green,
         action: SnackBarAction(
           label: 'Open',
-          onPressed: () => OpenFilex.open(file.path),
+          onPressed: () => FileOpener.open(file.path),
         ),
       ));
     } catch (e) {
@@ -475,6 +514,12 @@ class _AcademyDetailScreenState extends State<AcademyDetailScreen> {
                     ],
                   ),
 
+                  const SizedBox(height: 16),
+
+                  // ── Face match threshold ──────────────────────────────
+                  const _SectionLabel('Face Match Threshold'),
+                  _buildThresholdCard(theme),
+
                   const SizedBox(height: 20),
 
                   // ── Actions ───────────────────────────────────────────
@@ -658,6 +703,94 @@ class _AcademyDetailScreenState extends State<AcademyDetailScreen> {
                 ),
               ],
             ]),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildThresholdCard(ThemeData theme) {
+    final current = _faceThreshold;
+    final dirty   = current != null &&
+        (_thresholdDraft - current).abs() >= 0.005;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Icon(Icons.tune,
+                  size: 16,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.45)),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text('Scan match strictness',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              ),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(_thresholdDraft.toStringAsFixed(2),
+                    style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                        color: theme.colorScheme.primary)),
+              ),
+            ]),
+            const SizedBox(height: 8),
+            Slider(
+              value: _thresholdDraft.clamp(0.50, 0.90),
+              min: 0.50,
+              max: 0.90,
+              divisions: 40, // 0.01 steps
+              label: _thresholdDraft.toStringAsFixed(2),
+              onChanged: _savingThreshold
+                  ? null
+                  : (v) => setState(() => _thresholdDraft = v),
+            ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('0.50 · lenient',
+                    style: TextStyle(
+                        fontSize: 11,
+                        color:
+                            theme.colorScheme.onSurface.withValues(alpha: 0.5))),
+                Text('strict · 0.90',
+                    style: TextStyle(
+                        fontSize: 11,
+                        color:
+                            theme.colorScheme.onSurface.withValues(alpha: 0.5))),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Lower = easier to match (more recognitions, higher risk of wrong '
+              'matches). Higher = stricter. Default 0.60. Takes effect within '
+              '~5 minutes.',
+              style: TextStyle(
+                  fontSize: 11,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: (!dirty || _savingThreshold) ? null : _saveThreshold,
+                icon: _savingThreshold
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.save_outlined, size: 18),
+                label: Text(_savingThreshold ? 'Saving…' : 'Save Threshold'),
+              ),
+            ),
           ],
         ),
       ),

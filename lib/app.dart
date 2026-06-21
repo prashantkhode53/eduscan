@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'config/app_mode.dart';
 import 'constants/app_colors.dart';
 import 'providers/auth_provider.dart';
 import 'screens/splash_screen.dart';
@@ -25,7 +26,7 @@ class EduScanApp extends StatelessWidget {
     return Consumer<AuthProvider>(
       builder: (context, auth, _) {
         return MaterialApp(
-          title: 'EduScan',
+          title: 'EduScan${AppMode.titleSuffix}',
           debugShowCheckedModeBanner: false,
           themeMode: auth.themeMode,
           theme: AppColors.lightTheme,
