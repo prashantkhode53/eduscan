@@ -3,9 +3,9 @@ import 'dart:typed_data';
 import 'package:excel/excel.dart' hide Border;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
+import '../../utils/file_opener.dart';
 import '../../providers/academic_year_provider.dart';
 import '../../services/academy_api_service.dart';
 
@@ -73,13 +73,15 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
       final lines = [
         // Header — column order must match _columns list.
+        // The 7th column (key parent_name) is surfaced to admins as "Middle
+        // Name"; the backend storage key stays parent_name for compatibility.
         'First Name*,Last Name*,Gender (Male/Female/Other),'
             'Date Of Birth* (DD/MM/YYYY),Mobile* (10 digits),'
-            'Email,Parent/Guardian Name*,Parent Mobile* (10 digits),Address,'
+            'Email,Middle Name*,Parent Mobile* (10 digits),Address,'
             'Courses (comma-separated)',
         // Single sample row.
         'Rahul,Sharma,Male,15/05/2010,9876543210,'
-            'rahul@example.com,Ramesh Sharma,9876543211,Pune,$firstCourse',
+            'rahul@example.com,Ramesh,9876543211,Pune,$firstCourse',
       ];
 
       final content = lines.join('\n');
@@ -88,7 +90,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       await file.writeAsString(content);
 
       messenger.hideCurrentSnackBar();
-      await OpenFilex.open(file.path);
+      await FileOpener.open(file.path);
     } catch (e) {
       if (mounted) {
         messenger.hideCurrentSnackBar();
@@ -279,7 +281,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         errs.add('Invalid email');
       }
 
-      if ((r['parent_name'] ?? '').isEmpty) errs.add('Parent Name required');
+      if ((r['parent_name'] ?? '').isEmpty) errs.add('Middle Name required');
 
       final pMob = r['parent_mobile'] ?? '';
       if (pMob.isEmpty || !RegExp(r'^\d{10}$').hasMatch(pMob)) {
@@ -373,7 +375,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     final dir  = await getApplicationDocumentsDirectory();
     final file = File('${dir.path}/EduScan_Import_Errors.csv');
     await file.writeAsString(buf.toString());
-    await OpenFilex.open(file.path);
+    await FileOpener.open(file.path);
   }
 
   // ── Build ──────────────────────────────────────────────────────────────────
@@ -429,7 +431,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         const SizedBox(height: 10),
         Text(
           'Supported formats: .xlsx  ·  .csv\n'
-          'Required: First Name, Last Name, DOB, Mobile, Parent Name, Parent Mobile\n'
+          'Required: First Name, Last Name, DOB, Mobile, Middle Name, Parent Mobile\n'
           'Optional: Courses (comma-separated names, e.g. "NEET,JEE")\n'
           'Maximum: 1,000 students per upload.',
           style: TextStyle(
