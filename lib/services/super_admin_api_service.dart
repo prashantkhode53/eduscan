@@ -137,4 +137,27 @@ class SuperAdminApiService {
         .timeout(_timeout);
     _parse(res);
   }
+
+  // ── Face match threshold ───────────────────────────────────────────────────
+
+  /// Current face-match threshold for [slug] (scan strictness, 0.50–0.90).
+  static Future<double> getFaceThreshold(String slug) async {
+    final res = await _http
+        .get(Uri.parse('${ApiEndpoints.superAdminAcademies}/$slug/face-threshold'),
+            headers: await _headers())
+        .timeout(_timeout);
+    final data = _parse(res) as Map<String, dynamic>;
+    return (data['face_threshold'] as num).toDouble();
+  }
+
+  /// Update the face-match threshold for [slug]. Returns the saved value.
+  static Future<double> setFaceThreshold(String slug, double value) async {
+    final res = await _http
+        .put(Uri.parse('${ApiEndpoints.superAdminAcademies}/$slug/face-threshold'),
+            headers: await _headers(),
+            body: jsonEncode({'value': value}))
+        .timeout(_timeout);
+    final data = _parse(res) as Map<String, dynamic>;
+    return (data['face_threshold'] as num).toDouble();
+  }
 }

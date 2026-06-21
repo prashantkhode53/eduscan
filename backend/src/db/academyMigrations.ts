@@ -582,6 +582,7 @@ export async function runAcademyMigrations(
         ('face_duplicate_threshold', '0.88'),
         ('auto_mark_absent',         'true'),
         ('notification_max_chars',   '500'),
+        ('face_scan_secure',         'true'),
         ('app_version',              '1.0.0')
       ON CONFLICT (key) DO NOTHING
     `);
