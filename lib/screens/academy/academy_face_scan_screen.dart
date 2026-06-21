@@ -55,6 +55,27 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen>
   Timer? _debounceTimer;
   Timer? _overlayTimer;
 
+  // ── 24/7 kiosk watchdog ─────────────────────────────────────────────────────
+  // This screen is designed to stay open continuously (kiosk attendance). Over a
+  // long run, the camera stream can stop delivering frames for reasons we can't
+  // all enumerate (driver hiccup, OS camera preemption, throttling). The
+  // watchdog records the time of the last *delivered* frame and, if the stream
+  // goes silent while we're not legitimately mid-scan/paused, rebuilds the
+  // camera automatically so the kiosk self-heals without an operator present.
+  DateTime _lastFrameAt = DateTime.now();
+  Timer?   _watchdogTimer;
+  Timer?   _recycleTimer;
+  Timer?   _heartbeatTimer;
+  bool     _recovering = false;   // drives the brief "Recovering scanner…" banner
+  // No frames for this long (while a scan is NOT in flight) ⇒ assume the stream
+  // is dead and rebuild. Comfortably longer than a normal scan round-trip.
+  static const Duration _watchdogStaleAfter = Duration(seconds: 20);
+  static const Duration _watchdogInterval   = Duration(seconds: 10);
+  // Proactively recycle the camera periodically to dodge long-run HAL
+  // degradation. A clean rebuild costs ~1-2 s and keeps the driver healthy.
+  static const Duration _recycleEvery       = Duration(hours: 3);
+  static const Duration _heartbeatEvery     = Duration(minutes: 1);
+
   // ── InsightFace warmup ─────────────────────────────────────────────────────
   // Render's free tier sleeps the Python face service after ~15 min idle, and a
   // cold start takes 60-90 s to load the ArcFace model. We poll readiness on
@@ -69,6 +90,22 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen>
   // wakes a sleeping container) and resume the camera if it had stopped.
   StreamSubscription<ConnectivityResult>? _connSub;
 
+  // ── Kiosk lock mode ─────────────────────────────────────────────────────────
+  // When locked, the screen becomes a student-only scanning station: no back /
+  // navigation, system bars hidden (immersive), and Android screen-pinning
+  // requested so Home/Recents are blocked at the OS level where allowed.
+  // Students can only pick Check In / Check Out and scan. Unlocking requires the
+  // academy user's password (verified by the backend).
+  bool _locked = false;
+  bool _unlocking = false;
+  // When true, unlocking requires the academy password; when false, lock/unlock
+  // is a free toggle. Controlled by the academy setting `face_scan_secure`
+  // (Settings → "Face Scan Attendance – Secure by Password"). Defaults to
+  // secure until the real value loads.
+  bool _secureUnlock = true;
+  static const MethodChannel _kioskChannel =
+      MethodChannel('eduscan/kiosk');
+
   int _checkedIn  = 0;
   int _checkedOut = 0;
 
@@ -82,6 +119,7 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _now = DateTime.now();
+    _loadSecureSetting();
     _startConnectivityWatch();
     _clockTimer = Timer.periodic(
         const Duration(seconds: 1), (_) {
@@ -100,6 +138,18 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen>
   /// calls, TTS warm-up is guarded). This is what makes a refresh or a resume
   /// behave exactly like clicking the button again — with no extra user tap.
   void _startSession() {
+    // Clear the scan-loop guard flags. These gate the image-stream callback
+    // (`if (_debouncing || _processingFrame) return;`). They are normally reset
+    // by the post-scan debounce timer, but a resume / reconnect / refresh can
+    // start a NEW stream while a debounce from the previous stream is still
+    // pending (or its timer was cancelled mid-flight). If either flag is left
+    // `true`, every frame of the new stream early-returns forever: the preview
+    // stays live but no scan is ever processed — the screen "freezes" on the
+    // last result. Resetting here makes every start path begin scannable.
+    _debounceTimer?.cancel();
+    _overlayTimer?.cancel();
+    _debouncing      = false;
+    _processingFrame = false;
     // Keep the screen awake for the whole session so it never dims/locks while
     // an operator is scanning a queue of students. Best-effort: a failure here
     // must never block the camera from starting. Re-asserted on resume because
@@ -112,6 +162,7 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen>
     _scanReady = false;
     _startWarmup();
     VoiceFeedbackService.warmUp();  // pre-init TTS so first "Thank you" is instant
+    _startKioskGuards();            // watchdog + periodic recycle + heartbeat
     _initCamera();
   }
 
@@ -142,6 +193,8 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen>
   void _suspendCamera() {
     _debounceTimer?.cancel();
     _overlayTimer?.cancel();
+    _cancelKioskGuards();        // re-armed by _startSession on resume
+    _recovering = false;         // a pending recovery is moot once suspended
     _debouncing = false;
     if (_streamRunning && _cameraCtrl != null &&
         _cameraCtrl!.value.isInitialized) {
@@ -189,7 +242,11 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen>
     if (_checkingReady || _scanReady) return;
     _checkingReady = true;
     try {
-      final ready = await AcademyApiService.checkScanReady();
+      // Defensive timeout: checkScanReady() already times out internally, but a
+      // belt-and-suspenders guard here ensures _checkingReady can never get
+      // stuck `true` over a 24h run and silently kill readiness polling.
+      final ready = await AcademyApiService.checkScanReady()
+          .timeout(const Duration(seconds: 15), onTimeout: () => false);
       if (!mounted) return;
       if (ready) {
         setState(() {
@@ -219,8 +276,200 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen>
       _startWarmup();
       if (_paused || (!_streamRunning && _initError == null)) {
         _initCamera();
+      } else if (_streamRunning) {
+        // The stream is live but may be gated by a guard flag left set when the
+        // network dropped mid-scan (a scan/readiness call failed during the
+        // debounce window, so the timer that clears `_debouncing` never had a
+        // chance to restart a healthy loop). Clear the guards so the existing
+        // stream's frames start processing again instead of silently freezing.
+        _debounceTimer?.cancel();
+        _debouncing      = false;
+        _processingFrame = false;
       }
     });
+  }
+
+  // ── 24/7 kiosk guards: watchdog + periodic recycle + heartbeat ──────────────
+
+  /// (Re)start the long-run safety timers. Idempotent — cancels any existing
+  /// timers first so resume/refresh never stacks duplicates. Called from
+  /// `_startSession`, so every start path is protected.
+  void _startKioskGuards() {
+    _cancelKioskGuards();
+    _lastFrameAt = DateTime.now(); // reset so a fresh start isn't seen as stale
+
+    // Watchdog: if frames stop arriving while we should be scanning, rebuild.
+    _watchdogTimer = Timer.periodic(_watchdogInterval, (_) {
+      if (!mounted) return;
+      // Don't fire while legitimately not scanning: paused, mid-scan (debounce/
+      // processing), or camera not up. A scan round-trip is brief and updates
+      // _lastFrameAt continuously via skipped frames, so genuine scanning never
+      // trips the watchdog.
+      if (_paused || _initError != null || _recovering) return;
+      if (_debouncing || _processingFrame) return;
+      final silent = DateTime.now().difference(_lastFrameAt);
+      if (_streamRunning && silent >= _watchdogStaleAfter) {
+        debugPrint('[academy/scan] watchdog: no frame for '
+            '${silent.inSeconds}s — auto-restarting camera');
+        _recoverScanner();
+      }
+    });
+
+    // Proactive camera recycle to avoid long-run driver degradation.
+    _recycleTimer = Timer.periodic(_recycleEvery, (_) {
+      if (!mounted || _paused || _recovering) return;
+      // Only recycle when idle (not mid-scan) so we never interrupt a capture.
+      if (_debouncing || _processingFrame) return;
+      debugPrint('[academy/scan] periodic camera recycle');
+      _recoverScanner();
+    });
+
+    // Heartbeat log so a field freeze is diagnosable from logcat.
+    _heartbeatTimer = Timer.periodic(_heartbeatEvery, (_) {
+      if (!mounted) return;
+      final ago = DateTime.now().difference(_lastFrameAt).inSeconds;
+      debugPrint('[academy/scan] heartbeat: stream=$_streamRunning '
+          'paused=$_paused ready=$_scanReady lastFrame=${ago}s ago '
+          'in=$_checkedIn out=$_checkedOut');
+    });
+  }
+
+  void _cancelKioskGuards() {
+    _watchdogTimer?.cancel();   _watchdogTimer  = null;
+    _recycleTimer?.cancel();    _recycleTimer   = null;
+    _heartbeatTimer?.cancel();  _heartbeatTimer = null;
+  }
+
+  /// Auto-recovery: flash a brief banner and rebuild the camera + scan loop.
+  /// Used by the watchdog and the periodic recycle. Guarded by `_recovering`
+  /// so overlapping triggers collapse into one rebuild.
+  void _recoverScanner() {
+    if (_recovering || !mounted) return;
+    _recovering = true;
+    setState(() => _scanStatus = 'Recovering scanner…');
+    // _initCamera fully tears down and rebuilds the controller + stream. Clear
+    // the recovering flag once it returns (success or handled error).
+    _initCamera().whenComplete(() {
+      if (mounted) {
+        setState(() => _recovering = false);
+      } else {
+        _recovering = false;
+      }
+    });
+  }
+
+  // ── Kiosk lock mode ─────────────────────────────────────────────────────────
+
+  /// Load the academy's "Secure by Password" flag. Defaults to secure on any
+  /// failure so we never accidentally allow password-free unlock.
+  Future<void> _loadSecureSetting() async {
+    final secure = await AcademyApiService.isFaceScanSecure();
+    if (mounted) setState(() => _secureUnlock = secure);
+  }
+
+  /// Enter lock mode: hide system bars (immersive sticky) and request Android
+  /// screen-pinning so Home/Recents are blocked where the device allows it.
+  /// Pinning is best-effort — if unavailable, the in-app lock (no back, hidden
+  /// nav) still confines the student to this page.
+  Future<void> _lock() async {
+    setState(() => _locked = true);
+    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    try {
+      await _kioskChannel.invokeMethod('startLockTask');
+    } catch (e) {
+      debugPrint('[academy/scan] screen pinning unavailable: $e');
+    }
+  }
+
+  /// Unlock entry point from the top-bar button. When the academy has disabled
+  /// password protection (`face_scan_secure = false`), unlock immediately;
+  /// otherwise prompt for the password.
+  Future<void> _handleUnlockTap() async {
+    if (_secureUnlock) {
+      await _promptUnlock();
+    } else {
+      await _unlock();
+    }
+  }
+
+  /// Prompt for the academy user's password and, if valid, exit lock mode.
+  Future<void> _promptUnlock() async {
+    final passCtrl = TextEditingController();
+    bool visible = false;
+    final ok = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setDlg) {
+        return AlertDialog(
+          title: const Text('Unlock Scanner'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Enter the academy account password to exit kiosk mode.',
+                style: TextStyle(fontSize: 13),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: passCtrl,
+                obscureText: !visible,
+                autofocus: true,
+                decoration: InputDecoration(
+                  hintText: 'Password',
+                  border: const OutlineInputBorder(),
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                        visible ? Icons.visibility_off : Icons.visibility),
+                    onPressed: () => setDlg(() => visible = !visible),
+                  ),
+                ),
+                onSubmitted: (_) => Navigator.pop(ctx, true),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancel')),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Unlock')),
+          ],
+        );
+      }),
+    );
+
+    if (ok != true || !mounted) return;
+    final password = passCtrl.text;
+    if (password.isEmpty) return;
+
+    setState(() => _unlocking = true);
+    bool valid = false;
+    try {
+      valid = await AcademyApiService.verifyAttendancePassword(password);
+    } catch (e) {
+      debugPrint('[academy/scan] unlock verify failed: $e');
+    }
+    if (!mounted) return;
+    setState(() => _unlocking = false);
+
+    if (valid) {
+      await _unlock();
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Incorrect password'),
+        backgroundColor: Colors.red,
+      ));
+    }
+  }
+
+  /// Exit lock mode: stop screen-pinning and restore the normal system UI.
+  Future<void> _unlock() async {
+    try {
+      await _kioskChannel.invokeMethod('stopLockTask');
+    } catch (_) {/* no-op if pinning wasn't active */}
+    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    if (mounted) setState(() => _locked = false);
   }
 
   Future<void> _initCamera() async {
@@ -309,6 +558,10 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen>
     }
     _streamRunning = true;
     ctrl.startImageStream((CameraImage image) async {
+      // Watchdog liveness: every delivered frame proves the stream is alive,
+      // even ones we skip while debouncing/processing. If this stops updating,
+      // the watchdog rebuilds the camera.
+      _lastFrameAt = DateTime.now();
       if (_debouncing || _processingFrame) return;
       _processingFrame = true;
       try {
@@ -474,6 +727,7 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen>
     _overlayTimer = null;
     _warmupTimer?.cancel();
     _warmupTimer = null;
+    _cancelKioskGuards();
     VoiceFeedbackService.stop();  // silence any in-flight "Thank you" on exit
     if (_streamRunning && _cameraCtrl != null &&
         _cameraCtrl!.value.isInitialized) {
@@ -491,6 +745,12 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen>
     // Release the screen-wake lock so the rest of the app reverts to normal
     // dimming/lock behaviour once we leave the scan screen.
     WakelockPlus.disable().catchError((_) {});
+    // Safety net: never leave the device pinned / bars hidden if this screen is
+    // torn down while still in lock mode.
+    if (_locked) {
+      _kioskChannel.invokeMethod('stopLockTask').catchError((_) {});
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    }
     _clockTimer?.cancel();
     _stopCamera();
     super.dispose();
@@ -504,6 +764,9 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen>
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
+        // Locked = student kiosk: swallow the back gesture/button entirely so
+        // the student can't leave. Exit requires tapping unlock + password.
+        if (_locked) return;
         _stopCamera();
         Navigator.of(context).pop();
       },
@@ -524,10 +787,17 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen>
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: Row(
                   children: [
-                    IconButton(
-                      icon: const Icon(Icons.arrow_back, color: Colors.white),
-                      onPressed: () => Navigator.pop(context),
-                    ),
+                    // Back is hidden while locked so the student can't leave.
+                    if (!_locked)
+                      IconButton(
+                        icon: const Icon(Icons.arrow_back, color: Colors.white),
+                        onPressed: () {
+                          _stopCamera();
+                          Navigator.pop(context);
+                        },
+                      )
+                    else
+                      const SizedBox(width: 8),
                     const Text(
                       'Attendance Scan',
                       style: TextStyle(
@@ -540,6 +810,29 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen>
                       _paddedTime(_now),
                       style: const TextStyle(color: Colors.white70, fontSize: 14),
                     ),
+                    const SizedBox(width: 4),
+                    // Lock / unlock toggle — always visible in the upper corner.
+                    _unlocking
+                        ? const Padding(
+                            padding: EdgeInsets.all(12),
+                            child: SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white),
+                            ),
+                          )
+                        : IconButton(
+                            tooltip: _locked ? 'Unlock' : 'Lock (kiosk mode)',
+                            icon: Icon(
+                              _locked ? Icons.lock : Icons.lock_open,
+                              color: _locked
+                                  ? Colors.amberAccent
+                                  : Colors.white,
+                            ),
+                            onPressed:
+                                _locked ? _handleUnlockTap : _lock,
+                          ),
                   ],
                 ),
               ),
@@ -567,6 +860,33 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen>
                           'up to a minute.',
                           style: const TextStyle(
                               color: Colors.white, fontSize: 12),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+              // ── Recovering banner (watchdog / periodic recycle) ────────
+              if (_recovering)
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 8),
+                  color: Colors.blueGrey.shade800,
+                  child: const Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white),
+                      ),
+                      SizedBox(width: 10),
+                      Flexible(
+                        child: Text(
+                          'Recovering scanner… one moment.',
+                          style: TextStyle(color: Colors.white, fontSize: 12),
                         ),
                       ),
                     ],
