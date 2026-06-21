@@ -30,6 +30,15 @@ $Flavors = @(
     @{ Name = 'Parent';  Mode = 'parent';  Out = 'EduScan-Parent.apk'  }
 )
 
+# Remove any stale Flutter-generated APKs from earlier runs (raw arm64 copy
+# plus any multi-ABI / universal leftovers like app-release.apk). We only ship
+# the two named EduScan-*.apk files, so everything else is dead weight that
+# otherwise piles up and slows nothing but confuses the output folder.
+if (Test-Path $OutDir) {
+    Get-ChildItem $OutDir -Filter 'app-*.apk*' -ErrorAction SilentlyContinue |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+}
+
 foreach ($f in $Flavors) {
     Write-Host ''
     Write-Host "==================================================" -ForegroundColor Cyan
@@ -48,14 +57,20 @@ foreach ($f in $Flavors) {
         exit 1
     }
 
-    # Copy (not move) to the uniquely-named file. Copy means the raw file is
-    # free to be overwritten by the next flavor's build.
+    # Move (not copy) to the uniquely-named file: this both produces the named
+    # APK and removes the raw app-arm64-v8a-release.apk in one step, so no
+    # leftover intermediate file is left behind for the next flavor or at the end.
     $dest = Join-Path $OutDir $f.Out
-    Copy-Item -Path $RawApk -Destination $dest -Force
+    Move-Item -Path $RawApk -Destination $dest -Force
 
     $sizeMB = [math]::Round((Get-Item $dest).Length / 1MB, 1)
     Write-Host "  -> $($f.Out)  ($sizeMB MB)" -ForegroundColor Green
 }
+
+# Final safety sweep: drop any stray app-*.apk Flutter may have emitted
+# (e.g. .sha1 sidecars) so the folder holds ONLY the two named APKs.
+Get-ChildItem $OutDir -Filter 'app-*.apk*' -ErrorAction SilentlyContinue |
+    Remove-Item -Force -ErrorAction SilentlyContinue
 
 Write-Host ''
 Write-Host "DONE. Both APKs are in:" -ForegroundColor Green
