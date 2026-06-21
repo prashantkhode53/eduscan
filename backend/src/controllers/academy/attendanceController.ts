@@ -183,6 +183,7 @@ export async function scanAcademy(
           student: studentPayload,
           time_in: existing.time_in,
           confidence,
+          threshold,
           message: `Already checked in at ${existing.time_in} (${Math.floor(diffMins)}m ago).`,
         });
         return;
@@ -199,6 +200,7 @@ export async function scanAcademy(
           time_out:      existing.time_out,
           duration_mins: existing.duration_mins,
           confidence,
+          threshold,
           message: `Already checked out at ${existing.time_out} (${Math.floor(diffMins)}m ago).`,
         });
         return;
@@ -233,6 +235,7 @@ export async function scanAcademy(
         student: studentPayload,
         time_in: timeStr,
         confidence,
+        threshold,
         message: `Face matched! Check-in recorded for ${student.first_name} ${student.last_name}`,
       });
       return;
@@ -290,6 +293,7 @@ export async function scanAcademy(
       time_out:      timeStr,
       duration_mins: durationMins,
       confidence,
+      threshold,
       message: `Face matched! Check-out for ${student.first_name} ${student.last_name}. Duration: ${Math.floor(durationMins / 60)}h ${durationMins % 60}m`,
     });
   } catch (err) { next(err); }
