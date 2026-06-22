@@ -580,7 +580,7 @@ export async function bulkUploadStudents(
         errs.push('Gender: Male/Female/Other');
       }
 
-      if (!s.parent_name?.trim()) errs.push('Parent/Guardian Name required');
+      if (!s.parent_name?.trim()) errs.push('Middle Name required');
       const pMob = s.parent_mobile?.trim() ?? '';
       if (!pMob || !/^\d{10}$/.test(pMob)) errs.push('Parent Mobile must be 10 digits');
 

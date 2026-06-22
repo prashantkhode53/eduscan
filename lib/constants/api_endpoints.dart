@@ -30,6 +30,7 @@ class ApiEndpoints {
   static const String attendanceInsightsToday   = '$baseUrl/api/academy/attendance-insights/today';
   static const String attendanceInsightsStudents= '$baseUrl/api/academy/attendance-insights/students';
   static const String attendanceInsightsDefaulters = '$baseUrl/api/academy/attendance-insights/defaulters';
+  static const String attendanceInsightsOverall = '$baseUrl/api/academy/attendance-insights/overall';
   static String attendanceInsightsScore(String id) => '$baseUrl/api/academy/attendance-insights/$id/score';
   static String attendanceInsightsNudge(String id) => '$baseUrl/api/academy/attendance-insights/$id/nudge';
   static const String academyQrCodes        = '$baseUrl/api/academy/qr-codes';

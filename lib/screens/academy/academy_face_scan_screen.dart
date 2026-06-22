@@ -20,14 +20,6 @@ class AcademyFaceScanScreen extends StatefulWidget {
 
 class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen>
     with WidgetsBindingObserver {
-  // A successful match always scores >= threshold. When it lands only just
-  // above the line (within this band), the recognition is borderline — a common
-  // sign the student's appearance changed (new glasses, shaved beard). We still
-  // record attendance but nudge them to keep the face clear / update the profile.
-  static const double _lowConfidenceBand = 0.07;
-  // Used only if the backend response omits `threshold` (older deployments).
-  static const double _fallbackThreshold = 0.60;
-
   CameraController? _cameraCtrl;
   CameraDescription? _frontCamera;
   bool _cameraReady = false;
@@ -1010,44 +1002,6 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen>
     ); // PopScope
   }
 
-  /// True when a successful match scored only just above the configured
-  /// threshold — borderline recognition that usually means the student's
-  /// appearance has changed. Drives the "keep your face visible" warning.
-  bool _isLowConfidenceMatch(Map<String, dynamic> result) {
-    final confidence = (result['confidence'] as num?)?.toDouble();
-    if (confidence == null) return false;
-    final threshold =
-        (result['threshold'] as num?)?.toDouble() ?? _fallbackThreshold;
-    return confidence >= threshold &&
-        confidence < threshold + _lowConfidenceBand;
-  }
-
-  Widget _buildLowConfidenceWarning() => Container(
-        margin: const EdgeInsets.only(top: 10),
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.25),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: const Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(Icons.warning_amber_rounded,
-                color: Colors.white, size: 18),
-            SizedBox(width: 6),
-            Expanded(
-              child: Text(
-                'Please keep your face clearly visible. Changes in appearance '
-                '(such as glasses or a shaved beard) may affect face '
-                'recognition. If the issue continues, please update your face '
-                'profile.',
-                style: TextStyle(color: Colors.white, fontSize: 11),
-              ),
-            ),
-          ],
-        ),
-      );
-
   Widget _buildResultCard() {
     if (_lastResult == null) {
       return Container(
@@ -1254,7 +1208,6 @@ class _AcademyFaceScanScreenState extends State<AcademyFaceScanScreen>
               ),
             ],
           ),
-          if (_isLowConfidenceMatch(result)) _buildLowConfidenceWarning(),
         ],
       ),
     );

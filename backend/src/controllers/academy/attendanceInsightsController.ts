@@ -449,6 +449,171 @@ export async function nudgeParent(
   } catch (err) { next(err); }
 }
 
+// ── GET /overall — consolidated per-day attendance report (grid + Excel) ─────────
+//
+// One row per (student, date) over the filtered scope, with the columns the
+// "Overall Attendance Data" tab needs. The data model stores a single
+// attendance row per student/day (UNIQUE(student_id, date)), so:
+//   • first_check_in  = time_in    (no punch table → this is the only check-in)
+//   • last_check_out  = time_out
+//   • total_mins      = duration_mins (server-computed at checkout)
+//   • check_in_count  = 1 when there's a time_in, else 0 (no punch log exists)
+//   • late_arrival    = status = 'late'
+// attendance_pct is the student's present-rate across all of THIS response's
+// rows for that student (present+late ÷ non-holiday days in scope) — i.e. it
+// respects whatever filters were applied, per the spec's formula.
+
+interface OverallRow {
+  student_id: string;
+  name: string;
+  academic_year: string | null;
+  course_name: string | null;
+  date: Date | string;
+  time_in: string | null;
+  time_out: string | null;
+  duration_mins: number | null;
+  status: string;
+  remarks: string | null;
+}
+
+const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/** 'YYYY-MM-DD' from a pg DATE (returned as a JS Date). */
+function isoDate(d: Date | string): string {
+  const dt = d instanceof Date ? d : new Date(String(d));
+  return dt.toISOString().slice(0, 10);
+}
+
+/** 'HH:MM' from a pg TIME string ('HH:MM:SS') or null. */
+function hhmm(t: string | null): string {
+  if (!t) return '';
+  const parts = String(t).split(':');
+  return parts.length >= 2 ? `${parts[0]}:${parts[1]}` : String(t);
+}
+
+export async function getOverallAttendance(
+  req: Request, res: Response, next: NextFunction,
+): Promise<void> {
+  try {
+    const { academySlug } = req.academyUser!;
+    const {
+      academic_year_id,
+      course_id,
+      student,        // free-text: id OR name
+      date,           // single 'YYYY-MM-DD'
+      status,         // present | absent
+    } = req.query as Record<string, string>;
+
+    const yearId   = academic_year_id?.trim() || null;
+    const courseId = course_id?.trim() || null;
+    const search   = student?.trim() || null;
+    const onDate   = date?.trim() || null;
+    const statusF  = status?.trim().toLowerCase() || null;
+
+    // Two filter layers:
+    //  • cohort filters (year/course/search) select WHICH students appear and
+    //    also scope the attendance-% denominator; they come first in the param
+    //    list so the percentage query can reuse them verbatim.
+    //  • row filters (date/status) are appended after and only narrow the grid
+    //    rows shown — they never move the percentage, so the figure stays a
+    //    stable "present ÷ working days" metric regardless of the day/status view.
+    const cohortParams: unknown[] = [];
+    const cohort: string[] = [`s.status = 'active'`];
+
+    if (yearId)   { cohortParams.push(yearId);   cohort.push(`s.academic_year_id = $${cohortParams.length}`); }
+    if (courseId) { cohortParams.push(courseId); cohort.push(`EXISTS (
+        SELECT 1 FROM student_courses sc
+        WHERE sc.student_id = s.id AND sc.course_id = $${cohortParams.length} AND sc.status = 'active')`); }
+    if (search) {
+      cohortParams.push(`%${search}%`);
+      cohort.push(`(s.id ILIKE $${cohortParams.length}
+        OR TRIM(s.first_name || ' ' || s.last_name) ILIKE $${cohortParams.length})`);
+    }
+
+    // Grid query params = cohort params + row-filter params.
+    const params: unknown[] = [...cohortParams];
+    const where = [...cohort, `a.status <> 'holiday'`];
+    if (onDate)  { params.push(onDate);  where.push(`a.date = $${params.length}`); }
+    if (statusF && ['present', 'absent'].includes(statusF)) {
+      params.push(statusF); where.push(`a.status = $${params.length}`);
+    }
+
+    // course_name = the active course(s) the student is enrolled in. Multiple
+    // enrolments are joined with ', '. Scoped to the selected year's courses so
+    // the label matches the chosen academic year.
+    const rows = await academyQuery<OverallRow>(
+      academySlug,
+      `SELECT
+         s.id   AS student_id,
+         TRIM(s.first_name || ' ' || s.last_name) AS name,
+         ay.academic_year_name AS academic_year,
+         (
+           SELECT STRING_AGG(c.name, ', ' ORDER BY c.name)
+           FROM student_courses sc
+           JOIN courses c ON c.id = sc.course_id
+           WHERE sc.student_id = s.id AND sc.status = 'active'
+             AND (s.academic_year_id IS NULL OR c.academic_year_id = s.academic_year_id)
+         ) AS course_name,
+         a.date,
+         a.time_in::text   AS time_in,
+         a.time_out::text  AS time_out,
+         a.duration_mins,
+         a.status,
+         a.remarks
+       FROM attendance a
+       JOIN students s        ON s.id = a.student_id
+       LEFT JOIN academic_years ay ON ay.id = s.academic_year_id
+       WHERE ${where.join(' AND ')}
+       ORDER BY a.date DESC, s.first_name, s.last_name, s.id`,
+      params,
+    );
+
+    // Per-student attendance % over the cohort scope (spec formula:
+    // present days ÷ total working days). "Working days" = that student's
+    // non-holiday attendance rows; "present" = present or late. Computed
+    // independently of the date/status/late row filters so the figure is stable.
+    const pctRows = await academyQuery<{ student_id: string; present: string; total: string }>(
+      academySlug,
+      `SELECT
+         a.student_id,
+         COUNT(*) FILTER (WHERE a.status IN ('present','late'))::int AS present,
+         COUNT(*)::int                                              AS total
+       FROM attendance a
+       JOIN students s ON s.id = a.student_id
+       WHERE ${cohort.join(' AND ')} AND a.status <> 'holiday'
+       GROUP BY a.student_id`,
+      cohortParams,
+    );
+    const tally = new Map<string, number>();
+    for (const p of pctRows) {
+      const total = parseInt(p.total, 10) || 0;
+      const present = parseInt(p.present, 10) || 0;
+      tally.set(p.student_id, total > 0 ? (present / total) * 100 : 0);
+    }
+
+    const records = rows.map((r) => {
+      const pct = tally.get(r.student_id) ?? 0;
+      const dow = (r.date instanceof Date ? r.date : new Date(String(r.date))).getUTCDay();
+      return {
+        student_id: r.student_id,
+        name: r.name,
+        academic_year: r.academic_year ?? '',
+        course_name: r.course_name ?? '',
+        date: isoDate(r.date),
+        day: DOW[dow],
+        first_check_in: hhmm(r.time_in),
+        last_check_out: hhmm(r.time_out),
+        total_mins: r.duration_mins ?? 0,
+        status: r.status,
+        attendance_pct: Math.round(pct * 100) / 100,
+        remarks: r.remarks ?? '',
+      };
+    });
+
+    res.json({ success: true, data: { records, count: records.length } });
+  } catch (err) { next(err); }
+}
+
 // ── Weekday buckets (for pattern detection on the detail screen) ─────────────────
 
 async function getWeekdayBuckets(

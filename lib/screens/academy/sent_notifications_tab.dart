@@ -121,17 +121,21 @@ class SentNotificationsTabState extends State<SentNotificationsTab>
   }
 
   Widget _downloadBar() {
+    // Stacked (text over a full-width button) rather than a side-by-side Row:
+    // on narrow phones a Row pits the long helper text against the wide button
+    // for horizontal space, starving the text to ~zero width and wrapping it
+    // one character per line. A Column gives each its own full-width line.
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Expanded(
-            child: Text(
-              'Showing the latest $_previewLimit. Download for the full history.',
-              style: TextStyle(fontSize: 12, color: Colors.grey),
-            ),
+          const Text(
+            'Showing the latest $_previewLimit. '
+            'Download for the full history.',
+            style: TextStyle(fontSize: 12, color: Colors.grey),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(height: 10),
           FilledButton.tonalIcon(
             onPressed: _downloading ? null : _downloadExcel,
             icon: _downloading
