@@ -159,6 +159,37 @@ class AcademyApiService {
     return _parse(res) as Map<String, dynamic>;
   }
 
+  /// Consolidated per-day attendance report for the "Overall Attendance Data"
+  /// tab. Every argument is an optional server-side filter; omitted ones return
+  /// the unfiltered set. Returns the list of record maps (one per student/day).
+  ///
+  ///   academicYearId — restrict to one academic year
+  ///   courseId       — restrict to students enrolled in one course
+  ///   search         — match Student ID or Student Name (substring, case-insensitive)
+  ///   date           — single 'YYYY-MM-DD' (present date)
+  ///   status         — 'present' | 'absent'
+  static Future<List<Map<String, dynamic>>> getOverallAttendance({
+    String? academicYearId,
+    String? courseId,
+    String? search,
+    String? date,
+    String? status,
+  }) async {
+    final params = <String, String>{
+      if (academicYearId != null && academicYearId.isNotEmpty) 'academic_year_id': academicYearId,
+      if (courseId != null && courseId.isNotEmpty) 'course_id': courseId,
+      if (search != null && search.isNotEmpty) 'student': search,
+      if (date != null && date.isNotEmpty) 'date': date,
+      if (status != null && status.isNotEmpty) 'status': status,
+    };
+    final uri = params.isEmpty
+        ? Uri.parse(ApiEndpoints.attendanceInsightsOverall)
+        : Uri.parse(ApiEndpoints.attendanceInsightsOverall).replace(queryParameters: params);
+    final res = await _http.get(uri, headers: await _headers()).timeout(_timeout);
+    final data = _parse(res) as Map<String, dynamic>;
+    return ((data['records'] as List?) ?? []).cast<Map<String, dynamic>>();
+  }
+
   /// Full attendance-score breakdown (factors + risk + patterns) for one student.
   static Future<Map<String, dynamic>> getStudentInsight(
       String studentId, {int windowDays = 56}) async {

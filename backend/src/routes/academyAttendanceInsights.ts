@@ -5,6 +5,7 @@ import {
   getStudentScores,
   getStudentScoreDetail,
   getDefaulters,
+  getOverallAttendance,
   nudgeParent,
 } from '../controllers/academy/attendanceInsightsController';
 
@@ -18,6 +19,7 @@ router.use(academyAuthMiddleware);
 router.get('/today',               requireRole('admin', 'teacher'), getTodayActionList);
 router.get('/students',            requireRole('admin', 'teacher'), getStudentScores);
 router.get('/defaulters',          requireRole('admin', 'teacher'), getDefaulters);
+router.get('/overall',             requireRole('admin', 'teacher'), getOverallAttendance);
 router.get('/:studentId/score',    requireRole('admin', 'teacher'), getStudentScoreDetail);
 router.post('/:studentId/nudge',   requireRole('admin', 'teacher'), nudgeParent);
 
