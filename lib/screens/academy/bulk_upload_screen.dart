@@ -71,20 +71,34 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       // First course name for the single sample row (empty if none).
       final firstCourse = names.isNotEmpty ? names.first : '';
 
-      final lines = [
-        // Header — column order must match _columns list.
-        // The 7th column (key parent_name) is surfaced to admins as "Middle
-        // Name"; the backend storage key stays parent_name for compatibility.
-        'First Name*,Last Name*,Gender (Male/Female/Other),'
-            'Date Of Birth* (DD/MM/YYYY),Mobile* (10 digits),'
-            'Email,Middle Name*,Parent Mobile* (10 digits),Address,'
-            'Courses (comma-separated)',
-        // Single sample row.
-        'Rahul,Sharma,Male,15/05/2010,9876543210,'
-            'rahul@example.com,Ramesh,9876543211,Pune,$firstCourse',
+      // Header — column order must match _columns list.
+      // The 7th column (key parent_name) is surfaced to admins as "Middle
+      // Name"; the backend storage key stays parent_name for compatibility.
+      final header = [
+        'First Name*', 'Last Name*', 'Gender (Male/Female/Other)',
+        'Date Of Birth* (DD/MM/YYYY)', 'Mobile* (10 digits)', 'Email',
+        'Middle Name*', 'Parent Mobile* (10 digits)', 'Address',
+        'Courses (comma-separated)',
       ];
 
-      final content = lines.join('\n');
+      // Single sample row. Mobiles, DOB and the course name are wrapped with
+      // _excelText so Excel shows them literally instead of "helpfully"
+      // reformatting (9876543210 -> 9.88E+09, "11-12" -> "12-Nov", dates).
+      final sample = [
+        'Rahul', 'Sharma', 'Male',
+        _excelText('15/05/2010'),
+        _excelText('9876543210'),
+        'rahul@example.com', 'Ramesh',
+        _excelText('9876543211'),
+        'Pune',
+        _excelText(firstCourse),
+      ];
+
+      // Lead with a UTF-8 BOM so Excel opens the file as UTF-8 (and respects
+      // the CSV structure) rather than the OS default code page.
+      const bom = '﻿';
+      final content = bom +
+          [header, sample].map((r) => r.map(_csvField).join(',')).join('\r\n');
       final dir  = await getApplicationDocumentsDirectory();
       final file = File('${dir.path}/EduScan_Student_Template.csv');
       await file.writeAsString(content);
@@ -101,6 +115,18 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       }
     }
   }
+
+  // Prefix a value with a TAB so Excel treats the cell as literal text and
+  // stops auto-converting it (long numbers -> scientific notation, "11-12" ->
+  // a date, etc.). On re-upload our parser strips it: every field is .trim()'d
+  // in _parseCsv, which removes the leading tab — so the round-trip is clean.
+  // Empty values are left untouched (no point tab-prefixing nothing).
+  String _excelText(String value) => value.isEmpty ? '' : '\t$value';
+
+  // Quote a single CSV field per RFC 4180: wrap in double quotes and double
+  // any embedded quote. Our own _splitCsvLine understands this exact form, so
+  // the file both displays cleanly in Excel and re-parses losslessly.
+  String _csvField(String value) => '"${value.replaceAll('"', '""')}"';
 
   // ── File picking & parsing ────────────────────────────────────────────────
 
