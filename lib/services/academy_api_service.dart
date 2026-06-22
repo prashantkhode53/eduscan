@@ -166,20 +166,23 @@ class AcademyApiService {
   ///   academicYearId — restrict to one academic year
   ///   courseId       — restrict to students enrolled in one course
   ///   search         — match Student ID or Student Name (substring, case-insensitive)
-  ///   date           — single 'YYYY-MM-DD' (present date)
+  ///   fromDate       — range start 'YYYY-MM-DD' (inclusive)
+  ///   toDate         — range end   'YYYY-MM-DD' (inclusive)
   ///   status         — 'present' | 'absent'
   static Future<List<Map<String, dynamic>>> getOverallAttendance({
     String? academicYearId,
     String? courseId,
     String? search,
-    String? date,
+    String? fromDate,
+    String? toDate,
     String? status,
   }) async {
     final params = <String, String>{
       if (academicYearId != null && academicYearId.isNotEmpty) 'academic_year_id': academicYearId,
       if (courseId != null && courseId.isNotEmpty) 'course_id': courseId,
       if (search != null && search.isNotEmpty) 'student': search,
-      if (date != null && date.isNotEmpty) 'date': date,
+      if (fromDate != null && fromDate.isNotEmpty) 'from': fromDate,
+      if (toDate != null && toDate.isNotEmpty) 'to': toDate,
       if (status != null && status.isNotEmpty) 'status': status,
     };
     final uri = params.isEmpty

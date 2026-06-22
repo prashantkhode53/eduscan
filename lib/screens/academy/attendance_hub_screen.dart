@@ -480,7 +480,8 @@ class _OverallTabState extends State<_OverallTab>
   // Selected filters
   String? _yearId;
   String? _courseId;
-  DateTime? _date;
+  DateTime? _fromDate;
+  DateTime? _toDate;
   String? _status; // present | absent
   final _searchCtrl = TextEditingController();
 
@@ -517,8 +518,10 @@ class _OverallTabState extends State<_OverallTab>
         _years = years;
         _filtersLoading = false;
       });
-      await _loadCourses(); // courses depend on the (initially empty) year filter
-      await _load();        // initial unfiltered fetch
+      await _loadCourses(); // pre-load the course list for the (empty) year filter
+      // Intentionally NO initial fetch: the user must pick at least one filter
+      // and tap Apply. Loading every record up front is slow and can OOM the
+      // app on large academies.
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -527,6 +530,16 @@ class _OverallTabState extends State<_OverallTab>
       });
     }
   }
+
+  /// True when the user has narrowed the query at all. We refuse to fetch the
+  /// whole table unfiltered, so Apply is disabled until this is true.
+  bool get _hasAnyFilter =>
+      _yearId != null ||
+      _courseId != null ||
+      _fromDate != null ||
+      _toDate != null ||
+      (_status != null && _status!.isNotEmpty) ||
+      _searchCtrl.text.trim().isNotEmpty;
 
   /// Courses for the currently selected academic year (all years when none).
   Future<void> _loadCourses() async {
@@ -549,13 +562,22 @@ class _OverallTabState extends State<_OverallTab>
 
   Future<void> _load() async {
     if (!mounted) return;
+    if (!_hasAnyFilter) {
+      _snack('Select at least one filter (year, course, date range, status, or search) before applying.');
+      return;
+    }
+    if (_fromDate != null && _toDate != null && _fromDate!.isAfter(_toDate!)) {
+      _snack('"From Date" must be on or before "To Date".');
+      return;
+    }
     setState(() { _loading = true; _error = null; _hasQueried = true; });
     try {
       final records = await AcademyApiService.getOverallAttendance(
         academicYearId: _yearId,
         courseId: _courseId,
         search: _searchCtrl.text.trim().isEmpty ? null : _searchCtrl.text.trim(),
-        date: _date == null ? null : _ymd(_date!),
+        fromDate: _fromDate == null ? null : _ymd(_fromDate!),
+        toDate: _toDate == null ? null : _ymd(_toDate!),
         status: _status,
       );
       if (!mounted) return;
@@ -574,26 +596,43 @@ class _OverallTabState extends State<_OverallTab>
     await _loadCourses();
   }
 
-  Future<void> _pickDate() async {
+  Future<void> _pickFromDate() async {
     final picked = await showDatePicker(
       context: context,
-      initialDate: _date ?? DateTime.now(),
+      initialDate: _fromDate ?? _toDate ?? DateTime.now(),
       firstDate: DateTime(2020),
+      // Can't start after the chosen end date (when set).
+      lastDate: _toDate ?? DateTime.now().add(const Duration(days: 1)),
+    );
+    if (picked != null && mounted) setState(() => _fromDate = picked);
+  }
+
+  Future<void> _pickToDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _toDate ?? _fromDate ?? DateTime.now(),
+      // Can't end before the chosen start date (when set).
+      firstDate: _fromDate ?? DateTime(2020),
       lastDate: DateTime.now().add(const Duration(days: 1)),
     );
-    if (picked != null && mounted) setState(() => _date = picked);
+    if (picked != null && mounted) setState(() => _toDate = picked);
   }
 
   void _clearFilters() {
     setState(() {
       _yearId = null;
       _courseId = null;
-      _date = null;
+      _fromDate = null;
+      _toDate = null;
       _status = null;
       _searchCtrl.clear();
+      // Reset results too — clearing filters returns to the "pick filters" state
+      // rather than re-fetching everything.
+      _records = [];
+      _hasQueried = false;
+      _error = null;
     });
     _loadCourses();
-    _load();
   }
 
   Future<void> _export() async {
@@ -675,50 +714,72 @@ class _OverallTabState extends State<_OverallTab>
             onSubmitted: (_) => _load(),
           ),
           const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
+          // Responsive filter grid: two columns on phones, more on wider
+          // screens. Each control fills its computed slot so nothing is cut off.
+          LayoutBuilder(
+            builder: (context, constraints) {
+              const spacing = 8.0;
+              final maxW = constraints.maxWidth;
+              // Aim for ~180px columns, but never fewer than 2 (phones) and use
+              // floor so items always fit within the available width.
+              final cols = (maxW / 188).floor().clamp(2, 4);
+              final itemW = (maxW - spacing * (cols - 1)) / cols;
+              return Wrap(
+                spacing: spacing,
+                runSpacing: spacing,
+                children: [
+                  _yearDropdown(itemW),
+                  _courseDropdown(itemW),
+                  _dateChip(itemW, isFrom: true),
+                  _dateChip(itemW, isFrom: false),
+                  _statusDropdown(itemW),
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: 8),
+          // Apply + Clear share the row width (Expanded) so they never overflow
+          // on narrow phones; Download Excel is a full-width button below.
+          Row(
             children: [
-              _yearDropdown(),
-              _courseDropdown(),
-              _dateChip(),
-              _statusDropdown(),
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: (_loading || !_hasAnyFilter) ? null : _load,
+                  icon: const Icon(Icons.filter_alt, size: 18),
+                  label: const Text('Apply'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: (_loading || !_hasAnyFilter) ? null : _clearFilters,
+                  icon: const Icon(Icons.clear_all, size: 18),
+                  label: const Text('Clear'),
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 8),
-          Row(
-            children: [
-              FilledButton.icon(
-                onPressed: _loading ? null : _load,
-                icon: const Icon(Icons.filter_alt, size: 18),
-                label: const Text('Apply'),
-              ),
-              const SizedBox(width: 8),
-              OutlinedButton.icon(
-                onPressed: _loading ? null : _clearFilters,
-                icon: const Icon(Icons.clear_all, size: 18),
-                label: const Text('Clear'),
-              ),
-              const Spacer(),
-              OutlinedButton.icon(
-                onPressed: (_exporting || _records.isEmpty) ? null : _export,
-                icon: _exporting
-                    ? const SizedBox(
-                        width: 16, height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Icon(Icons.download_outlined, size: 18),
-                label: Text(_exporting ? 'Exporting…' : 'Download Excel'),
-              ),
-            ],
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: (_exporting || _records.isEmpty) ? null : _export,
+              icon: _exporting
+                  ? const SizedBox(
+                      width: 16, height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.download_outlined, size: 18),
+              label: Text(_exporting ? 'Exporting…' : 'Download Excel'),
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _yearDropdown() {
+  Widget _yearDropdown(double width) {
     return SizedBox(
-      width: 180,
+      width: width,
       child: DropdownButtonFormField<String?>(
         isExpanded: true,
         initialValue: _yearId,
@@ -740,9 +801,9 @@ class _OverallTabState extends State<_OverallTab>
     );
   }
 
-  Widget _courseDropdown() {
+  Widget _courseDropdown(double width) {
     return SizedBox(
-      width: 180,
+      width: width,
       child: DropdownButtonFormField<String?>(
         isExpanded: true,
         initialValue: _courseId,
@@ -763,27 +824,46 @@ class _OverallTabState extends State<_OverallTab>
     );
   }
 
-  Widget _dateChip() {
+  Widget _dateChip(double width, {required bool isFrom}) {
+    final value = isFrom ? _fromDate : _toDate;
+    final hint = isFrom ? 'From Date' : 'To Date';
     return SizedBox(
-      width: 180,
+      width: width,
       child: OutlinedButton.icon(
         style: OutlinedButton.styleFrom(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
           alignment: Alignment.centerLeft,
         ),
-        onPressed: _pickDate,
+        onPressed: isFrom ? _pickFromDate : _pickToDate,
         icon: const Icon(Icons.calendar_today, size: 16),
-        label: Text(
-          _date == null ? 'Present Date' : _ymd(_date!),
-          overflow: TextOverflow.ellipsis,
+        label: Row(
+          children: [
+            Expanded(
+              child: Text(
+                value == null ? hint : _ymd(value),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            if (value != null)
+              GestureDetector(
+                onTap: () => setState(() {
+                  if (isFrom) {
+                    _fromDate = null;
+                  } else {
+                    _toDate = null;
+                  }
+                }),
+                child: const Icon(Icons.close, size: 16),
+              ),
+          ],
         ),
       ),
     );
   }
 
-  Widget _statusDropdown() {
+  Widget _statusDropdown(double width) {
     return SizedBox(
-      width: 180,
+      width: width,
       child: DropdownButtonFormField<String?>(
         isExpanded: true,
         initialValue: _status,
@@ -825,11 +905,23 @@ class _OverallTabState extends State<_OverallTab>
       );
     }
     if (_records.isEmpty) {
+      final muted = Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6);
       return Center(
-        child: Text(
-          _hasQueried ? 'No records match the filters' : 'Apply filters to view attendance',
-          style: TextStyle(
-              color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6)),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Icon(_hasQueried ? Icons.search_off : Icons.filter_alt_outlined,
+                size: 48, color: muted),
+            const SizedBox(height: 12),
+            Text(
+              _hasQueried
+                  ? 'No records match the selected filters'
+                  : 'Select a filter — academic year, course, date range, status, '
+                    'or search — then tap Apply to load attendance.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: muted),
+            ),
+          ]),
         ),
       );
     }
