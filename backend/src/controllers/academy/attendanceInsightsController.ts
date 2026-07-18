@@ -484,6 +484,18 @@ function isoDate(d: Date | string): string {
   return dt.toISOString().slice(0, 10);
 }
 
+/**
+ * Validate a query-string date as strict 'YYYY-MM-DD', else null. Guards the
+ * SQL date comparisons against malformed input (the value is parameterised, so
+ * this is belt-and-suspenders correctness, not an injection concern).
+ */
+function isoDateOrNull(raw: unknown): string | null {
+  const s = String(raw ?? '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const d = new Date(`${s}T00:00:00Z`);
+  return Number.isNaN(d.getTime()) ? null : s;
+}
+
 /** 'HH:MM' from a pg TIME string ('HH:MM:SS') or null. */
 function hhmm(t: string | null): string {
   if (!t) return '';
@@ -500,25 +512,33 @@ export async function getOverallAttendance(
       academic_year_id,
       course_id,
       student,        // free-text: id OR name
-      date,           // single 'YYYY-MM-DD'
+      from,           // range start 'YYYY-MM-DD' (inclusive)
+      to,             // range end   'YYYY-MM-DD' (inclusive)
       status,         // present | absent
     } = req.query as Record<string, string>;
 
     const yearId   = academic_year_id?.trim() || null;
     const courseId = course_id?.trim() || null;
     const search   = student?.trim() || null;
-    const onDate   = date?.trim() || null;
+    const fromDate = isoDateOrNull(from);
+    const toDate   = isoDateOrNull(to);
     const statusF  = status?.trim().toLowerCase() || null;
 
+    if (fromDate && toDate && fromDate > toDate) {
+      return next(new AppError('"from" date must be on or before "to" date', 400));
+    }
+
     // Two filter layers:
-    //  • cohort filters (year/course/search) select WHICH students appear and
-    //    also scope the attendance-% denominator; they come first in the param
-    //    list so the percentage query can reuse them verbatim.
-    //  • row filters (date/status) are appended after and only narrow the grid
-    //    rows shown — they never move the percentage, so the figure stays a
-    //    stable "present ÷ working days" metric regardless of the day/status view.
+    //  • cohort filters (year/course/search/date-range) select WHICH students
+    //    and WHICH days are in scope; they also scope the attendance-% denominator
+    //    ("total working days" within the chosen period), so they come first in
+    //    the param list and the percentage query reuses them verbatim.
+    //  • status is a pure row filter appended after — it narrows the grid rows
+    //    shown but never moves the percentage, so "present ÷ working days" stays
+    //    a stable figure regardless of which status the admin is viewing.
     const cohortParams: unknown[] = [];
-    const cohort: string[] = [`s.status = 'active'`];
+    const cohort: string[] = [`s.status = 'active'`];     // student-level predicates
+    const dateScope: string[] = [`a.status <> 'holiday'`]; // attendance-row predicates shared by both queries
 
     if (yearId)   { cohortParams.push(yearId);   cohort.push(`s.academic_year_id = $${cohortParams.length}`); }
     if (courseId) { cohortParams.push(courseId); cohort.push(`EXISTS (
@@ -529,11 +549,12 @@ export async function getOverallAttendance(
       cohort.push(`(s.id ILIKE $${cohortParams.length}
         OR TRIM(s.first_name || ' ' || s.last_name) ILIKE $${cohortParams.length})`);
     }
+    if (fromDate) { cohortParams.push(fromDate); dateScope.push(`a.date >= $${cohortParams.length}`); }
+    if (toDate)   { cohortParams.push(toDate);   dateScope.push(`a.date <= $${cohortParams.length}`); }
 
-    // Grid query params = cohort params + row-filter params.
+    // Grid query params = cohort params + status row-filter param.
     const params: unknown[] = [...cohortParams];
-    const where = [...cohort, `a.status <> 'holiday'`];
-    if (onDate)  { params.push(onDate);  where.push(`a.date = $${params.length}`); }
+    const where = [...cohort, ...dateScope];
     if (statusF && ['present', 'absent'].includes(statusF)) {
       params.push(statusF); where.push(`a.status = $${params.length}`);
     }
@@ -568,10 +589,10 @@ export async function getOverallAttendance(
       params,
     );
 
-    // Per-student attendance % over the cohort scope (spec formula:
-    // present days ÷ total working days). "Working days" = that student's
-    // non-holiday attendance rows; "present" = present or late. Computed
-    // independently of the date/status/late row filters so the figure is stable.
+    // Per-student attendance % over the cohort + date-range scope (spec formula:
+    // present days ÷ total working days, within the selected period). "Working
+    // days" = that student's non-holiday rows in scope; "present" = present or
+    // late. Independent of the status row filter so the figure stays stable.
     const pctRows = await academyQuery<{ student_id: string; present: string; total: string }>(
       academySlug,
       `SELECT
@@ -580,7 +601,7 @@ export async function getOverallAttendance(
          COUNT(*)::int                                              AS total
        FROM attendance a
        JOIN students s ON s.id = a.student_id
-       WHERE ${cohort.join(' AND ')} AND a.status <> 'holiday'
+       WHERE ${[...cohort, ...dateScope].join(' AND ')}
        GROUP BY a.student_id`,
       cohortParams,
     );
