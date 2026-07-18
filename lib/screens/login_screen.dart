@@ -2,8 +2,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import '../config/app_mode.dart';
 import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
+import '../utils/platform_support.dart';
+import '../utils/responsive.dart';
 import '../widgets/custom_button.dart';
 import 'register_academy_screen.dart';
 
@@ -66,6 +69,21 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
+  void _showAcademyForgotPassword() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      isDismissible: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (_) => _AcademyForgotPasswordSheet(
+        initialSlug:  _slugCtrl.text.trim(),
+        initialEmail: _emailCtrl.text.trim(),
+      ),
+    );
+  }
+
   // ── Academy login ─────────────────────────────────────────────────────────
 
   String _routeForRole(String role) {
@@ -103,18 +121,15 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final auth   = context.watch<AuthProvider>();
-    final theme  = Theme.of(context);
-    final bottom = MediaQuery.of(context).padding.bottom;
+    final auth    = context.watch<AuthProvider>();
+    final theme   = Theme.of(context);
+    final bottom  = MediaQuery.of(context).padding.bottom;
+    final desktop = Responsive.isDesktop(context);
 
-    return Scaffold(
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: EdgeInsets.fromLTRB(24, 0, 24, bottom + 24),
-          child: Column(
+    final form = Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const SizedBox(height: 56),
+              SizedBox(height: desktop ? 8 : 56),
 
               // ── Logo — tap 10× to reveal admin panel ──────────────────────
               Center(
@@ -241,6 +256,17 @@ class _LoginScreenState extends State<LoginScreen> {
                       style: FilledButton.styleFrom(
                           minimumSize: const Size.fromHeight(52)),
                     ),
+                    const SizedBox(height: 4),
+
+                    // Forgot password (academy admins) — pre-fills the code/email
+                    // already typed above.
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton(
+                        onPressed: _showAcademyForgotPassword,
+                        child: const Text('Forgot password?'),
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -250,15 +276,21 @@ class _LoginScreenState extends State<LoginScreen> {
               const SizedBox(height: 20),
 
               // ── Parent login ───────────────────────────────────────────────
-              const SizedBox(height: 8),
-              OutlinedButton.icon(
-                onPressed: () =>
-                    Navigator.pushNamed(context, '/parent/login'),
-                icon: const Icon(Icons.family_restroom_outlined),
-                label: const Text('Parent / Guardian Login'),
-                style: OutlinedButton.styleFrom(
-                    minimumSize: const Size.fromHeight(48)),
-              ),
+              // Parent login is face-verified (camera + ML Kit), unavailable on
+              // Windows — the button is hidden there. It is also hidden in the
+              // dedicated Academy APK (AppMode.showParentEntry == false) so that
+              // build is single-purpose; parents use the separate Parent APK.
+              if (PlatformSupport.faceFeatures && AppMode.showParentEntry) ...[
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  onPressed: () =>
+                      Navigator.pushNamed(context, '/parent/login'),
+                  icon: const Icon(Icons.family_restroom_outlined),
+                  label: const Text('Parent / Guardian Login'),
+                  style: OutlinedButton.styleFrom(
+                      minimumSize: const Size.fromHeight(48)),
+                ),
+              ],
 
               const SizedBox(height: 24),
               const Divider(),
@@ -285,8 +317,31 @@ class _LoginScreenState extends State<LoginScreen> {
                     minimumSize: const Size.fromHeight(48)),
               ),
             ],
-          ),
-        ),
+          );
+
+    return Scaffold(
+      body: SafeArea(
+        child: desktop
+            // ── Desktop: centred, width-capped card ──────────────────────────
+            ? Center(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.symmetric(vertical: 32),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 420),
+                    child: Card(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(32, 28, 32, 32),
+                        child: form,
+                      ),
+                    ),
+                  ),
+                ),
+              )
+            // ── Mobile: original full-width scrolling layout ─────────────────
+            : SingleChildScrollView(
+                padding: EdgeInsets.fromLTRB(24, 0, 24, bottom + 24),
+                child: form,
+              ),
       ),
     );
   }
@@ -679,6 +734,238 @@ class _ForgotPasswordSheetState extends State<_ForgotPasswordSheet> {
             TextButton(
               onPressed: _loading ? null : () => setState(() => _step = 0),
               child: const Text('Change email'),
+            ),
+          ] else ...[
+            TextFormField(
+              controller: _newPassCtrl,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: 'New Password (min 8 characters)',
+                prefixIcon: Icon(Icons.lock_outline),
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 20),
+            CustomButton(
+                label: 'Set New Password',
+                onPressed: _resetPassword,
+                loading: _loading),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+// ── Academy password reset sheet ──────────────────────────────────────────────
+// 3-step OTP-by-email flow for academy admins. Unlike the super-admin sheet it
+// also needs the Academy Code (slug) to locate the tenant. Backend restricts
+// this to role='admin' users; teachers must ask their admin.
+
+class _AcademyForgotPasswordSheet extends StatefulWidget {
+  const _AcademyForgotPasswordSheet({
+    required this.initialSlug,
+    required this.initialEmail,
+  });
+
+  final String initialSlug;
+  final String initialEmail;
+
+  @override
+  State<_AcademyForgotPasswordSheet> createState() =>
+      _AcademyForgotPasswordSheetState();
+}
+
+class _AcademyForgotPasswordSheetState
+    extends State<_AcademyForgotPasswordSheet> {
+  int    _step    = 0; // 0=code+email  1=otp  2=new password
+  bool   _loading = false;
+  String? _resetToken;
+
+  late final _slugCtrl  = TextEditingController(text: widget.initialSlug);
+  late final _emailCtrl = TextEditingController(text: widget.initialEmail);
+  final _otpCtrl        = TextEditingController();
+  final _newPassCtrl    = TextEditingController();
+
+  @override
+  void dispose() {
+    _slugCtrl.dispose();
+    _emailCtrl.dispose();
+    _otpCtrl.dispose();
+    _newPassCtrl.dispose();
+    super.dispose();
+  }
+
+  void _snack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(msg.replaceFirst('Exception: ', '')),
+        behavior: SnackBarBehavior.floating));
+  }
+
+  Future<void> _sendOtp() async {
+    if (_slugCtrl.text.trim().isEmpty || _emailCtrl.text.trim().isEmpty) {
+      _snack('Academy code and email are required');
+      return;
+    }
+    setState(() => _loading = true);
+    try {
+      await ApiService.academyForgotPassword(
+        academySlug: _slugCtrl.text.trim(),
+        email: _emailCtrl.text.trim(),
+      );
+      setState(() { _step = 1; _loading = false; });
+    } catch (e) {
+      setState(() => _loading = false);
+      _snack(e.toString());
+    }
+  }
+
+  Future<void> _verifyOtp() async {
+    if (_otpCtrl.text.trim().length != 6) return;
+    setState(() => _loading = true);
+    try {
+      _resetToken = await ApiService.academyVerifyOtp(
+        academySlug: _slugCtrl.text.trim(),
+        email: _emailCtrl.text.trim(),
+        otp: _otpCtrl.text.trim(),
+      );
+      setState(() { _step = 2; _loading = false; });
+    } catch (e) {
+      setState(() => _loading = false);
+      _snack(e.toString());
+    }
+  }
+
+  Future<void> _resetPassword() async {
+    if (_newPassCtrl.text.length < 8) {
+      _snack('Password must be at least 8 characters');
+      return;
+    }
+    setState(() => _loading = true);
+    try {
+      await ApiService.academyResetPassword(
+        resetToken: _resetToken!,
+        newPassword: _newPassCtrl.text,
+      );
+      if (mounted) {
+        Navigator.of(context).pop();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Password reset successful. Please sign in.'),
+              backgroundColor: Colors.green,
+              behavior: SnackBarBehavior.floating),
+        );
+      }
+    } catch (e) {
+      setState(() => _loading = false);
+      _snack(e.toString());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return SingleChildScrollView(
+      padding: EdgeInsets.fromLTRB(
+          24, 20, 24, MediaQuery.of(context).viewInsets.bottom + 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Handle
+          Center(
+            child: Container(
+              width: 40, height: 4,
+              decoration: BoxDecoration(
+                  color: theme.colorScheme.outlineVariant,
+                  borderRadius: BorderRadius.circular(2)),
+            ),
+          ),
+          const SizedBox(height: 20),
+
+          Text('Reset Password',
+              style: theme.textTheme.titleLarge
+                  ?.copyWith(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 6),
+          Text(
+            ['Enter your academy code and admin email',
+             'Enter the OTP sent to your email',
+             'Set your new password'][_step],
+            style: TextStyle(
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                fontSize: 13),
+          ),
+          const SizedBox(height: 24),
+
+          // Step indicator
+          Row(
+            children: List.generate(3, (i) {
+              final done   = i < _step;
+              final active = i == _step;
+              return Expanded(
+                child: Container(
+                  margin: EdgeInsets.only(right: i < 2 ? 6 : 0),
+                  height: 4,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(2),
+                    color: done || active
+                        ? theme.colorScheme.primary
+                        : theme.colorScheme.outlineVariant,
+                  ),
+                ),
+              );
+            }),
+          ),
+          const SizedBox(height: 24),
+
+          if (_step == 0) ...[
+            TextFormField(
+              controller: _slugCtrl,
+              inputFormatters: [_AcademyCodeFormatter()],
+              decoration: const InputDecoration(
+                labelText: 'Academy Code',
+                hintText: 'e.g. sunshine_tuition',
+                prefixIcon: Icon(Icons.business_outlined),
+                border: OutlineInputBorder(),
+              ),
+              autocorrect: false,
+              textCapitalization: TextCapitalization.none,
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
+              controller: _emailCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Admin Email',
+                prefixIcon: Icon(Icons.email_outlined),
+                border: OutlineInputBorder(),
+              ),
+              keyboardType: TextInputType.emailAddress,
+            ),
+            const SizedBox(height: 20),
+            CustomButton(label: 'Send OTP', onPressed: _sendOtp, loading: _loading),
+          ] else if (_step == 1) ...[
+            Text('OTP sent to ${_emailCtrl.text}',
+                style: TextStyle(
+                    fontSize: 13,
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.6))),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: _otpCtrl,
+              decoration: const InputDecoration(
+                labelText: '6-digit OTP',
+                prefixIcon: Icon(Icons.pin_outlined),
+                border: OutlineInputBorder(),
+              ),
+              keyboardType: TextInputType.number,
+              maxLength: 6,
+            ),
+            const SizedBox(height: 8),
+            CustomButton(label: 'Verify OTP', onPressed: _verifyOtp, loading: _loading),
+            TextButton(
+              onPressed: _loading ? null : () => setState(() => _step = 0),
+              child: const Text('Change code / email'),
             ),
           ] else ...[
             TextFormField(

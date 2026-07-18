@@ -13,6 +13,9 @@ class ApiEndpoints {
   // Academy (multi-tenant)
   static const String academyRegister  = '$baseUrl/api/academy/register';
   static const String academyLogin     = '$baseUrl/api/academy/login';
+  static const String academyForgotPassword = '$baseUrl/api/academy/forgot-password';
+  static const String academyVerifyOtp      = '$baseUrl/api/academy/verify-otp';
+  static const String academyResetPassword  = '$baseUrl/api/academy/reset-password';
   static const String academyProfile   = '$baseUrl/api/academy/profile';
   static const String academySettings  = '$baseUrl/api/academy/settings';
   static const String academyCourses   = '$baseUrl/api/academy/courses';

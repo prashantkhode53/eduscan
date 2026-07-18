@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import { query, queryOne } from '../db/pool';
 import { sharedPool, academyQuery, academyQueryOne, academyExec } from '../db/poolManager';
 import { runAcademyMigrations } from '../db/academyMigrations';
+import { sendOtpEmail } from '../utils/emailService';
 import { AppError } from '../middleware/errorHandler';
 import { AcademyUser } from '../types';
 
@@ -211,6 +212,153 @@ export async function loginAcademyUser(
   } catch (err) {
     next(err);
   }
+}
+
+// ── Password reset (OTP by email, admins only) ────────────────────────────────
+//
+// Academy users live in per-schema `users` tables, so every step must also carry
+// the academy_slug to locate the right schema. Only role='admin' users may
+// self-reset; teachers must ask their academy admin. Mirrors the super-admin
+// flow in authController.ts.
+
+/** Resolve an active academy from the shared registry, or null. */
+async function findActiveAcademy(
+  slug: string
+): Promise<{ id: string; name: string; slug: string } | null> {
+  const academy = await queryOne<{ id: string; name: string; slug: string; status: string }>(
+    `SELECT id, name, slug, status FROM academies WHERE slug = $1`,
+    [slug.toLowerCase().trim()]
+  );
+  if (!academy || academy.status !== 'active') return null;
+  return { id: academy.id, name: academy.name, slug: academy.slug };
+}
+
+// ── POST /api/academy/forgot-password ─────────────────────────────────────────
+
+export async function forgotPasswordAcademy(
+  req: Request, res: Response, next: NextFunction
+): Promise<void> {
+  try {
+    const { academy_slug, email } = req.body as { academy_slug: string; email: string };
+    if (!academy_slug || !email) {
+      return next(new AppError('academy_slug and email are required', 400));
+    }
+
+    // Always respond success to prevent academy/email enumeration.
+    const generic = { success: true, message: 'If that account exists, an OTP has been sent.' };
+
+    const academy = await findActiveAcademy(academy_slug);
+    if (!academy) { res.json(generic); return; }
+
+    const user = await academyQueryOne<{ id: string; name: string; email: string }>(
+      academy.slug,
+      `SELECT id, name, email FROM users
+       WHERE email = $1 AND role = 'admin' AND is_active = TRUE`,
+      [email.toLowerCase().trim()]
+    );
+    if (!user) { res.json(generic); return; }
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+    await academyExec(
+      academy.slug,
+      `UPDATE users SET otp_code = $1, otp_expires_at = $2 WHERE id = $3`,
+      [otp, expiresAt.toISOString(), user.id]
+    );
+
+    await sendOtpEmail(user.email, otp, user.name);
+    res.json(generic);
+  } catch (err) { next(err); }
+}
+
+// ── POST /api/academy/verify-otp ──────────────────────────────────────────────
+
+export async function verifyOtpAcademy(
+  req: Request, res: Response, next: NextFunction
+): Promise<void> {
+  try {
+    const { academy_slug, email, otp } = req.body as {
+      academy_slug: string; email: string; otp: string;
+    };
+    if (!academy_slug || !email || !otp) {
+      return next(new AppError('academy_slug, email, and otp are required', 400));
+    }
+
+    const academy = await findActiveAcademy(academy_slug);
+    if (!academy) return next(new AppError('Invalid OTP', 400));
+
+    const user = await academyQueryOne<{
+      id: string; otp_code: string | null; otp_expires_at: string | Date | null;
+    }>(
+      academy.slug,
+      `SELECT id, otp_code, otp_expires_at FROM users
+       WHERE email = $1 AND role = 'admin' AND is_active = TRUE`,
+      [email.toLowerCase().trim()]
+    );
+
+    if (!user || !user.otp_code || user.otp_code !== otp) {
+      return next(new AppError('Invalid OTP', 400));
+    }
+    if (!user.otp_expires_at || new Date(user.otp_expires_at) < new Date()) {
+      return next(new AppError('OTP has expired. Please request a new one.', 400));
+    }
+
+    const resetToken = jwt.sign(
+      { userId: user.id, academyId: academy.id, academySlug: academy.slug, purpose: 'academy_reset' },
+      jwtSecret(),
+      { expiresIn: '15m' } as import('jsonwebtoken').SignOptions
+    );
+
+    // One-time use: clear the OTP now that it's been consumed.
+    await academyExec(
+      academy.slug,
+      `UPDATE users SET otp_code = NULL, otp_expires_at = NULL WHERE id = $1`,
+      [user.id]
+    );
+
+    res.json({ success: true, data: { reset_token: resetToken }, message: 'OTP verified' });
+  } catch (err) { next(err); }
+}
+
+// ── POST /api/academy/reset-password ──────────────────────────────────────────
+
+export async function resetPasswordAcademy(
+  req: Request, res: Response, next: NextFunction
+): Promise<void> {
+  try {
+    const { reset_token, new_password } = req.body as {
+      reset_token: string; new_password: string;
+    };
+    if (!reset_token || !new_password) {
+      return next(new AppError('reset_token and new_password are required', 400));
+    }
+    if (new_password.length < 8) {
+      return next(new AppError('Password must be at least 8 characters', 400));
+    }
+
+    let decoded: { userId: string; academySlug: string; purpose: string };
+    try {
+      decoded = jwt.verify(reset_token, jwtSecret()) as typeof decoded;
+    } catch {
+      return next(new AppError('Invalid or expired reset token', 400));
+    }
+    if (decoded.purpose !== 'academy_reset') {
+      return next(new AppError('Invalid reset token', 400));
+    }
+
+    const hash = await bcrypt.hash(new_password, 12);
+    await academyExec(
+      decoded.academySlug,
+      `UPDATE users
+       SET password_hash = $1, failed_attempts = 0, is_active = TRUE,
+           locked_at = NULL, locked_by = NULL, otp_code = NULL, otp_expires_at = NULL
+       WHERE id = $2`,
+      [hash, decoded.userId]
+    );
+
+    res.json({ success: true, message: 'Password updated successfully' });
+  } catch (err) { next(err); }
 }
 
 // ── GET /api/academy/profile ──────────────────────────────────────────────────

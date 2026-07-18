@@ -109,6 +109,59 @@ class ApiService {
     return _parse(res) as Map<String, dynamic>;
   }
 
+  // ── Academy password reset (OTP by email, admins only) ─────────────────────
+
+  static Future<void> academyForgotPassword({
+    required String academySlug,
+    required String email,
+  }) async {
+    final res = await _http.post(
+          Uri.parse(ApiEndpoints.academyForgotPassword),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'academy_slug': academySlug.toLowerCase().trim(),
+            'email': email,
+          }),
+        )
+        .timeout(_timeout);
+    _parse(res);
+  }
+
+  static Future<String> academyVerifyOtp({
+    required String academySlug,
+    required String email,
+    required String otp,
+  }) async {
+    final res = await _http.post(
+          Uri.parse(ApiEndpoints.academyVerifyOtp),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'academy_slug': academySlug.toLowerCase().trim(),
+            'email': email,
+            'otp': otp,
+          }),
+        )
+        .timeout(_timeout);
+    final data = _parse(res) as Map<String, dynamic>;
+    return data['reset_token'] as String;
+  }
+
+  static Future<void> academyResetPassword({
+    required String resetToken,
+    required String newPassword,
+  }) async {
+    final res = await _http.post(
+          Uri.parse(ApiEndpoints.academyResetPassword),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'reset_token': resetToken,
+            'new_password': newPassword,
+          }),
+        )
+        .timeout(_timeout);
+    _parse(res);
+  }
+
   // ── Auth ─────────────────────────────────────────────────────────────────
 
   static Future<Map<String, dynamic>> login(
