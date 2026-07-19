@@ -523,6 +523,54 @@ export async function blockAcademyUser(
   } catch (err) { next(err); }
 }
 
+// ── PATCH /api/super-admin/academies/:slug/reset-password ─────────────────────
+
+/**
+ * Super-admin override: directly set a new login password for an academy's
+ * admin user. Unlike the OTP self-service flow (academyController), this needs
+ * no email round-trip — the super admin sets the password and communicates it
+ * to the academy out of band. Also clears any lock so the admin can log in
+ * immediately with the new credentials.
+ */
+export async function resetAcademyAdminPassword(
+  req: Request, res: Response, next: NextFunction
+): Promise<void> {
+  try {
+    const { slug } = req.params;
+    const { new_password } = req.body as { new_password?: string };
+
+    if (!new_password || new_password.length < 8) {
+      return next(new AppError('new_password is required and must be at least 8 characters', 400));
+    }
+
+    const { rows: ac } = await sharedPool.query(
+      `SELECT name FROM academies WHERE slug = $1`, [slug]
+    );
+    if (!ac.length) return next(new AppError('Academy not found', 404));
+
+    const hash = await bcrypt.hash(new_password, 12);
+
+    const updated = await academyQueryOne<{ email: string }>(
+      slug,
+      `UPDATE users
+       SET password_hash = $1, failed_attempts = 0, is_active = TRUE,
+           locked_at = NULL, locked_by = NULL, otp_code = NULL, otp_expires_at = NULL,
+           updated_at = NOW()
+       WHERE role = 'admin'
+       RETURNING email`,
+      [hash]
+    );
+    if (!updated) return next(new AppError('No admin user found for this academy', 404));
+
+    await auditLog(
+      req.admin!.id, 'RESET_ADMIN_PASSWORD', slug,
+      `Reset login password for admin (${updated.email}) of ${ac[0].name as string}`
+    );
+
+    res.json({ success: true, message: 'Admin password reset successfully' });
+  } catch (err) { next(err); }
+}
+
 // ── GET /api/super-admin/academies/:slug/face-threshold ───────────────────────
 
 /**

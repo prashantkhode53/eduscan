@@ -12,6 +12,7 @@ import {
   unlockAcademyUser,
   resetLoginAttempts,
   blockAcademyUser,
+  resetAcademyAdminPassword,
   getFaceThreshold,
   setFaceThreshold,
 } from '../controllers/superAdminController';
@@ -29,6 +30,7 @@ router.patch ('/:slug/activate',       activateAcademy);
 router.patch ('/:slug/unlock-user',    unlockAcademyUser);
 router.patch ('/:slug/reset-attempts', resetLoginAttempts);
 router.patch ('/:slug/block-user',     blockAcademyUser);
+router.patch ('/:slug/reset-password', resetAcademyAdminPassword);
 router.get   ('/:slug/face-threshold', getFaceThreshold);
 router.put   ('/:slug/face-threshold', setFaceThreshold);
 router.delete('/:slug',                deleteAcademy);

@@ -224,6 +224,89 @@ class _AcademyDetailScreenState extends State<AcademyDetailScreen> {
     }
   }
 
+  Future<void> _resetPassword() async {
+    final ctrl    = TextEditingController();
+    final confirm = TextEditingController();
+    String? error;
+
+    final newPassword = await showDialog<String>(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: const Text('Reset Admin Password'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Set a new login password for the admin of "$_name". '
+                'Share it with them securely — they can sign in immediately.',
+                style: TextStyle(
+                    fontSize: 13,
+                    color: Theme.of(ctx).colorScheme.onSurface.withValues(alpha: 0.7)),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: ctrl,
+                obscureText: true,
+                decoration: const InputDecoration(
+                  labelText: 'New password',
+                  hintText: 'At least 8 characters',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: confirm,
+                obscureText: true,
+                decoration: InputDecoration(
+                  labelText: 'Confirm password',
+                  border: const OutlineInputBorder(),
+                  errorText: error,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel')),
+            FilledButton(
+              onPressed: () {
+                final p = ctrl.text;
+                if (p.length < 8) {
+                  setLocal(() => error = 'Must be at least 8 characters');
+                  return;
+                }
+                if (p != confirm.text) {
+                  setLocal(() => error = 'Passwords do not match');
+                  return;
+                }
+                Navigator.pop(ctx, p);
+              },
+              child: const Text('Reset Password'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (newPassword == null || !mounted) return;
+    try {
+      await SuperAdminApiService.resetAcademyAdminPassword(_slug, newPassword);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Admin password reset'), backgroundColor: Colors.green));
+      _loadStats();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(e.toString().replaceFirst('Exception: ', '')),
+            backgroundColor: Colors.red));
+      }
+    }
+  }
+
   // ── Export student data ───────────────────────────────────────────────────
 
   Future<void> _export() async {
@@ -703,6 +786,21 @@ class _AcademyDetailScreenState extends State<AcademyDetailScreen> {
                 ),
               ],
             ]),
+            const SizedBox(height: 8),
+
+            // Reset password — always available as a super-admin override
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _resetPassword,
+                icon: const Icon(Icons.password_outlined, size: 16),
+                label: const Text('Reset Password'),
+                style: OutlinedButton.styleFrom(
+                    foregroundColor: theme.colorScheme.primary,
+                    side: BorderSide(color: theme.colorScheme.primary),
+                    minimumSize: const Size.fromHeight(40)),
+              ),
+            ),
           ],
         ),
       ),
