@@ -89,6 +89,39 @@ export async function batchEmbed(imagesB64: string[], timeoutMs = 90_000): Promi
   return response.json() as Promise<EmbedResult>;
 }
 
+export interface GroupFace {
+  bbox: number[];        // [x1, y1, x2, y2]
+  det_score: number;
+  embedding: number[];   // 512-D, L2-normalized
+}
+
+export interface GroupEmbedResult {
+  success: boolean;
+  faces: GroupFace[];
+  faces_detected: number;
+  faces_usable: number;
+  reason?: string;
+}
+
+/**
+ * One-Click Attendance: send one base64 group photo to Python and get back an
+ * embedding per detected face. Detection at 1280px is heavier than a single
+ * face scan, so the timeout is generous (45 s) — the UI shows per-photo
+ * progress, and the service is warmed before the first photo is sent.
+ */
+export async function groupEmbed(imageB64: string, timeoutMs = 45_000): Promise<GroupEmbedResult> {
+  const response = await fetch(`${BASE_URL}/embed/group`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image_b64: imageB64 }),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!response.ok) {
+    throw new Error(`InsightFace /embed/group returned ${response.status}`);
+  }
+  return response.json() as Promise<GroupEmbedResult>;
+}
+
 /**
  * Send a single base64-encoded JPEG to Python for identity matching against
  * the Redis embedding cache.  Called on every attendance scan.

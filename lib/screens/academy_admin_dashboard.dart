@@ -13,6 +13,7 @@ import 'academy/bulk_upload_screen.dart';
 import 'academy/fees_screen.dart';
 import 'academy/academy_face_scan_screen.dart';
 import 'academy/attendance_hub_screen.dart';
+import 'academy/one_click_attendance_screen.dart';
 import 'academy/qr_code_screen.dart';
 import 'academy/academic_year_master_screen.dart';
 import 'academy/send_notification_screen.dart';
@@ -496,6 +497,22 @@ class _HomeTabState extends State<_HomeTab> {
                           builder: (_) => const AcademyFaceScanScreen()),
                     ),
                   ),
+                // One-Click Attendance — whole class from group photo(s).
+                // Works on any platform: photos can be uploaded, so no
+                // camera/ML-Kit dependency (server does all recognition).
+                _QuickAction(
+                  icon: Icons.groups_2_outlined,
+                  label: 'One-Click Attendance',
+                  color: Colors.cyan.shade700,
+                  onTap: () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const OneClickAttendanceScreen()),
+                    );
+                    _loadStats();
+                  },
+                ),
                 // Attendance Intelligence — read-only insights over attendance data
                 _QuickAction(
                   icon: Icons.insights_outlined,

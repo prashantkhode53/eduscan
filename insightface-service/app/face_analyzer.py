@@ -126,6 +126,86 @@ class FaceAnalyzer:
             "reason": "ok",
         }
 
+    # ── Group photo (One-Click Attendance) ──────────────────────────────────
+
+    _group_app: Optional[FaceAnalysis] = None
+
+    @classmethod
+    def _initialize_group(cls) -> None:
+        """
+        A second FaceAnalysis instance prepared with a larger detection input
+        (1280 vs the default 640). Classroom group photos contain many small
+        faces — back-row faces are easily missed at det_size 640. Lazily
+        created so single-face scan/registration traffic pays no extra memory
+        until the first group scan arrives.
+        """
+        if cls._group_app is not None:
+            return
+        logger.info(f"[InsightFace] Loading group analyzer '{settings.model_name}' (det_size={settings.group_det_size}) …")
+        app = FaceAnalysis(
+            name=settings.model_name,
+            providers=["CPUExecutionProvider"],
+        )
+        app.prepare(
+            ctx_id=-1,
+            det_size=(settings.group_det_size, settings.group_det_size),
+        )
+        cls._group_app = app
+        logger.info("[InsightFace] Group analyzer ready.")
+
+    @classmethod
+    def get_group_embeddings(cls, image_bytes: bytes) -> dict:
+        """
+        Detect EVERY face in a group/classroom photo and return one embedding
+        per face. Unlike get_embedding, this deliberately:
+          - allows (expects) multiple faces
+          - relaxes the pose gates (students look around in group photos)
+          - uses a smaller min face size and det-score floor
+
+        Returns:
+          {
+            "success": bool,
+            "faces": [ { "bbox": [x1,y1,x2,y2], "det_score": float,
+                         "embedding": [512 floats] }, ... ],
+            "faces_detected": int,   # before quality filtering
+            "faces_usable": int,     # after filtering
+            "reason": str,
+          }
+        """
+        cls._initialize_group()
+
+        img = cls._decode(image_bytes)
+        if img is None:
+            return {"success": False, "faces": [], "faces_detected": 0,
+                    "faces_usable": 0, "reason": "invalid_image"}
+
+        faces = cls._group_app.get(img)
+        if len(faces) == 0:
+            return {"success": False, "faces": [], "faces_detected": 0,
+                    "faces_usable": 0, "reason": "no_face_detected"}
+
+        usable = []
+        for face in faces:
+            if float(face.det_score) < settings.group_min_det_score:
+                continue
+            x1, y1, x2, y2 = face.bbox
+            w, h = x2 - x1, y2 - y1
+            if w < settings.group_min_face_size_px or h < settings.group_min_face_size_px:
+                continue
+            usable.append({
+                "bbox":      [round(float(v), 1) for v in face.bbox],
+                "det_score": round(float(face.det_score), 4),
+                "embedding": face.normed_embedding.tolist(),
+            })
+
+        return {
+            "success":        len(usable) > 0,
+            "faces":          usable,
+            "faces_detected": len(faces),
+            "faces_usable":   len(usable),
+            "reason":         "ok" if usable else "all_faces_too_small_or_low_quality",
+        }
+
     @classmethod
     def average_embeddings(cls, embeddings: list[list[float]]) -> list[float]:
         """
