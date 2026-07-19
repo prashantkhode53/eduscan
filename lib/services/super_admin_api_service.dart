@@ -138,6 +138,18 @@ class SuperAdminApiService {
     _parse(res);
   }
 
+  /// Super-admin override: directly set a new login password for the academy's
+  /// admin user. Also clears any lock so they can sign in immediately.
+  static Future<void> resetAcademyAdminPassword(
+      String slug, String newPassword) async {
+    final res = await _http
+        .patch(Uri.parse('${ApiEndpoints.superAdminAcademies}/$slug/reset-password'),
+            headers: await _headers(),
+            body: jsonEncode({'new_password': newPassword}))
+        .timeout(_timeout);
+    _parse(res);
+  }
+
   // ── Face match threshold ───────────────────────────────────────────────────
 
   /// Current face-match threshold for [slug] (scan strictness, 0.50–0.90).
