@@ -28,6 +28,10 @@ class ApiEndpoints {
   static String academyFeeReceiptResend(String id) => '$baseUrl/api/academy/fees/receipts/$id/resend';
   static const String academyAttendanceScan = '$baseUrl/api/academy/attendance/scan';
   static const String academyAttendanceVerifyPassword = '$baseUrl/api/academy/attendance/verify-password';
+  // One-Click Attendance (group class photos)
+  static const String academyGroupScanRoster  = '$baseUrl/api/academy/attendance/group-scan/roster';
+  static const String academyGroupScanPhoto   = '$baseUrl/api/academy/attendance/group-scan/photo';
+  static const String academyGroupScanApprove = '$baseUrl/api/academy/attendance/group-scan/approve';
   // Attendance Intelligence (admin/teacher) — read-only insights + manual nudge
   static const String attendanceInsights        = '$baseUrl/api/academy/attendance-insights';
   static const String attendanceInsightsToday   = '$baseUrl/api/academy/attendance-insights/today';

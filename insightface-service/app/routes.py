@@ -93,6 +93,25 @@ async def embed_batch(body: BatchEmbedRequest):
     }
 
 
+class GroupEmbedRequest(BaseModel):
+    image_b64: str  # one base64-encoded JPEG group photo
+
+
+@router.post("/embed/group")
+async def embed_group(body: GroupEmbedRequest):
+    """
+    One-Click Attendance: accept a single classroom/group photo and return an
+    embedding for EVERY usable face found in it. Matching happens in Node.js
+    (per-academy in-process cache) — this endpoint only detects and embeds.
+    """
+    try:
+        img_bytes = base64.b64decode(body.image_b64)
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid_base64")
+
+    return FaceAnalyzer.get_group_embeddings(img_bytes)
+
+
 # ── /match ────────────────────────────────────────────────────────────────────
 
 @router.post("/match")

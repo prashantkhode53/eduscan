@@ -10,6 +10,11 @@ class Settings(BaseSettings):
     match_threshold: float = 0.60   # below this = unknown
     margin_threshold: float = 0.05  # gap between #1 and #2 must exceed this
 
+    # Group-photo attendance (One-Click Attendance)
+    group_det_size: int = 1280          # larger detector input to find small back-row faces
+    group_min_face_size_px: int = 28    # embed faces down to ~28px (below this ArcFace is unreliable)
+    group_min_det_score: float = 0.50   # relaxed vs single-face gate
+
     # Quality gates (applied before embedding generation)
     min_face_size_px: int = 60
     max_yaw_deg: float = 30.0

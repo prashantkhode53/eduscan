@@ -327,6 +327,48 @@ class AcademyApiService {
     return _parse(res) as List<dynamic>;
   }
 
+  // ── One-Click Attendance (group class photos) ─────────────────────────────
+
+  /// Roster of the course: every active student with a `has_face` flag, so
+  /// the review screen can show who was NOT detected in the photos.
+  static Future<Map<String, dynamic>> getGroupScanRoster(String courseId) async {
+    final uri = Uri.parse(ApiEndpoints.academyGroupScanRoster)
+        .replace(queryParameters: {'course_id': courseId});
+    final res = await _http.get(uri, headers: await _headers()).timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
+  /// Scan ONE group photo. Detection at high resolution is slow on CPU, so
+  /// this uses the long (registration) timeout. Returns per-photo matches —
+  /// the screen accumulates unique students across photos.
+  static Future<Map<String, dynamic>> groupScanPhoto({
+    required String courseId,
+    required String imageBase64,
+  }) async {
+    final res = await _http
+        .post(Uri.parse(ApiEndpoints.academyGroupScanPhoto),
+            headers: await _headers(),
+            body: jsonEncode({
+              'course_id': courseId,
+              'image_base64': imageBase64,
+            }))
+        .timeout(_regTimeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
+  /// Final admin approval — writes attendance for the reviewed list.
+  static Future<Map<String, dynamic>> groupScanApprove({
+    required String courseId,
+    required List<Map<String, dynamic>> entries,
+  }) async {
+    final res = await _http
+        .post(Uri.parse(ApiEndpoints.academyGroupScanApprove),
+            headers: await _headers(),
+            body: jsonEncode({'course_id': courseId, 'entries': entries}))
+        .timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
   static Future<Map<String, dynamic>> createCourse(Map<String, dynamic> body) async {
     final res = await _http.post(Uri.parse(ApiEndpoints.academyCourses),
             headers: await _headers(), body: jsonEncode(body))
