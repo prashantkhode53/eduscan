@@ -6,6 +6,8 @@ import '../providers/academic_year_provider.dart';
 import '../models/academy_user.dart';
 import '../services/academy_api_service.dart';
 import '../utils/platform_support.dart';
+import '../utils/responsive.dart';
+import '../widgets/adaptive_nav_scaffold.dart';
 import 'academy/course_master_screen.dart';
 import 'academy/academy_student_list_screen.dart';
 import 'academy/academy_student_registration_screen.dart';
@@ -83,7 +85,18 @@ class _AcademyAdminDashboardState extends State<AcademyAdminDashboard> {
           SystemNavigator.pop();
         }
       },
-      child: Scaffold(
+      child: AdaptiveNavScaffold(
+        selectedIndex: _currentIndex,
+        onDestinationSelected: (i) => setState(() => _currentIndex = i),
+        destinations: _navItems
+            .map((n) => AdaptiveNavDestination(
+                  icon: n.icon,
+                  activeIcon: n.activeIcon,
+                  label: n.label,
+                ))
+            .toList(),
+        railHeader: _RailHeader(user: user),
+        railFooter: _RailFooter(user: user),
         body: IndexedStack(
           index: _currentIndex,
           children: [
@@ -93,18 +106,98 @@ class _AcademyAdminDashboardState extends State<AcademyAdminDashboard> {
             _SettingsTab(user: user),
           ],
         ),
-        bottomNavigationBar: NavigationBar(
-          selectedIndex: _currentIndex,
-          onDestinationSelected: (i) => setState(() => _currentIndex = i),
-          destinations: _navItems
-              .map((n) => NavigationDestination(
-                    icon: Icon(n.icon),
-                    selectedIcon: Icon(n.activeIcon),
-                    label: n.label,
-                  ))
-              .toList(),
-        ),
       ),
+    );
+  }
+}
+
+// ── Desktop rail header & footer (Windows only) ─────────────────────────────────
+// Presentation-only widgets shown in the left navigation rail on wide windows.
+
+class _RailHeader extends StatelessWidget {
+  final AcademyUser user;
+  const _RailHeader({required this.user});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final extended = Responsive.widthOf(context) >= 1180;
+    final logo = Container(
+      width: 40,
+      height: 40,
+      decoration: BoxDecoration(
+        color: theme.colorScheme.primary,
+        borderRadius: BorderRadius.circular(11),
+      ),
+      child: const Icon(Icons.school, color: Colors.white, size: 22),
+    );
+    if (!extended) return Center(child: logo);
+    return Row(
+      children: [
+        logo,
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('EduScan',
+                  style: theme.textTheme.titleMedium
+                      ?.copyWith(fontWeight: FontWeight.w700)),
+              Text(user.academyName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurface
+                          .withValues(alpha: 0.6))),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _RailFooter extends StatelessWidget {
+  final AcademyUser user;
+  const _RailFooter({required this.user});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final extended = Responsive.widthOf(context) >= 1180;
+    final avatar = CircleAvatar(
+      radius: 18,
+      backgroundColor: theme.colorScheme.primary,
+      child: Text(user.initials,
+          style: const TextStyle(
+              color: Colors.white,
+              fontSize: 13,
+              fontWeight: FontWeight.bold)),
+    );
+    if (!extended) {
+      return Tooltip(message: '${user.name}\n${user.email}', child: Center(child: avatar));
+    }
+    return Row(
+      children: [
+        avatar,
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(user.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodyMedium
+                      ?.copyWith(fontWeight: FontWeight.w600)),
+              Text(user.role.toUpperCase(),
+                  style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.onSurface
+                          .withValues(alpha: 0.55))),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
@@ -386,110 +479,94 @@ class _HomeTabState extends State<_HomeTab> {
       ),
       body: RefreshIndicator(
         onRefresh: _loadStats,
-        child: ListView(
-          padding: const EdgeInsets.all(16),
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: Responsive.readableMaxWidth),
+            child: ListView(
+          padding: Responsive.pagePadding(context),
           children: [
-            // Welcome card
-            Card(
-              color: theme.colorScheme.primary,
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Welcome back,',
-                              style: TextStyle(
-                                  color: Colors.white.withValues(alpha: 0.8),
-                                  fontSize: 13)),
-                          const SizedBox(height: 4),
-                          Text(user.name,
-                              style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.bold)),
-                          const SizedBox(height: 4),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 8, vertical: 3),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.2),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Text(user.role.toUpperCase(),
-                                style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600)),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Icon(Icons.school,
-                        size: 48,
-                        color: Colors.white.withValues(alpha: 0.4)),
-                  ],
+            // Welcome line (compact single row)
+            Row(
+              children: [
+                Icon(Icons.school, size: 18, color: theme.colorScheme.primary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text('Welcome back, ${user.name}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodyMedium
+                          ?.copyWith(fontWeight: FontWeight.w600)),
                 ),
+                const SizedBox(width: 8),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.primary.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(user.role.toUpperCase(),
+                      style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: theme.colorScheme.primary)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+
+            // Real stats
+            const _SectionHeader('OVERVIEW'),
+            const SizedBox(height: 10),
+            SizedBox(
+              height: 68,
+              child: Row(
+                children: [
+                  Expanded(
+                      child: _StatCard(
+                          label: 'Students',
+                          value: _stat('total_students'),
+                          icon: Icons.people_outline,
+                          color: Colors.blue)),
+                  const SizedBox(width: 10),
+                  Expanded(
+                      child: _StatCard(
+                          label: 'Courses',
+                          value: _stat('total_courses'),
+                          icon: Icons.menu_book_outlined,
+                          color: Colors.orange)),
+                  const SizedBox(width: 10),
+                  Expanded(
+                      child: _StatCard(
+                          label: 'Present Today',
+                          value: _stat('present_today'),
+                          icon: Icons.check_circle_outline,
+                          color: Colors.green)),
+                  const SizedBox(width: 10),
+                  Expanded(
+                      child: _StatCard(
+                          label: 'Fees Due',
+                          value: _stat('fees_due'),
+                          icon: Icons.warning_amber_outlined,
+                          color: Colors.red)),
+                ],
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 18),
 
-            // Quick actions
-            Text('Quick Actions',
-                style: theme.textTheme.titleSmall
-                    ?.copyWith(fontWeight: FontWeight.bold)),
-            const SizedBox(height: 12),
-            GridView.count(
-              crossAxisCount: 2,
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              crossAxisSpacing: 12,
-              mainAxisSpacing: 12,
-              childAspectRatio: 1.6,
+            // ── EVERYDAY ────────────────────────────────────────────────
+            const _SectionHeader('EVERYDAY'),
+            const SizedBox(height: 10),
+            _ActionGrid(
+              tileHeight: 94,
               children: [
-                // Row 1: setup workflow first
-                _QuickAction(
-                  icon: Icons.calendar_today_outlined,
-                  label: 'Academic Year',
-                  color: Colors.indigo,
-                  onTap: () async {
-                    final yp = context.read<AcademicYearProvider>();
-                    await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (_) => const AcademicYearMasterScreen()),
-                    );
-                    await yp.init(force: true);
-                  },
-                ),
-                _QuickAction(
-                  icon: Icons.menu_book_outlined,
-                  label: 'Manage Courses',
-                  color: Colors.orange,
-                  onTap: () async {
-                    await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (_) => const CourseMasterScreen()),
-                    );
-                    _loadStats();
-                  },
-                ),
-                // Row 2: student operations
-                _QuickAction(
-                  icon: Icons.how_to_reg_outlined,
-                  label: 'Register Student',
-                  color: Colors.blue,
-                  onTap: () => _showRegisterOptions(context),
-                ),
                 // Face Scan Attendance relies on the camera image stream +
                 // on-device ML Kit, which are mobile-only. Hidden on Windows.
                 if (PlatformSupport.faceFeatures)
-                  _QuickAction(
+                  _QuickActionPrimary(
                     icon: Icons.face_outlined,
-                    label: 'Face Scan Attendance',
+                    label: 'Face Scan',
                     color: Colors.green,
                     onTap: () => Navigator.push(
                       context,
@@ -500,9 +577,9 @@ class _HomeTabState extends State<_HomeTab> {
                 // One-Click Attendance — whole class from group photo(s).
                 // Works on any platform: photos can be uploaded, so no
                 // camera/ML-Kit dependency (server does all recognition).
-                _QuickAction(
+                _QuickActionPrimary(
                   icon: Icons.groups_2_outlined,
-                  label: 'One-Click Attendance',
+                  label: 'One Click',
                   color: Colors.cyan.shade700,
                   onTap: () async {
                     await Navigator.push(
@@ -513,19 +590,7 @@ class _HomeTabState extends State<_HomeTab> {
                     _loadStats();
                   },
                 ),
-                // Attendance Intelligence — read-only insights over attendance data
-                _QuickAction(
-                  icon: Icons.insights_outlined,
-                  label: 'Attendance',
-                  color: Colors.deepPurple,
-                  onTap: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                        builder: (_) => const AttendanceHubScreen()),
-                  ),
-                ),
-                // Row 3: financial & utilities
-                _QuickAction(
+                _QuickActionPrimary(
                   icon: Icons.payments_outlined,
                   label: 'Collect Fee',
                   color: Colors.purple,
@@ -538,19 +603,36 @@ class _HomeTabState extends State<_HomeTab> {
                     _loadStats();
                   },
                 ),
+              ],
+            ),
+            const SizedBox(height: 16),
+
+            // ── MANAGE ──────────────────────────────────────────────────
+            const _SectionHeader('MANAGE'),
+            const SizedBox(height: 10),
+            _ActionGrid(
+              tileHeight: 84,
+              children: [
+                // Attendance Intelligence — read-only insights over attendance data
                 _QuickAction(
-                  icon: Icons.qr_code_2_outlined,
-                  label: 'QR Codes',
-                  color: Colors.teal,
+                  icon: Icons.insights_outlined,
+                  label: 'Attendance Report',
+                  color: Colors.deepPurple,
                   onTap: () => Navigator.push(
                     context,
                     MaterialPageRoute(
-                        builder: (_) => const QrCodeScreen()),
+                        builder: (_) => const AttendanceHubScreen()),
                   ),
                 ),
                 _QuickAction(
+                  icon: Icons.how_to_reg_outlined,
+                  label: 'Add Student',
+                  color: Colors.blue,
+                  onTap: () => _showRegisterOptions(context),
+                ),
+                _QuickAction(
                   icon: Icons.campaign_outlined,
-                  label: 'Send Notifications',
+                  label: 'Notify Parents',
                   color: Colors.pink,
                   onTap: () => Navigator.push(
                     context,
@@ -560,49 +642,53 @@ class _HomeTabState extends State<_HomeTab> {
                 ),
               ],
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 16),
 
-            // Real stats
-            Text('Overview',
-                style: theme.textTheme.titleSmall
-                    ?.copyWith(fontWeight: FontWeight.bold)),
-            const SizedBox(height: 12),
-            Row(
+            // ── SETUP ───────────────────────────────────────────────────
+            const _SectionHeader('SETUP'),
+            const SizedBox(height: 10),
+            _ActionGrid(
+              tileHeight: 68,
               children: [
-                Expanded(
-                    child: _StatCard(
-                        label: 'Students',
-                        value: _stat('total_students'),
-                        icon: Icons.people_outline,
-                        color: Colors.blue)),
-                const SizedBox(width: 12),
-                Expanded(
-                    child: _StatCard(
-                        label: 'Courses',
-                        value: _stat('total_courses'),
-                        icon: Icons.menu_book_outlined,
-                        color: Colors.orange)),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                    child: _StatCard(
-                        label: 'Present Today',
-                        value: _stat('present_today'),
-                        icon: Icons.check_circle_outline,
-                        color: Colors.green)),
-                const SizedBox(width: 12),
-                Expanded(
-                    child: _StatCard(
-                        label: 'Fees Due',
-                        value: _stat('fees_due'),
-                        icon: Icons.warning_amber_outlined,
-                        color: Colors.red)),
+                _QuickActionQuiet(
+                  icon: Icons.menu_book_outlined,
+                  label: 'Courses',
+                  onTap: () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const CourseMasterScreen()),
+                    );
+                    _loadStats();
+                  },
+                ),
+                _QuickActionQuiet(
+                  icon: Icons.qr_code_2_outlined,
+                  label: 'QR Codes',
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const QrCodeScreen()),
+                  ),
+                ),
+                _QuickActionQuiet(
+                  icon: Icons.calendar_today_outlined,
+                  label: 'Academic Year',
+                  onTap: () async {
+                    final yp = context.read<AcademicYearProvider>();
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const AcademicYearMasterScreen()),
+                    );
+                    await yp.init(force: true);
+                  },
+                ),
               ],
             ),
           ],
+            ),
+          ),
         ),
       ),
     );
@@ -793,6 +879,101 @@ class _NavItem {
       {required this.icon, required this.activeIcon, required this.label});
 }
 
+/// Small uppercase section label followed by a thin horizontal rule.
+class _SectionHeader extends StatelessWidget {
+  final String label;
+  const _SectionHeader(this.label);
+
+  @override
+  Widget build(BuildContext context) {
+    final onSurface = Theme.of(context).colorScheme.onSurface;
+    return Row(
+      children: [
+        Text(label,
+            style: TextStyle(
+                fontSize: 10.5,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1.1,
+                color: onSurface.withValues(alpha: 0.5))),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Container(
+              height: 1, color: onSurface.withValues(alpha: 0.10)),
+        ),
+      ],
+    );
+  }
+}
+
+/// Fixed-height, 3-per-row grid used by each dashboard section.
+class _ActionGrid extends StatelessWidget {
+  final double tileHeight;
+  final List<Widget> children;
+  const _ActionGrid({required this.tileHeight, required this.children});
+
+  @override
+  Widget build(BuildContext context) {
+    return GridView(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      padding: EdgeInsets.zero,
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 3,
+        crossAxisSpacing: 10,
+        mainAxisSpacing: 10,
+        mainAxisExtent: tileHeight,
+      ),
+      children: children,
+    );
+  }
+}
+
+/// EVERYDAY tile — filled with the action's pastel accent, bold label.
+class _QuickActionPrimary extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+  const _QuickActionPrimary(
+      {required this.icon,
+      required this.label,
+      required this.color,
+      required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.16),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: color.withValues(alpha: 0.32)),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, color: color, size: 28),
+            const SizedBox(height: 8),
+            Text(label,
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12.5,
+                    height: 1.15,
+                    color: color)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// MANAGE tile — white card with a coloured icon chip.
 class _QuickAction extends StatelessWidget {
   final IconData icon;
   final String label;
@@ -806,27 +987,84 @@ class _QuickAction extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surface,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.10)),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.13),
+                borderRadius: BorderRadius.circular(9),
+              ),
+              child: Icon(icon, color: color, size: 19),
+            ),
+            const SizedBox(height: 7),
+            Text(label,
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 11.5,
+                    height: 1.12,
+                    color:
+                        theme.colorScheme.onSurface.withValues(alpha: 0.85))),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// SETUP tile — transparent with a thin border, grey icon and label.
+class _QuickActionQuiet extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  const _QuickActionQuiet(
+      {required this.icon, required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final onSurface = Theme.of(context).colorScheme.onSurface;
+    final grey = onSurface.withValues(alpha: 0.55);
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(12),
       child: Container(
         decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.1),
+          color: Colors.transparent,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: color.withValues(alpha: 0.3)),
+          border: Border.all(color: onSurface.withValues(alpha: 0.16)),
         ),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        child: Row(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, color: color, size: 24),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(label,
-                  style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 13,
-                      color: color)),
-            ),
+            Icon(icon, color: grey, size: 18),
+            const SizedBox(height: 6),
+            Text(label,
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                    fontWeight: FontWeight.w500,
+                    fontSize: 10.5,
+                    height: 1.12,
+                    color: grey)),
           ],
         ),
       ),
@@ -848,21 +1086,35 @@ class _StatCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Card(
+      margin: EdgeInsets.zero,
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, color: color, size: 24),
-            const SizedBox(height: 8),
-            Text(value,
-                style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
-                    color: color)),
+            Row(
+              children: [
+                Icon(icon, color: color, size: 16),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(value,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.bold,
+                          color: color)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 2),
             Text(label,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                    fontSize: 12,
+                    fontSize: 9.5,
+                    height: 1.1,
                     color: Theme.of(context)
                         .colorScheme
                         .onSurface
