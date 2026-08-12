@@ -15,6 +15,7 @@ import assert from 'node:assert/strict';
 import {
   matchGroupFaces,
   sanitizeApproveEntries,
+  parseApproveMode,
   GROUP_MATCH_MARGIN,
   MatchCandidate,
 } from './groupMatch';
@@ -146,7 +147,7 @@ test('valid face entry passes through with clamped, rounded confidence', () => {
     [{ student_id: 'S1', confidence: 0.87654 }], ROSTER);
   assert.equal(skipped, 0);
   assert.deepEqual(entries, [
-    { student_id: 'S1', checkin_mode: 'face_group', confidence: 0.88 },
+    { student_id: 'S1', mode: 'face_group', confidence: 0.88 },
   ]);
 });
 
@@ -154,7 +155,7 @@ test('manual entry gets manual mode and null confidence', () => {
   const { entries } = sanitizeApproveEntries(
     [{ student_id: 'S2', manual: true, confidence: 0.99 }], ROSTER);
   assert.deepEqual(entries, [
-    { student_id: 'S2', checkin_mode: 'face_group_m', confidence: null },
+    { student_id: 'S2', mode: 'face_group_m', confidence: null },
   ]);
 });
 
@@ -193,4 +194,18 @@ test('negative confidence clamps to 0', () => {
   const { entries } = sanitizeApproveEntries(
     [{ student_id: 'S1', confidence: -0.4 }], ROSTER);
   assert.equal(entries[0].confidence, 0);
+});
+
+// ── parseApproveMode ──────────────────────────────────────────────────────────
+
+test('approve mode defaults to check-in for anything but "checkout"', () => {
+  assert.equal(parseApproveMode(undefined), 'checkin');   // old app builds
+  assert.equal(parseApproveMode('checkin'), 'checkin');
+  assert.equal(parseApproveMode('CHECKOUT'), 'checkin');  // no fuzzy matching
+  assert.equal(parseApproveMode(1), 'checkin');
+  assert.equal(parseApproveMode(null), 'checkin');
+});
+
+test('approve mode "checkout" is honoured', () => {
+  assert.equal(parseApproveMode('checkout'), 'checkout');
 });

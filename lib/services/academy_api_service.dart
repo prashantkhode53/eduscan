@@ -357,14 +357,21 @@ class AcademyApiService {
   }
 
   /// Final admin approval — writes attendance for the reviewed list.
+  /// [mode] is 'checkin' (writes time_in) or 'checkout' (writes time_out +
+  /// duration for students who are already checked in).
   static Future<Map<String, dynamic>> groupScanApprove({
     required String courseId,
     required List<Map<String, dynamic>> entries,
+    String mode = 'checkin',
   }) async {
     final res = await _http
         .post(Uri.parse(ApiEndpoints.academyGroupScanApprove),
             headers: await _headers(),
-            body: jsonEncode({'course_id': courseId, 'entries': entries}))
+            body: jsonEncode({
+              'course_id': courseId,
+              'mode': mode,
+              'entries': entries,
+            }))
         .timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
   }

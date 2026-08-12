@@ -18,11 +18,10 @@ you the same push-to-deploy, SSL, and dashboard experience as Render.
 BEFORE (Render)                          AFTER (Hetzner + Coolify)
 ──────────────────────────────           ──────────────────────────────
 [Backend Service]     $7/month           [One Hetzner Server]  $9/month
-[WhatsApp Service]    $7/month             ├── Backend
-[InsightFace Service] $25/month            ├── WhatsApp
+[InsightFace Service] $25/month            ├── Backend
 [Redis Service]       $10/month            ├── InsightFace
                      ──────────            └── Redis
-Total:               $49/month
+Total:               $42/month
                                          Coolify (free, runs on server)
                                          Total: $9/month
 
@@ -273,7 +272,6 @@ We will create these subdomains:
 |-----------|-----------|---------|
 | `api.yourdomain.com` | Your Hetzner IP | Node.js Backend |
 | `face.yourdomain.com` | Your Hetzner IP | InsightFace service |
-| `wa.yourdomain.com` | Your Hetzner IP | WhatsApp service |
 
 ### Step 4.2 — Add DNS Records
 
@@ -513,89 +511,20 @@ You should see:
 
 ---
 
-## Phase 8 — Deploy WhatsApp Service
-
-**Time: 10 minutes**
-
-### Step 8.1 — Create WhatsApp Service
-
-1. Click **"+ New"** → **"Application"** → **"GitHub"**
-2. Select your EduScan repository
-3. Fill in:
-   - **Name:** `eduscan-whatsapp`
-   - **Branch:** `main`
-   - **Base Directory:** `/whatsapp-api`
-   - **Build Pack:** **"Node.js"** (or Nixpacks)
-   - **Build Command:** `npm install`
-   - **Start Command:** `npm start`
-4. Click **"Continue"**
-
-### Step 8.2 — Configure WhatsApp Environment Variables
-
-```
-Variable Name     Value
-────────────────────────────────────────────────────
-DATABASE_URL      (your Neon PostgreSQL connection string)
-NODE_ENV          production
-PORT              3001
-WA_SESSION_PATH   /app/.wwebjs_auth
-WA_CLIENT_ID      eduscan-wa
-```
-
-Click **"Save"**.
-
-### Step 8.3 — Add Persistent Volume for WhatsApp Session
-
-This is critical. Without this, the WhatsApp session is lost every time you deploy.
-
-1. Click **"Storages"** tab → **"+ Add"**
-2. Fill in:
-   - **Host Path:** Leave empty
-   - **Container Path:** `/app/.wwebjs_auth`
-   - **Name:** `whatsapp-session`
-3. Click **"Save"**
-
-> This persistent volume is the fix for Bug #1 (WhatsApp reconnects after every deploy).
-> On Render, this was impossible. On Hetzner, it just works.
-
-### Step 8.4 — Configure WhatsApp Domain
-
-1. Click **"Domains"** tab → **"+ Add Domain"**
-2. Enter: `wa.yourdomain.com`
-3. Enable SSL, Port: **3001**
-4. Click **"Save"**
-
-### Step 8.5 — Deploy WhatsApp
-
-1. Click **"Deploy"**
-2. Watch Logs — takes 3–5 minutes
-3. Puppeteer (Chromium) starts up — you will see WhatsApp initialization messages
-4. When you see `WhatsApp client starting...` — it is running
-
-**Reconnect WhatsApp:**
-Since this is a new server, you need to scan QR once:
-1. Open your Flutter app
-2. Go to the WhatsApp/QR screen
-3. Scan the new QR code with your phone
-
-After scanning, the session is saved to the persistent volume. You will NOT need to scan again after future deployments.
-
----
-
-## Phase 9 — Update Flutter App
+## Phase 8 — Update Flutter App
 
 **Time: 10 minutes**
 
 Your Flutter app currently points to the Render URL. We need to update it to point
 to your new Hetzner server.
 
-### Step 9.1 — Find the API Endpoints File
+### Step 8.1 — Find the API Endpoints File
 
 Open your project in VS Code.
 
 Navigate to: [lib/constants/api_endpoints.dart](lib/constants/api_endpoints.dart)
 
-### Step 9.2 — Update the Base URL
+### Step 8.2 — Update the Base URL
 
 Find the line that has your Render URL, for example:
 ```dart
@@ -615,7 +544,7 @@ static const String insightfaceUrl = 'https://eduscan-insightface.onrender.com';
 static const String insightfaceUrl = 'https://face.yourdomain.com';
 ```
 
-### Step 9.3 — Rebuild Flutter App
+### Step 8.3 — Rebuild Flutter App
 
 Run in your terminal (from the project root):
 ```
@@ -629,7 +558,7 @@ flutter run
 
 ---
 
-## Phase 10 — Test Everything
+## Phase 9 — Test Everything
 
 **Time: 30 minutes**
 
@@ -665,22 +594,18 @@ Expected: { "status": "ok", "model": "buffalo_sc", "ready": true }
 1. Open Fees screen
 2. Expected: Existing fee records appear
 
-### Test 7 — WhatsApp Notification (if connected)
-1. Do a face scan for a student who has a parent mobile number
-2. Expected: WhatsApp message received on parent's phone
-
-### Test 8 — New Student Registration
+### Test 7 — New Student Registration
 1. Register a new test student with face capture
 2. Expected: Student created, face registered, appears in list
 
 ---
 
-## Phase 11 — Stop Render Services (After Testing)
+## Phase 10 — Stop Render Services (After Testing)
 
-**Only do this after ALL tests in Phase 10 pass.**
+**Only do this after ALL tests in Phase 9 pass.**
 
 1. Go to Render dashboard
-2. For each service (Backend, InsightFace, WhatsApp, Redis):
+2. For each service (Backend, InsightFace, Redis):
    - Open the service
    - Go to **"Settings"**
    - Scroll to bottom
@@ -716,7 +641,7 @@ Annual savings             $480/year     (~₹43,000/year)
 
 Whenever you push code to GitHub:
 1. Go to Coolify dashboard
-2. Click on the service (Backend, InsightFace, or WhatsApp)
+2. Click on the service (Backend or InsightFace)
 3. Click the **"Redeploy"** button (or set up auto-deploy)
 
 To enable **auto-deploy** (like Render):
@@ -804,15 +729,6 @@ If it stays `false` after 5 minutes:
 2. Test the URL in browser — does it load?
 3. If SSL is not yet active (DNS just changed), wait 30 minutes for Let's Encrypt
 
-### Problem: WhatsApp QR code not showing
-
-**Possible cause:** Puppeteer needs special Chrome flags in Docker
-
-**Fix:**
-1. Check Coolify → WhatsApp → Logs for error messages
-2. The existing `whatsapp-api/` code already has the right Puppeteer flags for Docker
-3. Try restarting: Coolify → WhatsApp → Restart button
-
 ### Problem: Face scan is very slow (>5 seconds)
 
 **Possible cause:** InsightFace model was not pre-warmed (ONNX cold start)
@@ -879,10 +795,6 @@ For the Hetzner server configuration itself (no critical data there, all data is
 - Add Cloudflare R2 or Backblaze B2 as backup destination (both have free tiers)
 - Schedule weekly backups
 
-The WhatsApp session (`.wwebjs_auth/`) is stored in the persistent volume.
-If the server ever breaks and needs to be rebuilt, you will need to re-scan the
-WhatsApp QR once — that's acceptable.
-
 ---
 
 ## Summary of All URLs After Migration
@@ -892,7 +804,6 @@ Service                  Old URL (Render)                     New URL (Hetzner)
 ───────────────────────────────────────────────────────────────────────────────
 Backend API              eduscan-backend.onrender.com          api.yourdomain.com
 InsightFace              eduscan-insightface.onrender.com      face.yourdomain.com
-WhatsApp                 (internal to backend)                 wa.yourdomain.com
 Redis                    redis-xxx.render.com:XXXXX            internal (no public URL)
 Database (Neon)          ep-xxx.neon.tech                      ep-xxx.neon.tech (SAME)
 
@@ -918,4 +829,4 @@ Flutter app points to:   https://eduscan-backend.onrender.com  https://api.yourd
 
 *Migration guide complete. Save this file and follow each Phase in order.*
 *Do not rush. Each Phase builds on the previous one.*
-*Keep Render running in parallel until all tests in Phase 10 pass.*
+*Keep Render running in parallel until all tests in Phase 9 pass.*

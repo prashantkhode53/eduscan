@@ -60,6 +60,18 @@ String fmtTimeOfDay(String? raw) {
   return '${h12.toString().padLeft(2, '0')}:${istM.toString().padLeft(2, '0')} $ampm';
 }
 
+/// Format a GMT/UTC ISO-8601 date-time string → "hh:mm a" (time only) in IST.
+/// Returns "--" for null/empty input.
+String fmtClock(String? raw) {
+  if (raw == null || raw.isEmpty) return '--';
+  try {
+    final normalized = raw.length <= 10 ? '${raw}T00:00:00Z' : raw;
+    return DateFormat('hh:mm a').format(_toIst(normalized));
+  } catch (_) {
+    return '--';
+  }
+}
+
 /// Format a DateTime that is already in UTC → "dd-MM-yyyy" in IST.
 String fmtDateFromUtc(DateTime utc) {
   return DateFormat('dd-MM-yyyy').format(utc.toUtc().add(_ist));

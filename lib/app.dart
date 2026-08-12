@@ -3,6 +3,8 @@ import 'package:provider/provider.dart';
 import 'config/app_mode.dart';
 import 'constants/app_colors.dart';
 import 'providers/auth_provider.dart';
+import 'utils/platform_support.dart';
+import 'screens/windows_unsupported_screen.dart';
 import 'screens/splash_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/dashboard_screen.dart';
@@ -45,12 +47,20 @@ class EduScanApp extends StatelessWidget {
               case '/students':
                 page = const StudentListScreen();
               case '/students/register':
-                page = const StudentRegistrationScreen();
+                // Face capture (camera + ML Kit) — mobile only.
+                page = PlatformSupport.faceFeatures
+                    ? const StudentRegistrationScreen()
+                    : const WindowsUnsupportedScreen(
+                        featureName: 'Student face registration');
               case '/students/detail':
                 final id = settings.arguments as String;
                 page = StudentDetailScreen(studentId: id);
               case '/checkin':
-                page = const CheckinCheckoutScreen();
+                // Live face-scan check-in/out (camera + ML Kit) — mobile only.
+                page = PlatformSupport.faceFeatures
+                    ? const CheckinCheckoutScreen()
+                    : const WindowsUnsupportedScreen(
+                        featureName: 'Face-scan check-in/out');
               case '/attendance':
                 page = const AttendanceScreen();
               case '/reports':
@@ -60,7 +70,11 @@ class EduScanApp extends StatelessWidget {
 
               // ── Parent routes ───────────────────────────────────────────
               case '/parent/login':
-                page = const ParentLoginScreen();
+                // Parent face-verified login (camera + ML Kit) — mobile only.
+                page = PlatformSupport.faceFeatures
+                    ? const ParentLoginScreen()
+                    : const WindowsUnsupportedScreen(
+                        featureName: 'Parent face-verified login');
               case '/parent/dashboard':
                 page = const ParentDashboardScreen();
 

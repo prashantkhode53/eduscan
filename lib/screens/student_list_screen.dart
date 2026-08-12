@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/student_provider.dart';
+import '../utils/platform_support.dart';
 import '../widgets/offline_banner.dart';
 import '../widgets/shimmer_loader.dart';
 import '../widgets/student_card.dart';
@@ -214,12 +215,16 @@ class _StudentListScreenState extends State<StudentListScreen> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => Navigator.pushNamed(context, '/students/register')
-            .then((_) => _load(refresh: true)),
-        icon: const Icon(Icons.person_add),
-        label: const Text('Register Student'),
-      ),
+      // Registration ends in on-device face capture (camera + ML Kit) —
+      // unavailable on Windows, so the FAB is hidden there.
+      floatingActionButton: PlatformSupport.faceFeatures
+          ? FloatingActionButton.extended(
+              onPressed: () => Navigator.pushNamed(context, '/students/register')
+                  .then((_) => _load(refresh: true)),
+              icon: const Icon(Icons.person_add),
+              label: const Text('Register Student'),
+            )
+          : null,
     );
   }
 }

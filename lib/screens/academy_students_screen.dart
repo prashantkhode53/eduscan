@@ -1,8 +1,8 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import '../services/super_admin_api_service.dart';
+import '../utils/file_opener.dart';
 
 class AcademyStudentsScreen extends StatefulWidget {
   final String slug;
@@ -109,7 +109,7 @@ class _AcademyStudentsScreenState extends State<AcademyStudentsScreen> {
         content: Text('Exported ${students.length} students'),
         backgroundColor: Colors.green,
         action: SnackBarAction(
-            label: 'Open', onPressed: () => OpenFilex.open(file.path)),
+            label: 'Open', onPressed: () => FileOpener.open(file.path)),
       ));
     } catch (e) {
       if (mounted) {

@@ -13,13 +13,12 @@
 6. [Face Recognition Flow](#6-face-recognition-flow)
 7. [Attendance Flow](#7-attendance-flow)
 8. [Fees Management Flow](#8-fees-management-flow)
-9. [WhatsApp Integration Flow](#9-whatsapp-integration-flow)
-10. [API Flow](#10-api-flow)
-11. [Security Flow](#11-security-flow)
-12. [Mobile Application Flow](#12-mobile-application-flow)
-13. [Edge Cases](#13-edge-cases)
-14. [Bug Analysis](#14-bug-analysis)
-15. [Implementation Plan](#15-implementation-plan)
+9. [API Flow](#9-api-flow)
+10. [Security Flow](#10-security-flow)
+11. [Mobile Application Flow](#11-mobile-application-flow)
+12. [Edge Cases](#12-edge-cases)
+13. [Bug Analysis](#13-bug-analysis)
+14. [Implementation Plan](#14-implementation-plan)
 
 ---
 
@@ -33,7 +32,6 @@ The platform runs as:
 - A **Flutter mobile app** (used by academy admins and parents)
 - A **Node.js/TypeScript REST API** (backend logic, hosted on Render)
 - A **Python/FastAPI face recognition microservice** (InsightFace ArcFace model, hosted on Render)
-- A **Node.js WhatsApp notification service** (WhatsApp Web automation)
 - A **Neon PostgreSQL** database (serverless, schema-per-academy multi-tenant)
 - A **Redis cache** (face embedding cache for fast matching)
 
@@ -59,7 +57,6 @@ The platform runs as:
 | **Attendance** | Face-scan kiosk for check-in/check-out, manual override, attendance logs |
 | **Face Recognition** | ArcFace 512D embeddings, Redis cache, duplicate detection, quality gating |
 | **QR Code** | Generate QR codes for kiosk identification |
-| **WhatsApp** | Send check-in/check-out notifications and fee reminders to parents |
 | **Reports** | Attendance and fee reports, PDF/CSV export |
 | **Parent Portal** | Face-verified parent login, view child's attendance and fee history |
 | **Bulk Upload** | Import students via Excel file |
@@ -70,7 +67,6 @@ The platform runs as:
 Mobile App:    Flutter (Dart) — Provider state management, SQLite offline, ML Kit face detection
 Backend API:   Node.js + TypeScript + Express
 Face Service:  Python + FastAPI + InsightFace (ArcFace buffalo_sc/buffalo_l model)
-WhatsApp:      Node.js + whatsapp-web.js + Puppeteer
 Database:      Neon PostgreSQL (serverless) — schema-per-tenant
 Cache:         Redis (face embeddings)
 Deployment:    Render (backend + insightface + redis), Neon (database)
@@ -128,7 +124,7 @@ PDF:           Dart pdf package
 - **Capabilities:**
   - View their child's attendance history
   - View their child's fee records and balances
-  - Receive WhatsApp notifications for check-in/check-out and fee reminders
+  - Receive push notifications for check-in/check-out and fee reminders
 - **Screens:** Parent Login Screen (2-step) → Parent Dashboard
 
 ### 2.5 Student
@@ -778,7 +774,7 @@ Occurs when the best match score is above the threshold but the gap to the secon
        SET time_in = $3, status = 'present', checkin_mode = 'face_auto', confidence_in = $4
 9. Response: { action: 'checkin', student, time_in, confidence }
 10. Flutter: green overlay, student name/ID shown, counter increments
-11. WhatsApp notification sent to parent (if WA service connected)
+11. Push notification (FCM) sent to parent (if parent app registered)
 ```
 
 ### 7.2 Face Detection → Check-Out
@@ -792,7 +788,7 @@ Occurs when the best match score is above the threshold but the gap to the secon
 6. UPDATE attendance SET time_out, duration_mins, checkout_mode='face_auto', confidence_out
 7. Response: { action: 'checkout', time_in, time_out, duration_mins, confidence }
 8. Flutter: orange overlay, shows "X hours Y minutes"
-9. WhatsApp checkout notification to parent
+9. Push notification (FCM) checkout notification to parent
 ```
 
 ### 7.3 Attendance Status Values
@@ -941,139 +937,17 @@ Records are sorted: overdue → pending → partial → paid, then by due_date a
 ### 8.8 Pending Fees Tracking
 
 - Filter `GET /api/academy/fees?status=pending` or `status=overdue`
-- WhatsApp fee reminder: `POST /whatsapp/send-custom` to parent mobile
 
 ---
 
-## 9. WhatsApp Integration Flow
+## 9. API Flow
 
-### 9.1 Architecture
-
-```
-whatsapp-api/ (Node.js service, integrated into backend)
-  │
-  ├── WhatsAppService (whatsappService.js) ← Singleton
-  │     ├── whatsapp-web.js Client
-  │     ├── Puppeteer (headless Chromium)
-  │     └── LocalAuth (.wwebjs_auth/ filesystem session)
-  │
-  ├── State machine:
-  │     INITIALIZING → QR_PENDING → CONNECTED
-  │                              ↓
-  │                        DISCONNECTED → RECONNECTING → QR_PENDING
-  │
-  └── PostgreSQL: whatsapp_logs + whatsapp_sessions tables
-```
-
-### 9.2 Initial QR Connection
-
-```
-1. App start → WhatsAppService.initialize() called
-2. Puppeteer launches headless Chromium
-3. WhatsApp Web loads → emits 'qr' event
-4. State → QR_PENDING
-5. QR string stored: _qrData (raw), _qrBase64 (PNG)
-
-Academy Admin in Flutter:
-  6. Open WhatsApp/QR screen
-  7. GET /whatsapp/qr → { qr_data: '...', qr_base64: '...' }
-  8. Display QR code using qr_flutter package
-  9. Admin scans with their WhatsApp app
-  10. WhatsApp emits 'authenticated' → session saved to .wwebjs_auth/
-  11. WhatsApp emits 'ready' → State → CONNECTED
-  12. _lastConnectedAt = now
-
-Session persistence:
-  - Session stored in .wwebjs_auth/<clientId>/ (filesystem)
-  - Lost on Render restart (ephemeral disk)
-  - On restart → QR_PENDING again → re-scan required
-```
-
-### 9.3 Sending Attendance Notifications
-
-**Check-in notification:**
-```
-POST /whatsapp/send-checkin
-Body: {
-  phone: "919876543210",        ← Parent's mobile with country code
-  student_name: "Rahul Sharma",
-  time_in: "09:15:00",
-  academy_name: "Excel Academy"
-}
-
-Message format:
-"✅ *Check-In Alert*
-Student: Rahul Sharma
-Time: 09:15 AM
-Academy: Excel Academy
-Have a great day! 📚"
-```
-
-**Check-out notification:**
-```
-POST /whatsapp/send-checkout
-Body: {
-  phone, student_name, time_out, duration_mins, academy_name
-}
-
-Message format:
-"🏠 *Check-Out Alert*
-Student: Rahul Sharma
-Time: 04:30 PM
-Duration: 7h 15m
-Academy: Excel Academy"
-```
-
-### 9.4 Sending Fee Notifications
-
-```
-POST /whatsapp/send-custom
-Body: {
-  phone: "919876543210",
-  message: "💰 Fee Reminder: ₹1500 pending for May 2026 — Excel Academy"
-}
-```
-
-### 9.5 Connection Status Check
-
-```
-GET /whatsapp/status
-Response: {
-  connected: true,
-  state: 'connected',
-  last_connected_at: '2026-06-05T09:00:00Z',
-  today_sent: 42,
-  today_failed: 0
-}
-```
-
-### 9.6 Error Recovery
-
-| Error | Recovery |
-|-------|---------|
-| WhatsApp disconnects | State → DISCONNECTED → RECONNECTING → re-init (exponential backoff) |
-| QR expired | New QR generated automatically on next init cycle |
-| Message send fails | Logged to `whatsapp_logs` with `status: 'failed'`; no retry by default |
-| Puppeteer crash | Process restart (Render auto-restarts on crash) |
-| Session lost on restart | Admin must re-scan QR code |
-| Phone not on WhatsApp | whatsapp-web.js throws error; logged as failed |
-
-### 9.7 Phone Number Formatting
-
-`phoneFormatter.js` normalises numbers:
-- Input: `9876543210` or `+91 98765 43210` or `91-9876543210`
-- Output: `919876543210@c.us` (WhatsApp internal format with country code)
-
----
-
-## 10. API Flow
-
-### 10.1 Base URL
+### 9.1 Base URL
 
 - **Production:** `https://eduscan-backend.onrender.com/api`
 - **Local:** `http://localhost:3000/api`
 
-### 10.2 Authentication Endpoints
+### 9.2 Authentication Endpoints
 
 | Method | Endpoint | Body | Description |
 |--------|----------|------|-------------|
@@ -1083,7 +957,7 @@ Response: {
 | POST | `/auth/reset-password` | `{ email, otp, new_password }` | Reset password |
 | POST | `/auth/change-password` | `{ old_password, new_password }` | Change own password (auth required) |
 
-### 10.3 Academy Management Endpoints (Super Admin)
+### 9.3 Academy Management Endpoints (Super Admin)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -1092,14 +966,14 @@ Response: {
 | PATCH | `/super-admin/academies/:slug/status` | Activate / deactivate |
 | DELETE | `/super-admin/academies/:slug` | Delete academy |
 
-### 10.4 Academy Auth Endpoints
+### 9.4 Academy Auth Endpoints
 
 | Method | Endpoint | Body | Description |
 |--------|----------|------|-------------|
 | POST | `/academy/login` | `{ email, password, slug }` | Academy user login → JWT |
 | POST | `/academy/refresh` | `{ refresh_token }` | Refresh academy JWT |
 
-### 10.5 Academy Student Endpoints
+### 9.5 Academy Student Endpoints
 
 All require Academy JWT header: `Authorization: Bearer <token>`
 
@@ -1146,7 +1020,7 @@ All require Academy JWT header: `Authorization: Bearer <token>`
 }
 ```
 
-### 10.6 Attendance / Scan Endpoints
+### 9.6 Attendance / Scan Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -1194,7 +1068,7 @@ All require Academy JWT header: `Authorization: Bearer <token>`
 | `ambiguous` | false | Ambiguous match, re-scan needed |
 | `error` | false | Service error |
 
-### 10.7 Fees Endpoints
+### 9.7 Fees Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -1204,7 +1078,7 @@ All require Academy JWT header: `Authorization: Bearer <token>`
 | POST | `/academy/fees/generate` | Generate monthly fees |
 | POST | `/academy/fees/mark-overdue` | Transition past-due fees to overdue |
 
-### 10.8 Course & Academic Year Endpoints
+### 9.8 Course & Academic Year Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -1217,7 +1091,7 @@ All require Academy JWT header: `Authorization: Bearer <token>`
 | PATCH | `/academy/academic-years/:id` | Update year |
 | PATCH | `/academy/academic-years/:id/set-current` | Set as current year |
 
-### 10.9 QR Code Endpoints
+### 9.9 QR Code Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -1226,7 +1100,7 @@ All require Academy JWT header: `Authorization: Bearer <token>`
 | PATCH | `/academy/qr-codes/:id/activate` | Set as active |
 | DELETE | `/academy/qr-codes/:id` | Delete QR code |
 
-### 10.10 Parent Endpoints
+### 9.10 Parent Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -1235,7 +1109,7 @@ All require Academy JWT header: `Authorization: Bearer <token>`
 | GET | `/academy/parent/attendance` | Child's attendance (parent JWT required) |
 | GET | `/academy/parent/fees` | Child's fee records (parent JWT required) |
 
-### 10.11 InsightFace Service Endpoints
+### 9.11 InsightFace Service Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -1248,7 +1122,7 @@ All require Academy JWT header: `Authorization: Bearer <token>`
 | POST | `/cache/reconcile` | Hourly: remove stale entries |
 | GET | `/health` | Liveness probe |
 
-### 10.12 Standard Error Response Format
+### 9.12 Standard Error Response Format
 
 ```json
 {
@@ -1271,9 +1145,9 @@ HTTP status codes:
 
 ---
 
-## 11. Security Flow
+## 10. Security Flow
 
-### 11.1 Authentication
+### 10.1 Authentication
 
 **Super Admin Login:**
 ```
@@ -1312,7 +1186,7 @@ Step 2: POST /academy/parent/face-verify { session_token, image_base64 }
   → JWT: { type: 'parent', academySlug, studentId }
 ```
 
-### 11.2 Authorization
+### 10.2 Authorization
 
 Three middleware layers enforce access:
 
@@ -1329,28 +1203,28 @@ router.post('/generate', requireRole('admin'), generateMonthlyFees);
 //  Teachers cannot generate fees — only admin role can
 ```
 
-### 11.3 Session Management
+### 10.3 Session Management
 
 - **JWT storage:** Flutter stores JWT in `SharedPreferences` via `StorageService`
 - **Token expiry:** Checked on app resume and API call (401 → clear token → redirect to login)
 - **No refresh token** (current implementation): User must re-login on expiry
 - **Session token (parent step 1):** In-memory only, 5-minute TTL, single-use
 
-### 11.4 Data Protection
+### 10.4 Data Protection
 
 - **Passwords:** bcrypt hashed with cost factor 10 (admin) / 12 (academy users)
 - **Face embeddings:** Stored as JSONB array — not a biometric template in a traditional sense, but treated as sensitive data
 - **kiosk_api_key:** Auto-generated UUID, stored in `settings`, used as a static API key for the kiosk device
 - **OTP:** 6-digit code, stored in `otp_code` with `otp_expires_at` timestamp
 
-### 11.5 Transport Security
+### 10.5 Transport Security
 
 - **CORS:** Configured to allow all origins (`*`) — suitable for mobile app (no browser session attacks)
 - **Helmet:** HTTP security headers enabled (`contentSecurityPolicy: false` for API-only use)
 - **Rate limiting:** `authLimiter` on login and password-reset routes
 - **Payload size limit:** 5MB (to accommodate face scan base64 images)
 
-### 11.6 JWT Expiration Handling
+### 10.6 JWT Expiration Handling
 
 ```
 Flutter flow on 401 response:
@@ -1362,9 +1236,9 @@ Flutter flow on 401 response:
 
 ---
 
-## 12. Mobile Application Flow
+## 11. Mobile Application Flow
 
-### 12.1 App Entry — Splash Screen
+### 11.1 App Entry — Splash Screen
 
 ```
 Screen: splash_screen.dart
@@ -1381,7 +1255,7 @@ Logic:
      → No token: go to LoginScreen
 ```
 
-### 12.2 Login Screen (`login_screen.dart`)
+### 11.2 Login Screen (`login_screen.dart`)
 
 ```
 Fields: Username, Password
@@ -1397,7 +1271,7 @@ Error handling:
   - Network error → toast with friendly message
 ```
 
-### 12.3 Academy Login Screen (`academy_login_screen.dart`)
+### 11.3 Academy Login Screen (`academy_login_screen.dart`)
 
 ```
 Fields: Academy Code (slug), Email, Password
@@ -1412,7 +1286,7 @@ Error handling:
   - Network error
 ```
 
-### 12.4 Academy Admin Dashboard (`academy_admin_dashboard.dart`)
+### 11.4 Academy Admin Dashboard (`academy_admin_dashboard.dart`)
 
 ```
 Header:
@@ -1440,7 +1314,7 @@ Offline banner (offline_banner.dart):
   - Does not block navigation (SQLite offline fallback)
 ```
 
-### 12.5 Student Registration Screen (4-step wizard)
+### 11.5 Student Registration Screen (4-step wizard)
 
 ```
 Step 1 — Personal Info
@@ -1472,7 +1346,7 @@ Error states:
   - InsightFace failure → retry option; student saved without face
 ```
 
-### 12.6 Face Scan Kiosk Screen (`academy_face_scan_screen.dart`)
+### 11.6 Face Scan Kiosk Screen (`academy_face_scan_screen.dart`)
 
 ```
 Layout (dark theme):
@@ -1499,7 +1373,7 @@ Camera error: shows videocam_off icon + Retry button
 PopScope: canPop: false → always stop camera before pop
 ```
 
-### 12.7 Fees Screen (`fees_screen.dart`)
+### 11.7 Fees Screen (`fees_screen.dart`)
 
 ```
 Header: Summary cards (Due / Paid / Overdue count)
@@ -1513,7 +1387,7 @@ Actions per row:
   - Student name tap → StudentFeesDetailTab
 ```
 
-### 12.8 Parent Dashboard (`parent_dashboard_screen.dart`)
+### 11.8 Parent Dashboard (`parent_dashboard_screen.dart`)
 
 ```
 Tab 1: Attendance
@@ -1527,7 +1401,7 @@ Tab 2: Fees
   - Status chip: Paid (green), Pending (amber), Overdue (red), Partial (blue)
 ```
 
-### 12.9 User Actions Summary
+### 11.9 User Actions Summary
 
 | Screen | User Action | Result |
 |--------|------------|--------|
@@ -1544,7 +1418,7 @@ Tab 2: Fees
 | Academic Years | Tap "Set Current" | PATCH set-current API call |
 | QR Code | Tap "Activate" | PATCH activate API call |
 
-### 12.10 Global Error Handling
+### 11.10 Global Error Handling
 
 - **No internet:** `offline_banner.dart` shown at top of screen; `network_aware_client.dart` queues or blocks API calls
 - **API 401:** Token cleared, user redirected to login
@@ -1554,9 +1428,9 @@ Tab 2: Fees
 
 ---
 
-## 13. Edge Cases
+## 12. Edge Cases
 
-### 13.1 Duplicate Students
+### 12.1 Duplicate Students
 
 **Scenario:** Admin registers the same student twice (same mobile number).
 
@@ -1567,7 +1441,7 @@ Tab 2: Fees
 
 **Gap:** If two admins register the same student simultaneously, the race condition could create duplicates. No application-level mutex exists.
 
-### 13.2 Duplicate Faces
+### 12.2 Duplicate Faces
 
 **Scenario:** Two students have very similar faces or twins are registered.
 
@@ -1577,7 +1451,7 @@ Tab 2: Fees
 
 **Gap:** No proactive check at registration time to warn if a new student's face is too similar to an existing one.
 
-### 13.3 Invalid / Missing Face Data
+### 12.3 Invalid / Missing Face Data
 
 **Scenario:** Student registered but Phase 2 (face) failed — student exists in DB with `face_embedding = NULL`.
 
@@ -1586,7 +1460,7 @@ Tab 2: Fees
 - Student can still be found in student list and manually managed
 - `face_recapture_screen.dart` can be used to attach a face later
 
-### 13.4 Network Failures
+### 12.4 Network Failures
 
 **During Registration Phase 1 (student + courses):**
 - If network fails before INSERT commits → no orphan created (transaction rolled back)
@@ -1602,7 +1476,7 @@ Tab 2: Fees
 - Attendance NOT recorded (backend never received request)
 - User should retry
 
-### 13.5 Camera Failures
+### 12.5 Camera Failures
 
 **Initialization failure:** 
 - `CameraAccessDenied` → prompt to enable in device Settings
@@ -1613,19 +1487,7 @@ Tab 2: Fees
 
 **Stuck camera:** Stall detection: `_stallCheckTimer` tracks if no progress for > 12 seconds → shows retry UI.
 
-### 13.6 WhatsApp Disconnection
-
-**Scenario:** WhatsApp session disconnects mid-day (phone battery dead, WhatsApp update, etc.)
-
-**State:** `DISCONNECTED → RECONNECTING`
-
-**Impact:** No notification messages sent; attendance records still saved normally.
-
-**Recovery:** Auto-reconnect attempted with exponential backoff → if fails, state = `QR_PENDING` → admin must re-scan QR.
-
-**Manual check:** `GET /whatsapp/status` → `{ connected: false }` → admin re-scans.
-
-### 13.7 Redis Cache Cleared / Lost
+### 12.6 Redis Cache Cleared / Lost
 
 **Scenario:** Redis restarts and loses all cached face embeddings.
 
@@ -1635,7 +1497,7 @@ Tab 2: Fees
 
 **Hourly reconciliation:** `POST /cache/reconcile` removes stale entries without full reload — cheaper than reload but cannot restore lost entries.
 
-### 13.8 Invalid / Corrupted Embedding
+### 12.7 Invalid / Corrupted Embedding
 
 **Scenario:** Face embedding stored in DB is malformed (partial JSON, wrong dimensions).
 
@@ -1643,13 +1505,13 @@ Tab 2: Fees
 
 **Gap:** No validation of embedding dimensions or normalization on write.
 
-### 13.9 Academy Schema Missing Columns
+### 12.8 Academy Schema Missing Columns
 
 **Scenario:** Academy was created before a new column was added (e.g., `parent_fcm_token` added in a later version).
 
 **Handling:** `reconcileAcademySchemas()` runs on every server boot and runs `ALTER TABLE IF EXISTS ... ADD COLUMN IF NOT EXISTS ...` for all known migration gaps. This is safe to run repeatedly.
 
-### 13.10 Face Scan on Inactive Student
+### 12.9 Face Scan on Inactive Student
 
 **Scenario:** Student's status changed to 'inactive' but their embedding is still in Redis.
 
@@ -1664,37 +1526,9 @@ The face is matched but attendance is NOT recorded. Student must be reactivated 
 
 ---
 
-## 14. Bug Analysis
+## 13. Bug Analysis
 
-### Bug #1 — WhatsApp Session Lost on Render Restart
-
-**Current Behavior:** Every time the Render service restarts (deploy, idle timeout, crash), the WhatsApp session is lost because `.wwebjs_auth/` lives on ephemeral disk. Admin must manually re-scan QR code.
-
-**Expected Behavior:** Session persists across restarts without manual intervention.
-
-**Root Cause:** Render's free/starter tier uses ephemeral (non-persistent) disk storage. The LocalAuth strategy saves session to filesystem which is wiped on restart.
-
-**Proposed Solution:**
-- Store session state in PostgreSQL (`whatsapp_sessions` table already exists)
-- Implement a custom `RemoteAuth` strategy using the DB as session store
-- Or: Upgrade to Render persistent disk (paid tier)
-
-**Database Impact:** `whatsapp_sessions` table needs session data columns
-
-**API Impact:** None (internal change)
-
-**UI Impact:** Admin would no longer need to re-scan QR after every restart
-
-**Testing Scenarios:**
-1. Deploy new version → WhatsApp stays connected
-2. Render restarts due to idle → WhatsApp reconnects automatically
-3. Manual restart → connection restored without admin intervention
-
-**Acceptance Criteria:** Admin scans QR once; service reconnects automatically on all subsequent restarts for at least 7 days.
-
----
-
-### Bug #2 — Ambiguous Match Not Providing Actionable Resolution
+### Bug #1 — Ambiguous Match Not Providing Actionable Resolution
 
 **Current Behavior:** When `action = 'ambiguous'`, the UI shows a message but gives no option to escalate (e.g., manually identify the student).
 
@@ -1722,7 +1556,7 @@ The face is matched but attendance is NOT recorded. Student must be reactivated 
 
 ---
 
-### Bug #3 — Student ID Sequence Uses LIKE on Every Registration
+### Bug #2 — Student ID Sequence Uses LIKE on Every Registration
 
 **Current Behavior:**
 ```sql
@@ -1755,7 +1589,7 @@ This runs a full table scan on every registration when the student count is larg
 
 ---
 
-### Bug #4 — No Proactive Duplicate Face Check at Registration
+### Bug #3 — No Proactive Duplicate Face Check at Registration
 
 **Current Behavior:** Two students with very similar faces can both be registered. The duplicate is only discovered at scan time via `ambiguous_match`.
 
@@ -1783,7 +1617,7 @@ This runs a full table scan on every registration when the student count is larg
 
 ---
 
-### Bug #5 — Auto Fee Generation Not Automated (Manual Trigger)
+### Bug #4 — Auto Fee Generation Not Automated (Manual Trigger)
 
 **Current Behavior:** Admin must manually tap "Generate Fees" button every month to create fee records.
 
@@ -1811,7 +1645,7 @@ This runs a full table scan on every registration when the student count is larg
 
 ---
 
-### Bug #6 — Face Scan Screen Hangs if Camera Permission Previously Denied
+### Bug #5 — Face Scan Screen Hangs if Camera Permission Previously Denied
 
 **Current Behavior:** If the user previously denied camera permission and opens the face scan screen, the `initialize()` call throws `CameraAccessDenied` but in some Android versions the error is swallowed and the screen shows an infinite loading spinner instead of the "Enable in Settings" UI.
 
@@ -1839,9 +1673,9 @@ This runs a full table scan on every registration when the student count is larg
 
 ---
 
-## 15. Implementation Plan
+## 14. Implementation Plan
 
-### 15.1 Module-Wise Breakdown
+### 14.1 Module-Wise Breakdown
 
 | Module | Status | Description |
 |--------|--------|-------------|
@@ -1857,29 +1691,27 @@ This runs a full table scan on every registration when the student count is larg
 | Fees — Collection | ✅ Complete | Collect, status machine |
 | Fee Slip PDF | ✅ Complete | In-app PDF generation |
 | Parent Portal | ✅ Complete | 2-step login, attendance + fee view |
-| WhatsApp Notifications | ✅ Complete | Check-in/out, custom messages |
 | QR Code Management | ✅ Complete | Generate, activate |
 | Bulk Upload | ✅ Complete | Excel import |
 | Reports | ✅ Complete | Attendance + fee reports |
 | Offline Support | ✅ Complete | SQLite + sync service |
 
-### 15.2 Recommended Development Order for Remaining Work / Fixes
+### 14.2 Recommended Development Order for Remaining Work / Fixes
 
 ```
 Priority 1 — Critical Fixes (affects daily operations)
-  1. Fix camera permission detection (Bug #6) — 0.5 day
-  2. WhatsApp session persistence across restarts (Bug #1) — 2 days
-  3. Auto fee generation cron (Bug #5) — 1 day
+  1. Fix camera permission detection (Bug #5) — 0.5 day
+  2. Auto fee generation cron (Bug #4) — 1 day
 
 Priority 2 — Quality Improvements
-  4. Ambiguous match resolution UI (Bug #2) — 2 days
-  5. Duplicate face warning at registration (Bug #4) — 1.5 days
+  3. Ambiguous match resolution UI (Bug #1) — 2 days
+  4. Duplicate face warning at registration (Bug #3) — 1.5 days
 
 Priority 3 — Performance
-  6. Student ID generation using PostgreSQL SEQUENCE (Bug #3) — 1 day
+  5. Student ID generation using PostgreSQL SEQUENCE (Bug #2) — 1 day
 ```
 
-### 15.3 Dependencies Between Modules
+### 14.3 Dependencies Between Modules
 
 ```
 academic_years ──────────► courses ──────────► student_courses ──────────► fee_records
@@ -1895,9 +1727,8 @@ academic_years ──────────► courses ───────�
 - Student enrollment depends on both Students and Courses
 - Fee records depend on Student enrollment
 - Face scan attendance depends on Redis cache (which depends on student face embedding)
-- WhatsApp notifications depend on Attendance events and parent mobile numbers
 
-### 15.4 Testing Strategy
+### 14.4 Testing Strategy
 
 **Unit Tests:**
 - Face embedding quality gate logic (`face_analyzer.py`)
@@ -1917,11 +1748,10 @@ academic_years ──────────► courses ───────�
 - Scan twice within 10 minutes → duplicate blocked
 - Checkout without check-in → error shown
 - Generate fees for month → collect partial → collect rest → status = paid
-- WhatsApp: connect → check-in → notification received
 - Offline mode: student list loads from SQLite
 - Academy deactivated → academy users cannot log in
 
-### 15.5 Deployment Strategy
+### 14.5 Deployment Strategy
 
 **Current Setup:**
 ```
@@ -1944,7 +1774,6 @@ Flutter:
 4. `INSIGHTFACE_URL` — URL of eduscan-insightface service
 5. `REDIS_URL` — Render Redis internal URL
 6. `FIREBASE_CREDENTIALS` — FCM service account JSON
-7. `WA_SESSION_PATH`, `WA_CLIENT_ID` — WhatsApp session config
 
 **Zero-Downtime Deploy:**
 - `reconcileAcademySchemas()` runs on startup — idempotent, safe for rolling deploy
@@ -1954,7 +1783,6 @@ Flutter:
 **Monitoring:**
 - `GET /api/health` → DB connectivity check
 - `GET /health` (InsightFace) → model readiness check
-- `GET /whatsapp/status` → WhatsApp connection state
 - Render dashboard → CPU/memory metrics, log streaming
 
 ---
@@ -1988,13 +1816,6 @@ MIN_FACE_SIZE_PX=60
 MAX_YAW_DEG=35
 ```
 
-### WhatsApp Service
-```env
-WA_SESSION_PATH=./.wwebjs_auth
-WA_CLIENT_ID=eduscan-wa
-DATABASE_URL=postgresql://...
-```
-
 ---
 
 ## Appendix B — Key File Locations
@@ -2010,7 +1831,6 @@ DATABASE_URL=postgresql://...
 | InsightFace routes | [insightface-service/app/routes.py](insightface-service/app/routes.py) | Face API endpoints |
 | Face analyzer | [insightface-service/app/face_analyzer.py](insightface-service/app/face_analyzer.py) | ArcFace model wrapper |
 | Redis cache | [insightface-service/app/redis_cache.py](insightface-service/app/redis_cache.py) | Embedding cache |
-| WhatsApp service | [whatsapp-api/src/services/whatsappService.js](whatsapp-api/src/services/whatsappService.js) | WA client lifecycle |
 | Face scan screen | [lib/screens/academy/academy_face_scan_screen.dart](lib/screens/academy/academy_face_scan_screen.dart) | Kiosk UI |
 | Registration screen | [lib/screens/academy/academy_student_registration_screen.dart](lib/screens/academy/academy_student_registration_screen.dart) | 4-step wizard |
 | Parent login | [lib/screens/academy/parent_login_screen.dart](lib/screens/academy/parent_login_screen.dart) | 2-step parent auth |

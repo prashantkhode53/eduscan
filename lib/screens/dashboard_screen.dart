@@ -7,8 +7,10 @@ import '../providers/attendance_provider.dart';
 import '../services/api_service.dart';
 import '../widgets/offline_banner.dart';
 import '../widgets/stat_card.dart';
+import '../widgets/adaptive_nav_scaffold.dart';
 import '../constants/app_colors.dart';
 import '../utils/date_utils.dart' as du;
+import '../utils/responsive.dart';
 import 'manage_academies_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -47,33 +49,52 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final stats = att.dashboardStats;
     final theme = Theme.of(context);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(
-          'EduScan',
-          style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
-        ),
-        actions: [
-          CircleAvatar(
-            radius: 16,
-            backgroundColor: theme.colorScheme.primary,
-            child: Text(
-              auth.admin?.initials ?? 'A',
-              style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
-            ),
-          ),
-          const SizedBox(width: 8),
-          IconButton(
-            icon: const Icon(Icons.logout),
-            tooltip: 'Logout',
-            onPressed: () async {
-              await auth.logout();
-              if (mounted) Navigator.of(context).pushReplacementNamed('/login');
-            },
-          ),
-        ],
+    final appBar = AppBar(
+      title: Text(
+        'EduScan',
+        style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
       ),
-      body: Column(
+      actions: [
+        CircleAvatar(
+          radius: 16,
+          backgroundColor: theme.colorScheme.primary,
+          child: Text(
+            auth.admin?.initials ?? 'A',
+            style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+          ),
+        ),
+        const SizedBox(width: 8),
+        IconButton(
+          icon: const Icon(Icons.logout),
+          tooltip: 'Logout',
+          onPressed: () async {
+            await auth.logout();
+            if (mounted) Navigator.of(context).pushReplacementNamed('/login');
+          },
+        ),
+      ],
+    );
+
+    void onNavSelected(int i) {
+      setState(() => _currentIndex = i);
+      switch (i) {
+        case 0: break;
+        case 1: Navigator.pushNamed(context, '/students'); break;
+        case 2: Navigator.pushNamed(context, '/checkin'); break;
+        case 3: Navigator.pushNamed(context, '/attendance'); break;
+        case 4: Navigator.pushNamed(context, '/reports'); break;
+      }
+    }
+
+    const navDestinations = [
+      AdaptiveNavDestination(icon: Icons.dashboard_outlined, activeIcon: Icons.dashboard, label: 'Home'),
+      AdaptiveNavDestination(icon: Icons.groups_outlined, activeIcon: Icons.groups, label: 'Students'),
+      AdaptiveNavDestination(icon: Icons.face_retouching_natural, activeIcon: Icons.face_retouching_natural, label: 'Scan'),
+      AdaptiveNavDestination(icon: Icons.event_note_outlined, activeIcon: Icons.event_note, label: 'Attendance'),
+      AdaptiveNavDestination(icon: Icons.bar_chart_outlined, activeIcon: Icons.bar_chart, label: 'Reports'),
+    ];
+
+    final body = Column(
         children: [
           const OfflineBanner(),
           Expanded(
@@ -81,8 +102,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
               onRefresh: _loadData,
               child: SingleChildScrollView(
                 physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.all(16),
-                child: Column(
+                padding: Responsive.pagePadding(context),
+                child: Align(
+                  alignment: Alignment.topCenter,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(
+                        maxWidth: Responsive.readableMaxWidth),
+                    child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
@@ -99,12 +125,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                     const SizedBox(height: 16),
                     GridView.count(
-                      crossAxisCount: 2,
+                      crossAxisCount: Responsive.gridColumns(context,
+                          compact: 2, medium: 4, expanded: 4),
                       shrinkWrap: true,
                       physics: const NeverScrollableScrollPhysics(),
                       crossAxisSpacing: 8,
                       mainAxisSpacing: 8,
-                      childAspectRatio: 1.3,
+                      childAspectRatio: Responsive.isDesktop(context) ? 1.7 : 1.3,
                       children: [
                         StatCard(
                           title: 'Total Students',
@@ -264,23 +291,39 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ),
                   ],
                 ),
+                  ),
+                ),
               ),
             ),
           ),
         ],
-      ),
+      );
+
+    // ── Desktop: persistent left rail + AppBar/body in the content pane ──────
+    if (Responsive.isDesktop(context)) {
+      return AdaptiveNavScaffold(
+        selectedIndex: _currentIndex,
+        onDestinationSelected: onNavSelected,
+        destinations: navDestinations,
+        railHeader: _SuperAdminRailHeader(initials: auth.admin?.initials ?? 'A'),
+        railFooter: _SuperAdminRailFooter(
+          name: auth.admin?.displayName ?? 'Admin',
+          onLogout: () async {
+            await auth.logout();
+            if (mounted) Navigator.of(context).pushReplacementNamed('/login');
+          },
+        ),
+        body: Scaffold(appBar: appBar, body: body),
+      );
+    }
+
+    // ── Mobile / narrow: original AppBar + body + bottom navigation bar ──────
+    return Scaffold(
+      appBar: appBar,
+      body: body,
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentIndex,
-        onDestinationSelected: (i) {
-          setState(() => _currentIndex = i);
-          switch (i) {
-            case 0: break;
-            case 1: Navigator.pushNamed(context, '/students'); break;
-            case 2: Navigator.pushNamed(context, '/checkin'); break;
-            case 3: Navigator.pushNamed(context, '/attendance'); break;
-            case 4: Navigator.pushNamed(context, '/reports'); break;
-          }
-        },
+        onDestinationSelected: onNavSelected,
         destinations: const [
           NavigationDestination(icon: Icon(Icons.dashboard_outlined), selectedIcon: Icon(Icons.dashboard), label: 'Home'),
           NavigationDestination(icon: Icon(Icons.groups_outlined), selectedIcon: Icon(Icons.groups), label: 'Students'),
@@ -350,5 +393,85 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (h < 12) return 'morning';
     if (h < 17) return 'afternoon';
     return 'evening';
+  }
+}
+
+// ── Desktop rail header & footer (Windows only) ─────────────────────────────────
+// Presentation-only widgets for the super-admin navigation rail on wide windows.
+
+class _SuperAdminRailHeader extends StatelessWidget {
+  final String initials;
+  const _SuperAdminRailHeader({required this.initials});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final extended = Responsive.widthOf(context) >= 1180;
+    final logo = Container(
+      width: 40,
+      height: 40,
+      decoration: BoxDecoration(
+        color: theme.colorScheme.primary,
+        borderRadius: BorderRadius.circular(11),
+      ),
+      child: const Icon(Icons.face_retouching_natural,
+          color: Colors.white, size: 22),
+    );
+    if (!extended) return Center(child: logo);
+    return Row(
+      children: [
+        logo,
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('EduScan',
+                  style: theme.textTheme.titleMedium
+                      ?.copyWith(fontWeight: FontWeight.w700)),
+              Text('Administrator',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurface
+                          .withValues(alpha: 0.6))),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SuperAdminRailFooter extends StatelessWidget {
+  final String name;
+  final Future<void> Function() onLogout;
+  const _SuperAdminRailFooter({required this.name, required this.onLogout});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final extended = Responsive.widthOf(context) >= 1180;
+    if (!extended) {
+      return IconButton(
+        tooltip: 'Logout',
+        icon: const Icon(Icons.logout),
+        onPressed: onLogout,
+      );
+    }
+    return Row(
+      children: [
+        Expanded(
+          child: Text(name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodyMedium
+                  ?.copyWith(fontWeight: FontWeight.w600)),
+        ),
+        IconButton(
+          tooltip: 'Logout',
+          icon: const Icon(Icons.logout),
+          onPressed: onLogout,
+        ),
+      ],
+    );
   }
 }

@@ -123,8 +123,16 @@ export interface RawApproveEntry {
 
 export interface CleanApproveEntry {
   student_id: string;
-  checkin_mode: 'face_group' | 'face_group_m';
+  /** Written to checkin_mode or checkout_mode depending on the approval mode. */
+  mode: 'face_group' | 'face_group_m';
   confidence: number | null;   // null for manual entries
+}
+
+/** Which half of the attendance record an approval writes. */
+export type ApproveMode = 'checkin' | 'checkout';
+
+export function parseApproveMode(raw: unknown): ApproveMode {
+  return raw === 'checkout' ? 'checkout' : 'checkin';
 }
 
 /** Hard cap on students approved in one request. */
@@ -139,6 +147,9 @@ export const MAX_APPROVE_ENTRIES = 500;
  *  - confidence is coerced to a number in [0, 1] and rounded to 2 dp
  *    (matches the DECIMAL(4,2) column); anything non-numeric becomes 0;
  *  - manual entries carry mode 'face_group_m' and a null confidence.
+ *
+ * Mode-agnostic: the caller decides whether the result is written as a
+ * check-in or a check-out.
  *
  * Returns the clean entries plus how many raw entries were skipped.
  */
@@ -168,7 +179,7 @@ export function sanitizeApproveEntries(
 
     entries.push({
       student_id: sid,
-      checkin_mode: manual ? 'face_group_m' : 'face_group',
+      mode: manual ? 'face_group_m' : 'face_group',
       confidence: conf,
     });
   }
