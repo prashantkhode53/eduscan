@@ -5,6 +5,7 @@ import '../models/student.dart';
 import '../providers/student_provider.dart';
 import '../services/api_service.dart';
 import '../services/pdf_service.dart';
+import '../utils/platform_support.dart';
 import '../widgets/attendance_row.dart';
 import 'face_recapture_screen.dart';
 
@@ -348,7 +349,9 @@ class _StudentDetailScreenState extends State<StudentDetailScreen> {
                     fontSize: 12,
                     color: Colors.orange.shade700),
               ),
-            if (hasEmbedding) ...[
+            // Re-register Face uses the camera + ML Kit recapture screen,
+            // unavailable on Windows — hidden there.
+            if (hasEmbedding && PlatformSupport.faceFeatures) ...[
               const SizedBox(height: 4),
               SizedBox(
                 width: double.infinity,

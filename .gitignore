@@ -21,6 +21,8 @@ pubspec.lock
 
 # Android
 android/.gradle/
+# Nested Gradle caches (e.g. vendored packages under third_party/)
+.gradle/
 android/app/build/
 android/local.properties
 *.keystore
@@ -34,3 +36,20 @@ android/local.properties
 # OS
 .DS_Store
 Thumbs.db
+
+# Flutter Windows desktop — generated engine artifacts (~260 MB), re-created
+# by `flutter build windows`. The rest of windows/ is checked in.
+windows/flutter/ephemeral/
+
+# Windows installer output (compiled .exe); installer/eduscan.iss is checked in
+installer/Output/
+
+# Downloaded build tooling
+tools/nuget.exe
+
+# Build / analysis logs
+analyze_out.txt
+*_log.txt
+
+# Claude Code session state
+.claude/scheduled_tasks.lock

@@ -250,13 +250,20 @@ export async function forgotPasswordAcademy(
     const academy = await findActiveAcademy(academy_slug);
     if (!academy) { res.json(generic); return; }
 
+    // Allow a self-lockout (failed logins → is_active=FALSE, locked_by='system')
+    // to recover — that's the whole point of a reset. But keep out accounts a
+    // super admin deliberately blocked (locked_by set to an admin id).
     const user = await academyQueryOne<{ id: string; name: string; email: string }>(
       academy.slug,
       `SELECT id, name, email FROM users
-       WHERE email = $1 AND role = 'admin' AND is_active = TRUE`,
+       WHERE email = $1 AND role = 'admin'
+         AND (is_active = TRUE OR locked_by = 'system')`,
       [email.toLowerCase().trim()]
     );
-    if (!user) { res.json(generic); return; }
+    if (!user) {
+      console.log(`[AcademyReset] forgot-password: no eligible admin for email in ${academy.slug}`);
+      res.json(generic); return;
+    }
 
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
@@ -267,7 +274,15 @@ export async function forgotPasswordAcademy(
       [otp, expiresAt.toISOString(), user.id]
     );
 
-    await sendOtpEmail(user.email, otp, user.name);
+    // Log send success/failure server-side (never in the response, to stay
+    // enumeration-safe). An SMTP misconfiguration surfaces here, not as a 500.
+    try {
+      await sendOtpEmail(user.email, otp, user.name);
+      console.log(`[AcademyReset] OTP email sent to admin of ${academy.slug}`);
+    } catch (mailErr) {
+      const msg = mailErr instanceof Error ? mailErr.message : String(mailErr);
+      console.error(`[AcademyReset] OTP email FAILED for ${academy.slug}: ${msg}`);
+    }
     res.json(generic);
   } catch (err) { next(err); }
 }
@@ -293,7 +308,8 @@ export async function verifyOtpAcademy(
     }>(
       academy.slug,
       `SELECT id, otp_code, otp_expires_at FROM users
-       WHERE email = $1 AND role = 'admin' AND is_active = TRUE`,
+       WHERE email = $1 AND role = 'admin'
+         AND (is_active = TRUE OR locked_by = 'system')`,
       [email.toLowerCase().trim()]
     );
 

@@ -4,6 +4,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter/material.dart';
 import 'parent_api_service.dart';
 import 'storage_service.dart';
+import '../screens/academy/parent_notifications_screen.dart';
 
 /// Top-level handler — required by firebase_messaging for background messages.
 /// Must be a top-level function (not a class method).
@@ -22,6 +23,11 @@ class FcmService {
   static const _channelId   = 'eduscan_alerts';
   static const _channelName = 'EduScan Alerts';
   static const _channelDesc = 'Attendance check-in/out alerts for parents';
+
+  /// Optional hook the parent dashboard sets so it can refresh its ticker +
+  /// unread badge the moment a `parent_notification` push arrives while the app
+  /// is in the foreground. Null when the dashboard isn't mounted.
+  static void Function()? onParentNotification;
 
   /// Call once from main() after Firebase.initializeApp().
   static Future<void> initialize(GlobalKey<NavigatorState> navigatorKey) async {
@@ -78,6 +84,10 @@ class FcmService {
           body:    n.body  ?? '',
           payload: message.data['type'],
         );
+      }
+      // Refresh the dashboard ticker/badge in real time for new broadcasts.
+      if (message.data['type'] == 'parent_notification') {
+        onParentNotification?.call();
       }
     });
 
@@ -153,13 +163,20 @@ class FcmService {
     String? type,
     GlobalKey<NavigatorState> navigatorKey,
   ) {
+    final context = navigatorKey.currentContext;
+    if (context == null) return;
+
     if (type == 'attendance') {
       // Navigate to parent dashboard — it's already showing attendance
-      final context = navigatorKey.currentContext;
-      if (context != null) {
-        Navigator.of(context)
-            .pushNamedAndRemoveUntil('/parent/dashboard', (_) => false);
-      }
+      Navigator.of(context)
+          .pushNamedAndRemoveUntil('/parent/dashboard', (_) => false);
+    } else if (type == 'parent_notification') {
+      // Land on the dashboard, then open the Notification Center on top so the
+      // back button returns to the dashboard.
+      final nav = Navigator.of(context);
+      nav.pushNamedAndRemoveUntil('/parent/dashboard', (_) => false);
+      nav.push(MaterialPageRoute(
+          builder: (_) => const ParentNotificationsScreen()));
     }
   }
 

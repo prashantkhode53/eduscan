@@ -3,8 +3,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
-import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
+import '../utils/file_opener.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import '../utils/fee_format.dart';
@@ -426,7 +426,7 @@ class FeePdfService {
     await file.writeAsBytes(await pdf.save());
 
     if (context.mounted) {
-      final result = await OpenFilex.open(file.path);
+      final result = await FileOpener.open(file.path);
       if (result.type != ResultType.done && context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -684,7 +684,7 @@ class FeePdfService {
     debugPrint('[PDF] Wrote ${bytes.length} bytes');
 
     if (context.mounted) {
-      final result = await OpenFilex.open(file.path);
+      final result = await FileOpener.open(file.path);
       if (result.type != ResultType.done && context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('PDF saved to ${file.path}')),

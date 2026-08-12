@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'package:excel/excel.dart' hide Border;
-import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
+import '../utils/file_opener.dart';
 
 /// Builds the installment-wise fee-collection ledger (.xlsx) from the
 /// `getFeesExportData` payload and opens it.
@@ -128,7 +128,7 @@ class FeeExcelService {
     final fileName = _fileName(yearName, courseLabel);
     final file = File('${dir.path}/$fileName');
     await file.writeAsBytes(bytes);
-    await OpenFilex.open(file.path);
+    await FileOpener.open(file.path);
     return file.path;
   }
 

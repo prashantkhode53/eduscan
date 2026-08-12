@@ -11,13 +11,18 @@ import '../../services/academy_api_service.dart';
 /// One-Click Attendance
 ///
 /// Admin flow:
-///   1. Pick academic year -> course
-///   2. Capture or upload one or more group photos of the classroom
-///   3. Each photo is scanned server-side; every detected face is matched
+///   1. Choose Check In or Check Out
+///   2. Pick academic year -> course
+///   3. Capture or upload one or more group photos of the classroom
+///   4. Each photo is scanned server-side; every detected face is matched
 ///      against the course roster. Unique students accumulate across photos.
-///   4. Review: present list (with confidence), not-detected list (tap to
+///   5. Review: matched list (with confidence), not-detected list (tap to
 ///      mark manually).
-///   5. Approve -> attendance recorded for everyone in one shot.
+///   6. Approve -> attendance recorded for everyone in one shot.
+///
+/// Check In writes time_in; Check Out writes time_out + duration for the
+/// students who are already checked in today (the server skips anyone who
+/// isn't, and never overwrites an existing check-out).
 class OneClickAttendanceScreen extends StatefulWidget {
   const OneClickAttendanceScreen({super.key});
 
@@ -49,7 +54,11 @@ class _MatchedStudent {
 class _OneClickAttendanceScreenState extends State<OneClickAttendanceScreen> {
   final _picker = ImagePicker();
 
-  // Step 1 — selection
+  // Step 1 — what this pass records: 'checkin' or 'checkout'
+  String _mode = 'checkin';
+  bool get _isCheckout => _mode == 'checkout';
+
+  // Step 2 — selection
   String? _yearId;
   List<dynamic> _courses = [];
   bool _loadingCourses = false;
@@ -59,6 +68,8 @@ class _OneClickAttendanceScreenState extends State<OneClickAttendanceScreen> {
   // Roster (loaded once a course is chosen)
   List<Map<String, dynamic>> _roster = [];
   int _rosterWithFace = 0;
+  int _rosterCheckedIn = 0;  // students with a time_in today
+  int _rosterCheckedOut = 0; // students already checked out today
 
   // Step 2/3 — photos & scanning
   final List<XFile> _photos = [];
@@ -78,9 +89,9 @@ class _OneClickAttendanceScreenState extends State<OneClickAttendanceScreen> {
   // 'all' = both cards, 'present' = matched only, 'absent' = absentees only.
   String _viewFilter = 'all';
 
-  /// Students who will NOT be marked present if approved right now:
-  /// everyone on the roster who was not detected in any photo, plus any
-  /// matched student the admin has unticked.
+  /// Students who will NOT be recorded if approved right now: everyone on the
+  /// roster who was not detected in any photo, plus any matched student the
+  /// admin has unticked.
   List<Map<String, dynamic>> get _absentees {
     final presentIds = _matches.values
         .where((m) => m.included)
@@ -135,7 +146,10 @@ class _OneClickAttendanceScreenState extends State<OneClickAttendanceScreen> {
       setState(() {
         _roster = (data['students'] as List<dynamic>? ?? [])
             .cast<Map<String, dynamic>>();
+        _rosterById = {for (final s in _roster) s['id'] as String: s};
         _rosterWithFace = data['with_face'] as int? ?? 0;
+        _rosterCheckedIn = data['checked_in'] as int? ?? 0;
+        _rosterCheckedOut = data['checked_out'] as int? ?? 0;
       });
     } catch (e) {
       if (mounted) _snack('Failed to load class roster: $e', error: true);
@@ -146,12 +160,38 @@ class _OneClickAttendanceScreenState extends State<OneClickAttendanceScreen> {
     _photos.clear();
     _matches.clear();
     _roster = [];
+    _rosterById = {};
     _rosterWithFace = 0;
+    _rosterCheckedIn = 0;
+    _rosterCheckedOut = 0;
     _facesSeen = 0;
     _unmatchedFaces = 0;
     _scanned = false;
     _viewFilter = 'all';
   }
+
+  /// Today's attendance state by student id (rebuilt with every roster load).
+  Map<String, Map<String, dynamic>> _rosterById = {};
+
+  Map<String, dynamic>? _rosterEntry(String studentId) =>
+      _rosterById[studentId];
+
+  /// Check-out only: why (if at all) this student cannot be checked out now.
+  /// Mirrors the server rule — a check-out needs a check-in and must not
+  /// overwrite an existing one.
+  String? _checkoutBlocker(String studentId) {
+    if (!_isCheckout) return null;
+    final s = _rosterEntry(studentId);
+    if (s == null) return null;
+    if (s['checked_in'] != true) return 'Not checked in today';
+    if (s['checked_out'] == true) return 'Already checked out';
+    return null;
+  }
+
+  /// Included matches that the server will skip in check-out mode.
+  List<_MatchedStudent> get _blockedForCheckout => _matches.values
+      .where((m) => m.included && _checkoutBlocker(m.id) != null)
+      .toList(growable: false);
 
   // ── Photo capture / upload ──────────────────────────────────────────────
 
@@ -236,20 +276,40 @@ class _OneClickAttendanceScreenState extends State<OneClickAttendanceScreen> {
     final included =
         _matches.values.where((m) => m.included).toList(growable: false);
     if (included.isEmpty) {
-      _snack('No students selected to mark present.', error: true);
+      _snack(
+        _isCheckout
+            ? 'No students selected to check out.'
+            : 'No students selected to mark present.',
+        error: true,
+      );
       return;
     }
+
+    // In check-out mode the server skips anyone without a check-in (or already
+    // checked out) — warn before the request so the numbers are never a surprise.
+    final blocked = _blockedForCheckout;
+    final willRecord = included.length - blocked.length;
 
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Approve attendance?'),
-        content: Text(
-          'Mark ${included.length} student${included.length == 1 ? '' : 's'} '
-          'PRESENT for $_courseName today?\n\n'
-          '${_absentees.length} student(s) will remain absent:\n'
-          '${_absentees.take(8).map((s) => '• ${s['first_name'] ?? ''} ${s['last_name'] ?? ''}'.trim()).join('\n')}'
-          '${_absentees.length > 8 ? '\n…and ${_absentees.length - 8} more' : ''}',
+        title: Text(_isCheckout ? 'Approve check-out?' : 'Approve attendance?'),
+        content: SingleChildScrollView(
+          child: Text(
+            _isCheckout
+                ? 'Record CHECK-OUT for $willRecord '
+                    'student${willRecord == 1 ? '' : 's'} of $_courseName now?\n\n'
+                    '${blocked.isEmpty ? '' : '${blocked.length} selected student(s) will be skipped '
+                        '(no check-in today, or already checked out):\n'
+                        '${blocked.take(8).map((m) => '• ${m.fullName}').join('\n')}'
+                        '${blocked.length > 8 ? '\n…and ${blocked.length - 8} more' : ''}\n\n'}'
+                    '${_absentees.length} student(s) will not be checked out.'
+                : 'Mark ${included.length} student${included.length == 1 ? '' : 's'} '
+                    'PRESENT for $_courseName today?\n\n'
+                    '${_absentees.length} student(s) will remain absent:\n'
+                    '${_absentees.take(8).map((s) => '• ${s['first_name'] ?? ''} ${s['last_name'] ?? ''}'.trim()).join('\n')}'
+                    '${_absentees.length > 8 ? '\n…and ${_absentees.length - 8} more' : ''}',
+          ),
         ),
         actions: [
           TextButton(
@@ -267,6 +327,7 @@ class _OneClickAttendanceScreenState extends State<OneClickAttendanceScreen> {
     try {
       final data = await AcademyApiService.groupScanApprove(
         courseId: _courseId!,
+        mode: _mode,
         entries: included
             .map((m) => {
                   'student_id': m.id,
@@ -277,12 +338,22 @@ class _OneClickAttendanceScreenState extends State<OneClickAttendanceScreen> {
       );
       if (!mounted) return;
       final marked = data['marked'] ?? included.length;
+      final noCheckin = (data['not_checked_in'] as List<dynamic>? ?? []).length;
+      final alreadyOut =
+          (data['already_checked_out'] as List<dynamic>? ?? []).length;
       await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
-          icon: const Icon(Icons.check_circle, color: Colors.green, size: 48),
-          title: const Text('Attendance recorded'),
-          content: Text('$marked student(s) marked present for $_courseName.'),
+          icon: Icon(_isCheckout ? Icons.logout : Icons.check_circle,
+              color: Colors.green, size: 48),
+          title: Text(_isCheckout ? 'Check-out recorded' : 'Attendance recorded'),
+          content: Text(
+            _isCheckout
+                ? '$marked student(s) checked out of $_courseName.'
+                    '${noCheckin > 0 ? '\n\n$noCheckin skipped — no check-in today.' : ''}'
+                    '${alreadyOut > 0 ? '\n$alreadyOut were already checked out.' : ''}'
+                : '$marked student(s) marked present for $_courseName.',
+          ),
           actions: [
             FilledButton(
                 onPressed: () => Navigator.pop(ctx),
@@ -318,8 +389,52 @@ class _OneClickAttendanceScreenState extends State<OneClickAttendanceScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // ── Step 1: Academic year & course ────────────────────────────
-          Text('1. Select class',
+          // ── Step 1: Check in or check out ─────────────────────────────
+          Text('1. What are you recording?',
+              style: theme.textTheme.titleSmall
+                  ?.copyWith(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: SegmentedButton<String>(
+              segments: const [
+                ButtonSegment(
+                  value: 'checkin',
+                  icon: Icon(Icons.login),
+                  label: Text('Check In'),
+                ),
+                ButtonSegment(
+                  value: 'checkout',
+                  icon: Icon(Icons.logout),
+                  label: Text('Check Out'),
+                ),
+              ],
+              selected: {_mode},
+              showSelectedIcon: false,
+              onSelectionChanged: (_scanning || _approving)
+                  ? null
+                  : (s) {
+                      setState(() {
+                        _mode = s.first;
+                        _viewFilter = 'all';
+                      });
+                      // Refresh today's check-in/out flags for the new mode.
+                      if (_courseId != null) _loadRoster();
+                    },
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            _isCheckout
+                ? 'Records exit time and duration for students who are already '
+                    'checked in today.'
+                : 'Records arrival time and marks the detected students present.',
+            style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor),
+          ),
+
+          // ── Step 2: Academic year & course ────────────────────────────
+          const SizedBox(height: 24),
+          Text('2. Select class',
               style: theme.textTheme.titleSmall
                   ?.copyWith(fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
@@ -375,16 +490,29 @@ class _OneClickAttendanceScreenState extends State<OneClickAttendanceScreen> {
             const SizedBox(height: 8),
             Text(
               '${_roster.length} students in this course • '
-              '$_rosterWithFace with registered faces',
+              '$_rosterWithFace with registered faces'
+              '${_isCheckout ? '\n$_rosterCheckedIn checked in today • $_rosterCheckedOut already checked out' : ''}',
               style: theme.textTheme.bodySmall
                   ?.copyWith(color: theme.hintColor),
             ),
           ],
 
-          // ── Step 2: Photos ────────────────────────────────────────────
+          // Nobody can be checked out until someone has checked in.
+          if (_isCheckout && _courseId != null && _roster.isNotEmpty &&
+              _rosterCheckedIn == 0) ...[
+            const SizedBox(height: 12),
+            _noticeBox(
+              icon: Icons.info_outline,
+              color: Colors.orange,
+              text: 'No student in this course has checked in today, so there '
+                  'is nobody to check out yet. Run Check In first.',
+            ),
+          ],
+
+          // ── Step 3: Photos ────────────────────────────────────────────
           if (_courseId != null) ...[
             const SizedBox(height: 24),
-            Text('2. Class photos',
+            Text('3. Class photos',
                 style: theme.textTheme.titleSmall
                     ?.copyWith(fontWeight: FontWeight.bold)),
             const SizedBox(height: 4),
@@ -463,10 +591,10 @@ class _OneClickAttendanceScreenState extends State<OneClickAttendanceScreen> {
             ),
           ],
 
-          // ── Step 3/4: Review ──────────────────────────────────────────
+          // ── Step 4/5: Review ──────────────────────────────────────────
           if (_scanned) ...[
             const SizedBox(height: 24),
-            Text('3. Review results',
+            Text('4. Review results',
                 style: theme.textTheme.titleSmall
                     ?.copyWith(fontWeight: FontWeight.bold)),
             const SizedBox(height: 4),
@@ -485,11 +613,13 @@ class _OneClickAttendanceScreenState extends State<OneClickAttendanceScreen> {
                 ButtonSegment(
                   value: 'present',
                   label: Text(
-                      'Present (${_matches.values.where((m) => m.included).length})'),
+                      '${_isCheckout ? 'Leaving' : 'Present'} '
+                      '(${_matches.values.where((m) => m.included).length})'),
                 ),
                 ButtonSegment(
                   value: 'absent',
-                  label: Text('Absent (${_absentees.length})'),
+                  label: Text(
+                      '${_isCheckout ? 'Staying' : 'Absent'} (${_absentees.length})'),
                 ),
               ],
               selected: {_viewFilter},
@@ -517,7 +647,7 @@ class _OneClickAttendanceScreenState extends State<OneClickAttendanceScreen> {
                   Expanded(
                     child: Text(
                       '${_absentees.length} of ${_roster.length} students '
-                      'will be absent',
+                      '${_isCheckout ? 'will not be checked out' : 'will be absent'}',
                       style: TextStyle(
                           color: Colors.red.shade800,
                           fontWeight: FontWeight.w600),
@@ -531,16 +661,34 @@ class _OneClickAttendanceScreenState extends State<OneClickAttendanceScreen> {
                 ]),
               ),
 
+            // Check-out only: selected students the server will skip because
+            // they have no check-in today (or are already checked out).
+            if (_isCheckout && _blockedForCheckout.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: _noticeBox(
+                  icon: Icons.report_problem_outlined,
+                  color: Colors.orange,
+                  text: '${_blockedForCheckout.length} selected student(s) '
+                      'cannot be checked out (no check-in today, or already '
+                      'checked out) and will be skipped.',
+                ),
+              ),
+
             // Matched (present) list
             if (_viewFilter != 'absent')
             Card(
               child: Column(children: [
                 ListTile(
                   dense: true,
-                  leading: const Icon(Icons.check_circle_outline,
+                  leading: Icon(
+                      _isCheckout
+                          ? Icons.logout
+                          : Icons.check_circle_outline,
                       color: Colors.green),
                   title: Text(
-                      'Present (${_matches.values.where((m) => m.included).length})',
+                      '${_isCheckout ? 'Checking out' : 'Present'} '
+                      '(${_matches.values.where((m) => m.included).length})',
                       style:
                           const TextStyle(fontWeight: FontWeight.bold)),
                 ),
@@ -551,25 +699,35 @@ class _OneClickAttendanceScreenState extends State<OneClickAttendanceScreen> {
                     child: Text('No students matched. Try clearer or closer '
                         'photos, or check face registrations.'),
                   ),
-                ..._sortedMatches.map((m) => CheckboxListTile(
-                      dense: true,
-                      value: m.included,
-                      onChanged: _approving
+                ..._sortedMatches.map((m) {
+                  final blocker = _checkoutBlocker(m.id);
+                  return CheckboxListTile(
+                    dense: true,
+                    value: m.included,
+                    onChanged: _approving
+                        ? null
+                        : (v) => setState(() => m.included = v ?? true),
+                    title: Text(m.fullName),
+                    subtitle: Text(
+                      blocker ??
+                          (m.manual
+                              ? 'Marked manually'
+                              : 'Match ${(m.confidence * 100).toStringAsFixed(1)}%'),
+                      style: blocker == null
                           ? null
-                          : (v) =>
-                              setState(() => m.included = v ?? true),
-                      title: Text(m.fullName),
-                      subtitle: Text(m.manual
-                          ? 'Marked manually'
-                          : 'Match ${(m.confidence * 100).toStringAsFixed(1)}%'),
-                      secondary: m.manual
-                          ? const Icon(Icons.touch_app_outlined,
-                              color: Colors.orange)
-                          : Icon(Icons.verified_outlined,
-                              color: m.confidence >= 0.75
-                                  ? Colors.green
-                                  : Colors.orange),
-                    )),
+                          : TextStyle(color: Colors.orange.shade800),
+                    ),
+                    secondary: blocker != null
+                        ? Icon(Icons.block, color: Colors.orange.shade800)
+                        : m.manual
+                            ? const Icon(Icons.touch_app_outlined,
+                                color: Colors.orange)
+                            : Icon(Icons.verified_outlined,
+                                color: m.confidence >= 0.75
+                                    ? Colors.green
+                                    : Colors.orange),
+                  );
+                }),
               ]),
             ),
 
@@ -585,37 +743,45 @@ class _OneClickAttendanceScreenState extends State<OneClickAttendanceScreen> {
                     title: Text('Not detected (${_notDetected.length})',
                         style:
                             const TextStyle(fontWeight: FontWeight.bold)),
-                    subtitle: const Text(
-                        'Tap a name to mark present manually'),
+                    subtitle: Text(_isCheckout
+                        ? 'Tap a name to check the student out manually'
+                        : 'Tap a name to mark present manually'),
                   ),
                   const Divider(height: 1),
-                  ..._notDetected.map((s) => ListTile(
-                        dense: true,
-                        title: Text(
-                            '${s['first_name'] ?? ''} ${s['last_name'] ?? ''}'
-                                .trim()),
-                        subtitle: (s['has_face'] == true)
-                            ? null
-                            : const Text('No face registered',
-                                style: TextStyle(color: Colors.red)),
-                        trailing: TextButton(
-                          onPressed: _approving
+                  ..._notDetected.map((s) {
+                    final blocker = _checkoutBlocker(s['id'] as String);
+                    return ListTile(
+                      dense: true,
+                      title: Text(
+                          '${s['first_name'] ?? ''} ${s['last_name'] ?? ''}'
+                              .trim()),
+                      subtitle: blocker != null
+                          ? Text(blocker,
+                              style: TextStyle(color: Colors.orange.shade800))
+                          : (s['has_face'] == true)
                               ? null
-                              : () => setState(() {
-                                    _matches[s['id'] as String] =
-                                        _MatchedStudent(
-                                      id: s['id'] as String,
-                                      firstName:
-                                          s['first_name'] as String? ?? '',
-                                      lastName:
-                                          s['last_name'] as String? ?? '',
-                                      confidence: 0,
-                                      manual: true,
-                                    );
-                                  }),
-                          child: const Text('Mark present'),
-                        ),
-                      )),
+                              : const Text('No face registered',
+                                  style: TextStyle(color: Colors.red)),
+                      trailing: TextButton(
+                        onPressed: (_approving || blocker != null)
+                            ? null
+                            : () => setState(() {
+                                  _matches[s['id'] as String] =
+                                      _MatchedStudent(
+                                    id: s['id'] as String,
+                                    firstName:
+                                        s['first_name'] as String? ?? '',
+                                    lastName:
+                                        s['last_name'] as String? ?? '',
+                                    confidence: 0,
+                                    manual: true,
+                                  );
+                                }),
+                        child: Text(
+                            _isCheckout ? 'Check out' : 'Mark present'),
+                      ),
+                    );
+                  }),
                 ]),
               ),
             ],
@@ -637,8 +803,9 @@ class _OneClickAttendanceScreenState extends State<OneClickAttendanceScreen> {
                         '(${_matches.values.where((m) => !m.included).length})',
                         style:
                             const TextStyle(fontWeight: FontWeight.bold)),
-                    subtitle: const Text(
-                        'Matched in photos but unticked — will be absent'),
+                    subtitle: Text(_isCheckout
+                        ? 'Matched in photos but unticked — stays checked in'
+                        : 'Matched in photos but unticked — will be absent'),
                   ),
                   const Divider(height: 1),
                   ..._sortedMatches
@@ -664,7 +831,9 @@ class _OneClickAttendanceScreenState extends State<OneClickAttendanceScreen> {
             const SizedBox(height: 20),
             FilledButton.icon(
               style: FilledButton.styleFrom(
-                backgroundColor: Colors.green.shade700,
+                backgroundColor: _isCheckout
+                    ? Colors.indigo.shade600
+                    : Colors.green.shade700,
                 padding: const EdgeInsets.symmetric(vertical: 14),
               ),
               onPressed: (_approving ||
@@ -677,10 +846,14 @@ class _OneClickAttendanceScreenState extends State<OneClickAttendanceScreen> {
                       height: 18,
                       child: CircularProgressIndicator(
                           strokeWidth: 2, color: Colors.white))
-                  : const Icon(Icons.task_alt),
+                  : Icon(_isCheckout ? Icons.logout : Icons.task_alt),
               label: Text(_approving
-                  ? 'Recording attendance…'
-                  : 'Approve & Record Attendance'),
+                  ? (_isCheckout
+                      ? 'Recording check-out…'
+                      : 'Recording attendance…')
+                  : (_isCheckout
+                      ? 'Approve & Record Check-Out'
+                      : 'Approve & Record Attendance')),
             ),
             const SizedBox(height: 24),
           ],
@@ -688,6 +861,30 @@ class _OneClickAttendanceScreenState extends State<OneClickAttendanceScreen> {
       ),
     );
   }
+
+  /// Small tinted info/warning strip used by the check-out guidance banners.
+  Widget _noticeBox({
+    required IconData icon,
+    required MaterialColor color,
+    required String text,
+  }) =>
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: color.shade50,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: color.shade200),
+        ),
+        child: Row(children: [
+          Icon(icon, color: color.shade700, size: 20),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(text,
+                style: TextStyle(
+                    color: color.shade800, fontWeight: FontWeight.w500)),
+          ),
+        ]),
+      );
 
   List<_MatchedStudent> get _sortedMatches {
     final list = _matches.values.toList(growable: false);

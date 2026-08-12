@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../services/academy_api_service.dart';
+import '../../utils/platform_support.dart';
+import '../../utils/responsive.dart';
 import 'academy_student_registration_screen.dart';
 import 'academy_student_edit_screen.dart';
 
@@ -146,25 +148,42 @@ class _AcademyStudentListScreenState extends State<AcademyStudentListScreen> {
                       ],
                     ),
                   )
-                : ListView.separated(
-                    padding: EdgeInsets.fromLTRB(
-                        16, 16, 16,
-                        MediaQuery.of(context).padding.bottom + 88),
-                    itemCount: _students.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 8),
-                    itemBuilder: (_, i) => _StudentCard(
-                      student: _students[i],
-                      theme: theme,
-                      onEdit: () => _openEdit(_students[i]),
-                      onDelete: () => _confirmDelete(_students[i]),
+                : Align(
+                    alignment: Alignment.topCenter,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(
+                          maxWidth: Responsive.readableMaxWidth),
+                      child: ListView.separated(
+                        padding: EdgeInsets.fromLTRB(
+                            16, 16, 16,
+                            MediaQuery.of(context).padding.bottom + 88),
+                        itemCount: _students.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 8),
+                        itemBuilder: (_, i) => _StudentCard(
+                          student: _students[i],
+                          theme: theme,
+                          // Edit launches the face-update wizard (camera + ML Kit) —
+                          // unavailable on Windows, so it's hidden there.
+                          onEdit: PlatformSupport.faceFeatures
+                              ? () => _openEdit(_students[i])
+                              : null,
+                          onDelete: () => _confirmDelete(_students[i]),
+                        ),
+                      ),
                     ),
                   ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _openRegistration,
-        icon: const Icon(Icons.person_add_outlined),
-        label: const Text('Register Student'),
-      ),
+      // Single registration ends in mandatory on-device face capture
+      // (camera + ML Kit), unavailable on Windows. On Windows, students are
+      // added via the dashboard's bulk Excel/CSV upload instead, so this FAB
+      // is hidden there.
+      floatingActionButton: PlatformSupport.faceFeatures
+          ? FloatingActionButton.extended(
+              onPressed: _openRegistration,
+              icon: const Icon(Icons.person_add_outlined),
+              label: const Text('Register Student'),
+            )
+          : null,
     );
   }
 
@@ -379,16 +398,21 @@ class _StudentCard extends StatelessWidget {
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    IconButton(
-                      icon: const Icon(Icons.edit_outlined, size: 18),
-                      onPressed: onEdit,
-                      tooltip: 'Edit',
-                      padding: EdgeInsets.zero,
-                      constraints:
-                          const BoxConstraints(minWidth: 32, minHeight: 32),
-                      visualDensity: VisualDensity.compact,
-                    ),
-                    const SizedBox(width: 4),
+                    // Edit opens the face-update wizard (camera + ML Kit), which
+                    // is unavailable on Windows; the caller passes null there to
+                    // hide the button entirely.
+                    if (onEdit != null) ...[
+                      IconButton(
+                        icon: const Icon(Icons.edit_outlined, size: 18),
+                        onPressed: onEdit,
+                        tooltip: 'Edit',
+                        padding: EdgeInsets.zero,
+                        constraints:
+                            const BoxConstraints(minWidth: 32, minHeight: 32),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      const SizedBox(width: 4),
+                    ],
                     IconButton(
                       icon: const Icon(Icons.delete_outline,
                           size: 18, color: Colors.red),

@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'package:intl/intl.dart';
-import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
+import '../utils/file_opener.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import '../models/attendance.dart';
@@ -92,7 +92,7 @@ class PdfService {
     final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
     final file = File('${dir.path}/attendance_$timestamp.pdf');
     await file.writeAsBytes(await pdf.save());
-    await OpenFilex.open(file.path);
+    await FileOpener.open(file.path);
   }
 
   static Future<void> exportSummaryReport({
@@ -167,7 +167,7 @@ class PdfService {
     final timestamp = DateFormat('yyyyMMdd_HHmmss').format(generatedAt);
     final file = File('${dir.path}/summary_report_$timestamp.pdf');
     await file.writeAsBytes(await pdf.save());
-    await OpenFilex.open(file.path);
+    await FileOpener.open(file.path);
   }
 
   static pw.Widget _summaryCell(
@@ -239,6 +239,6 @@ class PdfService {
     final dir = await getApplicationDocumentsDirectory();
     final file = File('${dir.path}/student_${student.id}_attendance.pdf');
     await file.writeAsBytes(await pdf.save());
-    await OpenFilex.open(file.path);
+    await FileOpener.open(file.path);
   }
 }
