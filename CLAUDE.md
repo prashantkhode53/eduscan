@@ -135,18 +135,33 @@ EduScan is a multi-tenant SaaS platform for face-recognition attendance manageme
 
 ## One-Click Attendance (group class photos)
 
-Admins mark a whole class present from group classroom photo(s): pick academic
-year → course → capture/upload group photos → every face is detected and matched
-against **that course's active roster** → admin reviews Present/Absent lists →
-admin approves → attendance is written and parents get FCM pushes.
+Admins mark a whole class present from group classroom photo(s): choose **Check
+In or Check Out** → pick academic year → course → capture/upload group photos →
+every face is detected and matched against **that course's active roster** →
+admin reviews the lists → admin approves → attendance is written and parents get
+FCM pushes.
 
 ### Endpoints (all under `/api/academy/attendance/`)
 
 | Method | Path | Role | Body → effect |
 |---|---|---|---|
-| GET  | `group-scan/roster?course_id=<uuid>` | admin, teacher | course's active students + `has_face` flag (no writes) |
+| GET  | `group-scan/roster?course_id=<uuid>` | admin, teacher | course's active students + `has_face`, `checked_in`, `checked_out` flags (no writes) |
 | POST | `group-scan/photo` | admin, teacher | `{course_id, image_base64}` → matches ONE photo, **writes nothing** |
-| POST | `group-scan/approve` | **admin only** | `{course_id, entries:[{student_id, confidence?\|manual?}]}` → single batched atomic upsert |
+| POST | `group-scan/approve` | **admin only** | `{course_id, mode?, entries:[{student_id, confidence?\|manual?}]}` → single batched atomic write |
+
+`mode` is `'checkin'` (default — any other/missing value falls back to it, so
+older app builds keep working) or `'checkout'`.
+
+### Check-out mode
+
+- Writes `time_out`, `duration_mins` (computed in SQL from each student's own
+  `time_in`), `checkout_mode`, `confidence_out` in one batched
+  `UPDATE … FROM (VALUES …)`.
+- Only students who are **checked in today and not yet checked out** are
+  written. The others come back in the response as `not_checked_in` /
+  `already_checked_out` so the app can explain the skips; if nobody is
+  eligible the endpoint 400s instead of silently writing nothing.
+- Parent FCM push carries the student's own duration.
 
 Photos are sent **one per request** (express.json is capped at 5 MB — do not
 batch photos into one request, do not raise the limit).
@@ -163,16 +178,20 @@ batch photos into one request, do not raise the limit).
   `cosineSimilarity` + 0.02 ambiguity margin as the single-scan path; the
   controller (`controllers/academy/groupAttendanceController.ts`) is a thin
   I/O shell.
-- **Flutter:** `screens/academy/one_click_attendance_screen.dart` (year/course
-  dropdowns, camera+upload, per-photo progress, SegmentedButton All/Present/
-  Absent, absentee banner, manual mark/untick/re-include). Server-side
+- **Flutter:** `screens/academy/one_click_attendance_screen.dart` (Check In /
+  Check Out selector, year/course dropdowns, camera+upload, per-photo progress,
+  SegmentedButton All/Present/Absent, absentee banner, manual mark/untick/
+  re-include). In check-out mode the roster's `checked_in`/`checked_out` flags
+  drive per-student "cannot check out" hints before approval. Server-side
   recognition ⇒ works on Windows too (no ML-Kit guard on the dashboard tile).
 
 ### Invariants (do not break)
 
 - Approve **never overwrites** an existing check-in: `time_in`, `confidence_in`,
   `marked_by` use `COALESCE`; `checkin_mode` is only set when `time_in` was NULL.
-  Group approval must never erase a kiosk/face check-in.
+  Group approval must never erase a kiosk/face check-in. The check-out path
+  follows the same rule via `AND a.time_out IS NULL` — an existing check-out is
+  preserved, never rewritten.
 - Approval writes only students on the **active roster** of the given course
   (`student_courses.status='active' AND students.status='active'`).
 - Matching candidates are restricted to that course's roster (intentional —
@@ -183,7 +202,7 @@ batch photos into one request, do not raise the limit).
 
 ### Test command
 
-`cd backend && npx tsc --noEmit && npm test` (expect **44** pass, incl. 18 group
+`cd backend && npx tsc --noEmit && npm test` (expect **46** pass, incl. 20 group
 + attendanceScoring). Python: `python -m py_compile app/*.py`.
 
 ---

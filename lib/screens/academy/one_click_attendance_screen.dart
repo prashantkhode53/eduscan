@@ -146,6 +146,7 @@ class _OneClickAttendanceScreenState extends State<OneClickAttendanceScreen> {
       setState(() {
         _roster = (data['students'] as List<dynamic>? ?? [])
             .cast<Map<String, dynamic>>();
+        _rosterById = {for (final s in _roster) s['id'] as String: s};
         _rosterWithFace = data['with_face'] as int? ?? 0;
         _rosterCheckedIn = data['checked_in'] as int? ?? 0;
         _rosterCheckedOut = data['checked_out'] as int? ?? 0;
@@ -159,6 +160,7 @@ class _OneClickAttendanceScreenState extends State<OneClickAttendanceScreen> {
     _photos.clear();
     _matches.clear();
     _roster = [];
+    _rosterById = {};
     _rosterWithFace = 0;
     _rosterCheckedIn = 0;
     _rosterCheckedOut = 0;
@@ -168,13 +170,11 @@ class _OneClickAttendanceScreenState extends State<OneClickAttendanceScreen> {
     _viewFilter = 'all';
   }
 
-  /// Today's attendance state of a roster student, or null if not on the roster.
-  Map<String, dynamic>? _rosterEntry(String studentId) {
-    for (final s in _roster) {
-      if (s['id'] == studentId) return s;
-    }
-    return null;
-  }
+  /// Today's attendance state by student id (rebuilt with every roster load).
+  Map<String, Map<String, dynamic>> _rosterById = {};
+
+  Map<String, dynamic>? _rosterEntry(String studentId) =>
+      _rosterById[studentId];
 
   /// Check-out only: why (if at all) this student cannot be checked out now.
   /// Mirrors the server rule — a check-out needs a check-in and must not
