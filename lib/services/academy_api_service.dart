@@ -134,27 +134,60 @@ class AcademyApiService {
 
   // ── Attendance Intelligence (admin/teacher) ─────────────────────────────────
 
+  /// Query params for the screen-level cohort filter (academic year + courses)
+  /// that the Attendance Reports screen applies to every tab.
+  static Map<String, String> _cohortParams(String? academicYearId, List<String>? courseIds) => {
+        if (academicYearId != null && academicYearId.isNotEmpty)
+          'academic_year_id': academicYearId,
+        if (courseIds != null && courseIds.isNotEmpty)
+          'course_ids': courseIds.join(','),
+      };
+
   /// Admin "Today" action list: students below threshold, ≥3 consecutive
   /// absences, sharp drops, and not-seen-in-X-days, over a rolling window.
-  static Future<Map<String, dynamic>> getInsightsToday({int windowDays = 56}) async {
-    final uri = Uri.parse(ApiEndpoints.attendanceInsightsToday)
-        .replace(queryParameters: {'window': windowDays.toString()});
+  static Future<Map<String, dynamic>> getInsightsToday({
+    int windowDays = 56,
+    String? academicYearId,
+    List<String>? courseIds,
+  }) async {
+    final uri = Uri.parse(ApiEndpoints.attendanceInsightsToday).replace(
+      queryParameters: {
+        'window': windowDays.toString(),
+        ..._cohortParams(academicYearId, courseIds),
+      },
+    );
     final res = await _http.get(uri, headers: await _headers()).timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
   }
 
   /// All active students with their score band + attendance % + risk level.
-  static Future<Map<String, dynamic>> getInsightsStudents({int windowDays = 56}) async {
-    final uri = Uri.parse(ApiEndpoints.attendanceInsightsStudents)
-        .replace(queryParameters: {'window': windowDays.toString()});
+  static Future<Map<String, dynamic>> getInsightsStudents({
+    int windowDays = 56,
+    String? academicYearId,
+    List<String>? courseIds,
+  }) async {
+    final uri = Uri.parse(ApiEndpoints.attendanceInsightsStudents).replace(
+      queryParameters: {
+        'window': windowDays.toString(),
+        ..._cohortParams(academicYearId, courseIds),
+      },
+    );
     final res = await _http.get(uri, headers: await _headers()).timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
   }
 
   /// Defaulters grouped/sorted by stage (lowest attendance first).
-  static Future<Map<String, dynamic>> getInsightsDefaulters({int windowDays = 56}) async {
-    final uri = Uri.parse(ApiEndpoints.attendanceInsightsDefaulters)
-        .replace(queryParameters: {'window': windowDays.toString()});
+  static Future<Map<String, dynamic>> getInsightsDefaulters({
+    int windowDays = 56,
+    String? academicYearId,
+    List<String>? courseIds,
+  }) async {
+    final uri = Uri.parse(ApiEndpoints.attendanceInsightsDefaulters).replace(
+      queryParameters: {
+        'window': windowDays.toString(),
+        ..._cohortParams(academicYearId, courseIds),
+      },
+    );
     final res = await _http.get(uri, headers: await _headers()).timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
   }
@@ -171,15 +204,14 @@ class AcademyApiService {
   ///   status         — 'present' | 'absent'
   static Future<List<Map<String, dynamic>>> getOverallAttendance({
     String? academicYearId,
-    String? courseId,
+    List<String>? courseIds,
     String? search,
     String? fromDate,
     String? toDate,
     String? status,
   }) async {
     final params = <String, String>{
-      if (academicYearId != null && academicYearId.isNotEmpty) 'academic_year_id': academicYearId,
-      if (courseId != null && courseId.isNotEmpty) 'course_id': courseId,
+      ..._cohortParams(academicYearId, courseIds),
       if (search != null && search.isNotEmpty) 'student': search,
       if (fromDate != null && fromDate.isNotEmpty) 'from': fromDate,
       if (toDate != null && toDate.isNotEmpty) 'to': toDate,
@@ -193,11 +225,26 @@ class AcademyApiService {
     return ((data['records'] as List?) ?? []).cast<Map<String, dynamic>>();
   }
 
-  /// Full attendance-score breakdown (factors + risk + patterns) for one student.
+  /// Full attendance breakdown for one student over a reporting period.
+  ///
+  /// Pass [fromDate]/[toDate] ('YYYY-MM-DD') for an explicit range — that is what
+  /// the month picker sends. Omit both to fall back to a rolling [windowDays]
+  /// window. The response always carries a `period` block naming the exact dates
+  /// it covers, plus header context (course, academic year), the summary counts,
+  /// the score factors, and a `trend` with daily and weekly series.
   static Future<Map<String, dynamic>> getStudentInsight(
-      String studentId, {int windowDays = 56}) async {
-    final uri = Uri.parse(ApiEndpoints.attendanceInsightsScore(studentId))
-        .replace(queryParameters: {'window': windowDays.toString()});
+    String studentId, {
+    int windowDays = 56,
+    String? fromDate,
+    String? toDate,
+  }) async {
+    final hasRange = fromDate != null && fromDate.isNotEmpty &&
+        toDate != null && toDate.isNotEmpty;
+    final uri = Uri.parse(ApiEndpoints.attendanceInsightsScore(studentId)).replace(
+      queryParameters: hasRange
+          ? {'from': fromDate, 'to': toDate}
+          : {'window': windowDays.toString()},
+    );
     final res = await _http.get(uri, headers: await _headers()).timeout(_timeout);
     return _parse(res) as Map<String, dynamic>;
   }

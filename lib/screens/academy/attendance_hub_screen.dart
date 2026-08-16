@@ -19,9 +19,55 @@ class AttendanceHubScreen extends StatefulWidget {
   State<AttendanceHubScreen> createState() => _AttendanceHubScreenState();
 }
 
+/// Screen-level cohort filter: which students every tab reports on.
+///
+/// Chosen once at the top of Attendance Reports rather than per-tab, so the
+/// admin sets "which students am I looking at" before reading any figure.
+/// Value type with `==` so the tabs can cheaply detect a real change in
+/// `didUpdateWidget` and refetch only then.
+@immutable
+class AttendanceCohort {
+  final String? yearId;
+  final List<String> courseIds;
+
+  const AttendanceCohort({this.yearId, this.courseIds = const []});
+
+  bool get isEmpty => yearId == null && courseIds.isEmpty;
+
+  @override
+  bool operator ==(Object other) =>
+      other is AttendanceCohort &&
+      other.yearId == yearId &&
+      other.courseIds.length == courseIds.length &&
+      other.courseIds.every(courseIds.contains);
+
+  @override
+  int get hashCode => Object.hash(yearId, Object.hashAllUnordered(courseIds));
+}
+
 class _AttendanceHubScreenState extends State<AttendanceHubScreen>
     with SingleTickerProviderStateMixin {
   late final TabController _tabs = TabController(length: 4, vsync: this);
+
+  // Filter option sources, loaded once for the whole screen.
+  List<Map<String, dynamic>> _years = [];
+  List<Map<String, dynamic>> _courses = [];
+  bool _loadingFilters = true;
+  bool _loadingCourses = false;
+  String? _filterError;
+
+  // Current selection. Empty = all years, all courses.
+  String? _yearId;
+  final Set<String> _courseIds = {};
+
+  AttendanceCohort get _cohort =>
+      AttendanceCohort(yearId: _yearId, courseIds: _courseIds.toList());
+
+  @override
+  void initState() {
+    super.initState();
+    _loadYears();
+  }
 
   @override
   void dispose() {
@@ -29,11 +75,155 @@ class _AttendanceHubScreenState extends State<AttendanceHubScreen>
     super.dispose();
   }
 
+  Future<void> _loadYears() async {
+    setState(() { _loadingFilters = true; _filterError = null; });
+    try {
+      final years = await AcademyApiService.getAcademicYears();
+      if (!mounted) return;
+      setState(() {
+        _years = years.cast<Map<String, dynamic>>();
+        _loadingFilters = false;
+      });
+      await _loadCourses();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _filterError = e.toString().replaceFirst('Exception: ', '');
+        _loadingFilters = false;
+      });
+    }
+  }
+
+  /// Courses for the selected year (all years when none is chosen).
+  Future<void> _loadCourses() async {
+    setState(() => _loadingCourses = true);
+    try {
+      final list = await AcademyApiService.getCourses(academicYearId: _yearId);
+      if (!mounted) return;
+      setState(() {
+        _courses = list.cast<Map<String, dynamic>>();
+        // Drop selections that no longer belong to the chosen year, so the
+        // filter can never send a course id the year doesn't contain.
+        final valid = _courses.map((c) => c['id'] as String).toSet();
+        _courseIds.removeWhere((id) => !valid.contains(id));
+        _loadingCourses = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() { _courses = []; _courseIds.clear(); _loadingCourses = false; });
+    }
+  }
+
+  void _onYearChanged(String? id) {
+    setState(() => _yearId = id);
+    _loadCourses();
+  }
+
+  Future<void> _pickCourses() async {
+    if (_courses.isEmpty) return;
+    final draft = {..._courseIds};
+    final saved = await showModalBottomSheet<Set<String>>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 8, 8),
+                child: Row(children: [
+                  const Expanded(
+                    child: Text('Select courses',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  ),
+                  TextButton(
+                    onPressed: () => setSheet(() {
+                      if (draft.length == _courses.length) {
+                        draft.clear();
+                      } else {
+                        draft
+                          ..clear()
+                          ..addAll(_courses.map((c) => c['id'] as String));
+                      }
+                    }),
+                    child: Text(draft.length == _courses.length
+                        ? 'Clear all'
+                        : 'Select all'),
+                  ),
+                ]),
+              ),
+              const Divider(height: 1),
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: _courses.map((c) {
+                    final id = c['id'] as String;
+                    return CheckboxListTile(
+                      dense: true,
+                      value: draft.contains(id),
+                      title: Text(c['name'] as String? ?? ''),
+                      onChanged: (v) => setSheet(() {
+                        if (v == true) {
+                          draft.add(id);
+                        } else {
+                          draft.remove(id);
+                        }
+                      }),
+                    );
+                  }).toList(),
+                ),
+              ),
+              const Divider(height: 1),
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('Cancel'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: FilledButton(
+                      onPressed: () => Navigator.pop(ctx, draft),
+                      child: Text(draft.isEmpty
+                          ? 'Apply (all courses)'
+                          : 'Apply (${draft.length})'),
+                    ),
+                  ),
+                ]),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (saved == null || !mounted) return;
+    setState(() {
+      _courseIds
+        ..clear()
+        ..addAll(saved);
+    });
+  }
+
+  String get _coursesLabel {
+    if (_courseIds.isEmpty) return 'All courses';
+    if (_courseIds.length == 1) {
+      final match = _courses.where((c) => c['id'] == _courseIds.first);
+      return match.isEmpty ? '1 course' : (match.first['name'] as String? ?? '1 course');
+    }
+    return '${_courseIds.length} courses selected';
+  }
+
   @override
   Widget build(BuildContext context) {
+    final cohort = _cohort;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Attendance'),
+        title: const Text('Attendance Reports'),
         bottom: TabBar(
           controller: _tabs,
           isScrollable: true,
@@ -45,14 +235,120 @@ class _AttendanceHubScreenState extends State<AttendanceHubScreen>
           ],
         ),
       ),
-      body: TabBarView(
-        controller: _tabs,
-        children: const [
-          _TodayTab(),
-          _StudentsTab(),
-          _DefaultersTab(),
-          _OverallTab(),
+      body: Column(
+        children: [
+          _cohortBar(),
+          const Divider(height: 1),
+          Expanded(
+            child: TabBarView(
+              controller: _tabs,
+              children: [
+                _TodayTab(cohort: cohort),
+                _StudentsTab(cohort: cohort),
+                _DefaultersTab(cohort: cohort),
+                _OverallTab(cohort: cohort, courses: _courses),
+              ],
+            ),
+          ),
         ],
+      ),
+    );
+  }
+
+  /// Academic year + multi-select courses, applied to every tab below.
+  Widget _cohortBar() {
+    final theme = Theme.of(context);
+
+    if (_loadingFilters) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 18),
+        child: Center(
+          child: SizedBox(
+              width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+        ),
+      );
+    }
+    if (_filterError != null) {
+      return Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(children: [
+          Icon(Icons.error_outline, size: 18, color: theme.colorScheme.error),
+          const SizedBox(width: 8),
+          Expanded(child: Text(_filterError!, style: const TextStyle(fontSize: 12.5))),
+          TextButton(onPressed: _loadYears, child: const Text('Retry')),
+        ]),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          const gap = 8.0;
+          // Side by side when there's room, stacked on narrow phones.
+          final twoUp = constraints.maxWidth >= 420;
+          final w = twoUp ? (constraints.maxWidth - gap) / 2 : constraints.maxWidth;
+          return Wrap(
+            spacing: gap,
+            runSpacing: gap,
+            children: [
+              SizedBox(
+                width: w,
+                child: DropdownButtonFormField<String?>(
+                  isExpanded: true,
+                  initialValue: _yearId,
+                  decoration: const InputDecoration(
+                    labelText: 'Academic Year',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.calendar_today_outlined, size: 17),
+                  ),
+                  items: [
+                    const DropdownMenuItem<String?>(
+                        value: null, child: Text('All years')),
+                    ..._years.map((y) => DropdownMenuItem<String?>(
+                          value: y['id'] as String?,
+                          child: Text('${y['academic_year_name'] ?? ''}',
+                              overflow: TextOverflow.ellipsis),
+                        )),
+                  ],
+                  onChanged: _onYearChanged,
+                ),
+              ),
+              SizedBox(
+                width: w,
+                child: InkWell(
+                  onTap: _loadingCourses || _courses.isEmpty ? null : _pickCourses,
+                  borderRadius: BorderRadius.circular(4),
+                  child: InputDecorator(
+                    decoration: InputDecoration(
+                      labelText: 'Courses',
+                      isDense: true,
+                      border: const OutlineInputBorder(),
+                      prefixIcon: const Icon(Icons.menu_book_outlined, size: 17),
+                      suffixIcon: const Icon(Icons.arrow_drop_down),
+                      helperText: _loadingCourses
+                          ? 'Loading…'
+                          : (_courses.isEmpty ? 'No courses in this year' : null),
+                    ),
+                    child: Text(
+                      _coursesLabel,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: _courseIds.isEmpty
+                            ? theme.colorScheme.onSurface.withValues(alpha: 0.6)
+                            : theme.colorScheme.onSurface,
+                        fontWeight:
+                            _courseIds.isEmpty ? FontWeight.normal : FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -158,7 +454,8 @@ class _AsyncList extends StatelessWidget {
 // ── Today tab ────────────────────────────────────────────────────────────────
 
 class _TodayTab extends StatefulWidget {
-  const _TodayTab();
+  final AttendanceCohort cohort;
+  const _TodayTab({required this.cohort});
   @override
   State<_TodayTab> createState() => _TodayTabState();
 }
@@ -178,11 +475,20 @@ class _TodayTabState extends State<_TodayTab>
     _load();
   }
 
+  @override
+  void didUpdateWidget(covariant _TodayTab old) {
+    super.didUpdateWidget(old);
+    if (old.cohort != widget.cohort) _load();
+  }
+
   Future<void> _load() async {
     if (!mounted) return;
     setState(() { _loading = true; _error = null; });
     try {
-      final data = await AcademyApiService.getInsightsToday();
+      final data = await AcademyApiService.getInsightsToday(
+        academicYearId: widget.cohort.yearId,
+        courseIds: widget.cohort.courseIds,
+      );
       if (!mounted) return;
       setState(() {
         _groups = (data['groups'] as Map?)?.cast<String, dynamic>() ?? {};
@@ -277,7 +583,8 @@ class _TodayTabState extends State<_TodayTab>
 // ── Students tab ───────────────────────────────────────────────────────────────
 
 class _StudentsTab extends StatefulWidget {
-  const _StudentsTab();
+  final AttendanceCohort cohort;
+  const _StudentsTab({required this.cohort});
   @override
   State<_StudentsTab> createState() => _StudentsTabState();
 }
@@ -298,11 +605,20 @@ class _StudentsTabState extends State<_StudentsTab>
     _load();
   }
 
+  @override
+  void didUpdateWidget(covariant _StudentsTab old) {
+    super.didUpdateWidget(old);
+    if (old.cohort != widget.cohort) _load();
+  }
+
   Future<void> _load() async {
     if (!mounted) return;
     setState(() { _loading = true; _error = null; });
     try {
-      final data = await AcademyApiService.getInsightsStudents();
+      final data = await AcademyApiService.getInsightsStudents(
+        academicYearId: widget.cohort.yearId,
+        courseIds: widget.cohort.courseIds,
+      );
       if (!mounted) return;
       setState(() {
         _all = ((data['students'] as List?) ?? []).cast<Map<String, dynamic>>();
@@ -387,7 +703,8 @@ class _StudentsTabState extends State<_StudentsTab>
 // ── Defaulters tab ───────────────────────────────────────────────────────────
 
 class _DefaultersTab extends StatefulWidget {
-  const _DefaultersTab();
+  final AttendanceCohort cohort;
+  const _DefaultersTab({required this.cohort});
   @override
   State<_DefaultersTab> createState() => _DefaultersTabState();
 }
@@ -407,11 +724,20 @@ class _DefaultersTabState extends State<_DefaultersTab>
     _load();
   }
 
+  @override
+  void didUpdateWidget(covariant _DefaultersTab old) {
+    super.didUpdateWidget(old);
+    if (old.cohort != widget.cohort) _load();
+  }
+
   Future<void> _load() async {
     if (!mounted) return;
     setState(() { _loading = true; _error = null; });
     try {
-      final data = await AcademyApiService.getInsightsDefaulters();
+      final data = await AcademyApiService.getInsightsDefaulters(
+        academicYearId: widget.cohort.yearId,
+        courseIds: widget.cohort.courseIds,
+      );
       if (!mounted) return;
       setState(() {
         _list = ((data['defaulters'] as List?) ?? []).cast<Map<String, dynamic>>();
@@ -465,21 +791,21 @@ class _DefaultersTabState extends State<_DefaultersTab>
 // export that mirrors the currently-applied filters.
 
 class _OverallTab extends StatefulWidget {
-  const _OverallTab();
+  /// Academic year + courses come from the screen-level filter above the tabs.
+  final AttendanceCohort cohort;
+  /// Course list for the selected year, so the tab can name what it filtered by.
+  final List<Map<String, dynamic>> courses;
+
+  const _OverallTab({required this.cohort, required this.courses});
+
   @override
   State<_OverallTab> createState() => _OverallTabState();
 }
 
 class _OverallTabState extends State<_OverallTab>
     with AutomaticKeepAliveClientMixin {
-  // Filter option sources
-  List<Map<String, dynamic>> _years = [];
-  List<Map<String, dynamic>> _courses = [];
-  bool _filtersLoading = true;
-
-  // Selected filters
-  String? _yearId;
-  String? _courseId;
+  // Row-level filters that remain local to this tab. Academic year and course
+  // moved up to the screen-level cohort bar.
   DateTime? _fromDate;
   DateTime? _toDate;
   String? _status; // present | absent
@@ -498,72 +824,36 @@ class _OverallTabState extends State<_OverallTab>
   bool get wantKeepAlive => true;
 
   @override
-  void initState() {
-    super.initState();
-    _loadFilters();
-  }
-
-  @override
   void dispose() {
     _searchCtrl.dispose();
     super.dispose();
   }
 
-  Future<void> _loadFilters() async {
-    setState(() { _filtersLoading = true; });
-    try {
-      final years = await AcademyApiService.getAcademicYears();
-      if (!mounted) return;
-      setState(() {
-        _years = years;
-        _filtersLoading = false;
-      });
-      await _loadCourses(); // pre-load the course list for the (empty) year filter
-      // Intentionally NO initial fetch: the user must pick at least one filter
-      // and tap Apply. Loading every record up front is slow and can OOM the
-      // app on large academies.
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _error = e.toString().replaceFirst('Exception: ', '');
-        _filtersLoading = false;
-      });
+  /// Changing the screen-level cohort invalidates any results already on screen,
+  /// so they are cleared and the admin re-applies against the new cohort.
+  @override
+  void didUpdateWidget(covariant _OverallTab old) {
+    super.didUpdateWidget(old);
+    if (old.cohort != widget.cohort && _hasQueried) {
+      setState(() { _records = []; _hasQueried = false; _error = null; });
     }
   }
 
-  /// True when the user has narrowed the query at all. We refuse to fetch the
-  /// whole table unfiltered, so Apply is disabled until this is true.
+  /// True when the query is narrowed at all — by the screen-level cohort or by
+  /// this tab's own row filters. We refuse to fetch the whole table unfiltered,
+  /// so Apply stays disabled until this is true.
   bool get _hasAnyFilter =>
-      _yearId != null ||
-      _courseId != null ||
+      !widget.cohort.isEmpty ||
       _fromDate != null ||
       _toDate != null ||
       (_status != null && _status!.isNotEmpty) ||
       _searchCtrl.text.trim().isNotEmpty;
 
-  /// Courses for the currently selected academic year (all years when none).
-  Future<void> _loadCourses() async {
-    try {
-      final list = await AcademyApiService.getCourses(academicYearId: _yearId);
-      if (!mounted) return;
-      setState(() {
-        _courses = list.cast<Map<String, dynamic>>();
-        // Drop a course selection that no longer belongs to the chosen year.
-        if (_courseId != null &&
-            !_courses.any((c) => c['id'] == _courseId)) {
-          _courseId = null;
-        }
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _courses = []);
-    }
-  }
-
   Future<void> _load() async {
     if (!mounted) return;
     if (!_hasAnyFilter) {
-      _snack('Select at least one filter (year, course, date range, status, or search) before applying.');
+      _snack('Select an academic year or courses above, or a date range, status, '
+          'or search below, before applying.');
       return;
     }
     if (_fromDate != null && _toDate != null && _fromDate!.isAfter(_toDate!)) {
@@ -573,8 +863,8 @@ class _OverallTabState extends State<_OverallTab>
     setState(() { _loading = true; _error = null; _hasQueried = true; });
     try {
       final records = await AcademyApiService.getOverallAttendance(
-        academicYearId: _yearId,
-        courseId: _courseId,
+        academicYearId: widget.cohort.yearId,
+        courseIds: widget.cohort.courseIds,
         search: _searchCtrl.text.trim().isEmpty ? null : _searchCtrl.text.trim(),
         fromDate: _fromDate == null ? null : _ymd(_fromDate!),
         toDate: _toDate == null ? null : _ymd(_toDate!),
@@ -589,11 +879,6 @@ class _OverallTabState extends State<_OverallTab>
         _loading = false;
       });
     }
-  }
-
-  Future<void> _onYearChanged(String? id) async {
-    setState(() => _yearId = id);
-    await _loadCourses();
   }
 
   Future<void> _pickFromDate() async {
@@ -618,10 +903,11 @@ class _OverallTabState extends State<_OverallTab>
     if (picked != null && mounted) setState(() => _toDate = picked);
   }
 
+  /// Clears this tab's own filters. The screen-level academic year and courses
+  /// are deliberately left alone — they scope every tab, so clearing them from
+  /// inside one tab would silently change the other three.
   void _clearFilters() {
     setState(() {
-      _yearId = null;
-      _courseId = null;
       _fromDate = null;
       _toDate = null;
       _status = null;
@@ -632,7 +918,6 @@ class _OverallTabState extends State<_OverallTab>
       _hasQueried = false;
       _error = null;
     });
-    _loadCourses();
   }
 
   Future<void> _export() async {
@@ -672,9 +957,8 @@ class _OverallTabState extends State<_OverallTab>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    if (_filtersLoading) {
-      return const Center(child: CircularProgressIndicator());
-    }
+    // The year/course dropdowns this tab used to load for itself now live in the
+    // screen-level bar, so there is nothing to wait for before painting.
     return Column(
       children: [
         _filterBar(),
@@ -728,8 +1012,8 @@ class _OverallTabState extends State<_OverallTab>
                 spacing: spacing,
                 runSpacing: spacing,
                 children: [
-                  _yearDropdown(itemW),
-                  _courseDropdown(itemW),
+                  // Academic year and courses live in the screen-level bar above
+                  // the tabs — they scope every tab, not just this one.
                   _dateChip(itemW, isFrom: true),
                   _dateChip(itemW, isFrom: false),
                   _statusDropdown(itemW),
@@ -777,52 +1061,9 @@ class _OverallTabState extends State<_OverallTab>
     );
   }
 
-  Widget _yearDropdown(double width) {
-    return SizedBox(
-      width: width,
-      child: DropdownButtonFormField<String?>(
-        isExpanded: true,
-        initialValue: _yearId,
-        decoration: const InputDecoration(
-          labelText: 'Academic Year',
-          isDense: true,
-          border: OutlineInputBorder(),
-        ),
-        items: [
-          const DropdownMenuItem<String?>(value: null, child: Text('All years')),
-          ..._years.map((y) => DropdownMenuItem<String?>(
-                value: y['id'] as String?,
-                child: Text('${y['academic_year_name'] ?? ''}',
-                    overflow: TextOverflow.ellipsis),
-              )),
-        ],
-        onChanged: _onYearChanged,
-      ),
-    );
-  }
-
-  Widget _courseDropdown(double width) {
-    return SizedBox(
-      width: width,
-      child: DropdownButtonFormField<String?>(
-        isExpanded: true,
-        initialValue: _courseId,
-        decoration: const InputDecoration(
-          labelText: 'Course',
-          isDense: true,
-          border: OutlineInputBorder(),
-        ),
-        items: [
-          const DropdownMenuItem<String?>(value: null, child: Text('All courses')),
-          ..._courses.map((c) => DropdownMenuItem<String?>(
-                value: c['id'] as String?,
-                child: Text('${c['name'] ?? ''}', overflow: TextOverflow.ellipsis),
-              )),
-        ],
-        onChanged: (v) => setState(() => _courseId = v),
-      ),
-    );
-  }
+  // _yearDropdown / _courseDropdown were removed: academic year and course
+  // selection moved to the screen-level cohort bar above the tabs, where the
+  // course picker is multi-select and scopes all four tabs.
 
   Widget _dateChip(double width, {required bool isFrom}) {
     final value = isFrom ? _fromDate : _toDate;
