@@ -34,6 +34,51 @@ function clampWindow(raw: unknown): number {
   return Math.max(7, Math.min(n, MAX_WINDOW));
 }
 
+// ── Cohort filter (academic year + courses) ─────────────────────────────────────
+//
+// The Attendance Reports screen picks an academic year and any number of courses
+// once, at the top, and every tab reports on that cohort. This narrows WHICH
+// STUDENTS are reported on; it deliberately does NOT narrow the academy's open
+// days, because open days are the attendance-% denominator and are a property of
+// the academy's calendar, not of a course. Filtering them by course would make
+// the same student's percentage change depending on which courses were ticked.
+
+export interface Cohort { yearId: string | null; courseIds: string[] }
+
+/** Read `?academic_year_id=` and `?course_ids=a,b,c` (or repeated `course_ids`). */
+function readCohort(q: Record<string, unknown>): Cohort {
+  const yearId = (q['academic_year_id'] as string | undefined)?.trim() || null;
+
+  const raw = q['course_ids'] ?? q['course_id'];
+  const list = Array.isArray(raw) ? raw : String(raw ?? '').split(',');
+  const courseIds = [...new Set(
+    list.map((v) => String(v).trim()).filter((v) => v !== ''),
+  )];
+
+  return { yearId, courseIds };
+}
+
+/**
+ * SQL predicates restricting the `students s` row set, appending to [params].
+ * Returns '' when nothing is selected, so the unfiltered query is unchanged.
+ */
+function cohortSql(c: Cohort, params: unknown[]): string {
+  const parts: string[] = [];
+  if (c.yearId) {
+    params.push(c.yearId);
+    parts.push(`AND s.academic_year_id = $${params.length}`);
+  }
+  if (c.courseIds.length) {
+    params.push(c.courseIds);
+    parts.push(`AND EXISTS (
+      SELECT 1 FROM student_courses sc
+      WHERE sc.student_id = s.id
+        AND sc.course_id = ANY($${params.length}::uuid[])
+        AND sc.status = 'active')`);
+  }
+  return parts.join('\n      ');
+}
+
 // ── Shared aggregation ──────────────────────────────────────────────────────────
 
 interface RawStudentAgg {
@@ -89,7 +134,7 @@ async function getOpenDays(
  * from the most recent open day. Computed in SQL via a window over open days.
  */
 async function aggregateStudents(
-  slug: string, windowDays: number, studentId?: string,
+  slug: string, windowDays: number, studentId?: string, cohort?: Cohort,
 ): Promise<RawStudentAgg[]> {
   const half = Math.floor(windowDays / 2);
   const params: unknown[] = [windowDays, half];
@@ -97,6 +142,9 @@ async function aggregateStudents(
   if (studentId) {
     params.push(studentId);
     studentFilter = `AND s.id = $${params.length}`;
+  }
+  if (cohort) {
+    studentFilter += `\n      ${cohortSql(cohort, params)}`;
   }
 
   return academyQuery<RawStudentAgg>(
@@ -161,8 +209,10 @@ async function aggregateStudents(
  * query so the main aggregation stays readable.
  */
 async function getStreaks(
-  slug: string, windowDays: number,
+  slug: string, windowDays: number, cohort?: Cohort,
 ): Promise<Map<string, number>> {
+  const params: unknown[] = [windowDays];
+  const cohortWhere = cohort ? cohortSql(cohort, params) : '';
   const rows = await academyQuery<{ student_id: string; streak: string }>(
     slug,
     `
@@ -188,8 +238,9 @@ async function getStreaks(
         WHERE EXISTS (SELECT 1 FROM present_dates p WHERE p.student_id = s.id AND p.date = r.date)
       ), (SELECT COUNT(*) FROM ranked))::int AS streak
     FROM students s
-    WHERE s.status = 'active'`,
-    [windowDays],
+    WHERE s.status = 'active'
+      ${cohortWhere}`,
+    params,
   );
   const m = new Map<string, number>();
   for (const r of rows) m.set(r.student_id, parseInt(r.streak, 10) || 0);
@@ -228,11 +279,12 @@ export async function getTodayActionList(
   try {
     const { academySlug } = req.academyUser!;
     const windowDays = clampWindow(req.query['window']);
+    const cohort = readCohort(req.query as Record<string, unknown>);
 
     const [open, aggs, streaks] = await Promise.all([
       getOpenDays(academySlug, windowDays),
-      aggregateStudents(academySlug, windowDays),
-      getStreaks(academySlug, windowDays),
+      aggregateStudents(academySlug, windowDays, undefined, cohort),
+      getStreaks(academySlug, windowDays, cohort),
     ]);
 
     if (open.total === 0) {
@@ -291,11 +343,12 @@ export async function getStudentScores(
   try {
     const { academySlug } = req.academyUser!;
     const windowDays = clampWindow(req.query['window']);
+    const cohort = readCohort(req.query as Record<string, unknown>);
 
     const [open, aggs, streaks] = await Promise.all([
       getOpenDays(academySlug, windowDays),
-      aggregateStudents(academySlug, windowDays),
-      getStreaks(academySlug, windowDays),
+      aggregateStudents(academySlug, windowDays, undefined, cohort),
+      getStreaks(academySlug, windowDays, cohort),
     ]);
 
     const students = aggs.map((r) => {
@@ -322,46 +375,279 @@ export async function getStudentScores(
 
 // ── GET /:studentId/score — full breakdown for one student ───────────────────────
 
+/**
+ * The reporting period for the single-student detail screen.
+ *
+ * Two ways to ask for one, in priority order:
+ *   ?from=YYYY-MM-DD&to=YYYY-MM-DD   explicit range (what the month picker sends)
+ *   ?window=<days>                   rolling N days back from today (the default,
+ *                                    and what every other tab uses)
+ *
+ * Resolving the rolling window to explicit dates here means the rest of the
+ * endpoint has exactly one code path, and the response can always tell the app
+ * precisely which dates it is showing — the old response only carried a day
+ * count, which is why the screen could not label its own period.
+ */
+interface Period { from: string; to: string; label: string; windowDays: number }
+
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'];
+
+function ymd(d: Date): string {
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+}
+
+/**
+ * Human label for a range. A range that covers exactly one calendar month reads
+ * as "August 2026"; anything else spells out both ends, so the admin is never
+ * looking at an unlabelled figure.
+ */
+function periodLabel(from: string, to: string): string {
+  const f = new Date(`${from}T00:00:00Z`);
+  const t = new Date(`${to}T00:00:00Z`);
+  const sameMonth = f.getUTCFullYear() === t.getUTCFullYear()
+    && f.getUTCMonth() === t.getUTCMonth();
+  const isFullMonth = sameMonth
+    && f.getUTCDate() === 1
+    && t.getUTCDate() === new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() + 1, 0)).getUTCDate();
+
+  if (isFullMonth) return `${MONTHS[f.getUTCMonth()]} ${f.getUTCFullYear()}`;
+  const fmt = (d: Date) => `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()].slice(0, 3)} ${d.getUTCFullYear()}`;
+  return `${fmt(f)} – ${fmt(t)}`;
+}
+
+function resolvePeriod(q: Record<string, unknown>): Period {
+  const from = isoDateOrNull(q['from']);
+  const to   = isoDateOrNull(q['to']);
+
+  if (from && to && from <= to) {
+    const days = Math.round(
+      (new Date(`${to}T00:00:00Z`).getTime() - new Date(`${from}T00:00:00Z`).getTime())
+      / 86_400_000,
+    ) + 1;
+    return { from, to, label: periodLabel(from, to), windowDays: days };
+  }
+
+  // Rolling window, matching what the other tabs do. CURRENT_DATE on the DB is
+  // UTC, so deriving "today" in UTC here keeps the default identical to before.
+  const windowDays = clampWindow(q['window']);
+  const today = new Date();
+  const start = new Date(today.getTime() - windowDays * 86_400_000);
+  return {
+    from: ymd(start),
+    to: ymd(today),
+    label: `Last ${windowDays} days`,
+    windowDays,
+  };
+}
+
+/** One row per academy open day in the period, with this student's status (null = absent). */
+interface DailyRow { date: Date | string; status: string | null; time_in: string | null }
+
+/**
+ * The student's day-by-day record across the period.
+ *
+ * Every academy open day is returned, not just the days the student has a row
+ * for — the LEFT JOIN is what makes a missing row read as an absence, which is
+ * the same denominator the other tabs use. One query then feeds the counts, the
+ * streak, the weekday buckets AND the trend chart, so all four are guaranteed
+ * to agree with each other.
+ */
+async function getStudentDailySeries(
+  slug: string, studentId: string, p: Period,
+): Promise<DailyRow[]> {
+  return academyQuery<DailyRow>(
+    slug,
+    `WITH open AS (
+       SELECT DISTINCT date
+       FROM attendance
+       WHERE status <> 'holiday'
+         AND date >= $1::date AND date <= $2::date
+     )
+     SELECT o.date, a.status, a.time_in::text AS time_in
+     FROM open o
+     LEFT JOIN attendance a
+       ON a.student_id = $3 AND a.date = o.date AND a.status <> 'holiday'
+     ORDER BY o.date`,
+    [p.from, p.to, studentId],
+  );
+}
+
+/** Name, ID, active course(s) and academic year — the header context. */
+async function getStudentHeader(
+  slug: string, studentId: string,
+): Promise<{ name: string; academic_year: string | null; course_name: string | null } | null> {
+  return academyQueryOne(
+    slug,
+    `SELECT TRIM(s.first_name || ' ' || s.last_name) AS name,
+            ay.academic_year_name AS academic_year,
+            (
+              SELECT STRING_AGG(c.name, ', ' ORDER BY c.name)
+              FROM student_courses sc
+              JOIN courses c ON c.id = sc.course_id
+              WHERE sc.student_id = s.id AND sc.status = 'active'
+            ) AS course_name
+     FROM students s
+     LEFT JOIN academic_years ay ON ay.id = s.academic_year_id
+     WHERE s.id = $1`,
+    [studentId],
+  );
+}
+
+/**
+ * Derive every fact the pure scoring core needs from the daily series.
+ *
+ * Doing this in Node rather than SQL keeps the single-student path off the
+ * shared aggregation helpers (which the Today/Students/Defaulters tabs use and
+ * which only understand a rolling window), and guarantees the numbers on screen
+ * are the same ones the chart is drawn from.
+ */
+function factsFromSeries(
+  studentId: string, rows: DailyRow[],
+): { facts: StudentAttendanceFacts; weekday: WeekdayBuckets } {
+  const attended = (s: string | null): boolean => s === 'present' || s === 'late';
+
+  const openDays    = rows.length;
+  const presentDays = rows.filter((r) => r.status === 'present').length;
+  const lateDays    = rows.filter((r) => r.status === 'late').length;
+
+  // Chronological halves, for the recent-vs-prior trend the core expects.
+  const half        = Math.floor(openDays / 2);
+  const prior       = rows.slice(0, half);
+  const recent      = rows.slice(half);
+  const pct = (list: DailyRow[]): number =>
+    list.length === 0 ? 0 : (list.filter((r) => attended(r.status)).length / list.length) * 100;
+
+  // Trailing run of open days with no present/late row.
+  let streak = 0;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    if (attended(rows[i].status)) break;
+    streak++;
+  }
+
+  // Days since last seen, measured from the period's end so it stays meaningful
+  // when the admin is looking at a past month rather than today.
+  const lastSeen = [...rows].reverse().find((r) => attended(r.status));
+  const asDate = (d: Date | string): Date => (d instanceof Date ? d : new Date(String(d)));
+  const daysSinceLastSeen = lastSeen && rows.length
+    ? Math.round(
+        (asDate(rows[rows.length - 1].date).getTime() - asDate(lastSeen.date).getTime())
+        / 86_400_000,
+      )
+    : null;
+
+  // Weekday buckets, index 0 = Monday … 6 = Sunday, matching the pure core.
+  const weekday: WeekdayBuckets = { absences: Array(7).fill(0), openDays: Array(7).fill(0) };
+  for (const r of rows) {
+    const dow = (asDate(r.date).getUTCDay() + 6) % 7; // Sun=0 → Mon=0
+    weekday.openDays[dow]++;
+    if (!attended(r.status)) weekday.absences[dow]++;
+  }
+
+  return {
+    facts: {
+      studentId,
+      openDays,
+      presentDays,
+      lateDays,
+      absentDays: Math.max(0, openDays - presentDays - lateDays),
+      daysSinceLastSeen,
+      currentAbsenceStreak: streak,
+      recentAttendancePct: pct(recent),
+      priorAttendancePct: pct(prior),
+    },
+    weekday,
+  };
+}
+
+/** Weekly roll-up of the daily series, for the trend chart's coarser view. */
+function weeklyBuckets(rows: DailyRow[]): Array<{
+  week_start: string; open_days: number; attended: number; pct: number;
+}> {
+  const asDate = (d: Date | string): Date => (d instanceof Date ? d : new Date(String(d)));
+  const buckets = new Map<string, { open: number; att: number }>();
+
+  for (const r of rows) {
+    const d = asDate(r.date);
+    // Monday of that week.
+    const monday = new Date(d.getTime() - ((d.getUTCDay() + 6) % 7) * 86_400_000);
+    const key = ymd(monday);
+    const b = buckets.get(key) ?? { open: 0, att: 0 };
+    b.open++;
+    if (r.status === 'present' || r.status === 'late') b.att++;
+    buckets.set(key, b);
+  }
+
+  return [...buckets.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([week_start, b]) => ({
+      week_start,
+      open_days: b.open,
+      attended: b.att,
+      pct: b.open ? Math.round((b.att / b.open) * 1000) / 10 : 0,
+    }));
+}
+
 export async function getStudentScoreDetail(
   req: Request, res: Response, next: NextFunction,
 ): Promise<void> {
   try {
     const { academySlug } = req.academyUser!;
     const studentId = req.params['studentId'];
-    const windowDays = clampWindow(req.query['window']);
+    const period = resolvePeriod(req.query as Record<string, unknown>);
 
-    const [open, aggs, streaks, weekday] = await Promise.all([
-      getOpenDays(academySlug, windowDays),
-      aggregateStudents(academySlug, windowDays, studentId),
-      getStreaks(academySlug, windowDays),
-      getWeekdayBuckets(academySlug, windowDays, studentId),
+    const [header, rows] = await Promise.all([
+      getStudentHeader(academySlug, studentId),
+      getStudentDailySeries(academySlug, studentId, period),
     ]);
+    if (!header) return next(new AppError('Student not found', 404));
 
-    const r = aggs[0];
-    if (!r) return next(new AppError('Student not found', 404));
-
-    const facts = toFacts(r, open.total, open.recent, open.prior, streaks.get(studentId) ?? 0);
-    const score = computeAttendanceScore(facts);
-    const risk = assessRisk(facts);
+    const { facts, weekday } = factsFromSeries(studentId, rows);
+    const score    = computeAttendanceScore(facts);
+    const risk     = assessRisk(facts);
     const patterns = detectPatterns(facts, weekday);
-    const stage = defaulterStage(score.attendancePct);
+    const stage    = defaulterStage(score.attendancePct);
+
+    const onTime = facts.presentDays;
+    const attendedDays = facts.presentDays + facts.lateDays;
 
     res.json({
       success: true,
       data: {
-        student_id: r.student_id,
-        name: `${r.first_name} ${r.last_name}`.trim(),
-        window_days: windowDays,
-        open_days: open.total,
+        student_id: studentId,
+        name: header.name,
+        course: header.course_name ?? '',
+        academic_year: header.academic_year ?? '',
+        period: {
+          from: period.from,
+          to: period.to,
+          label: period.label,
+          days: period.windowDays,
+        },
+        // Kept for backward compatibility with any caller still reading these.
+        window_days: period.windowDays,
+        open_days: facts.openDays,
         score,
         risk,
         patterns,
         defaulter: stage,
         counts: {
-          present: r.present_days,
-          late: r.late_days,
+          working_days: facts.openDays,
+          present: facts.presentDays,
+          late: facts.lateDays,
           absent: facts.absentDays,
+          attended: attendedDays,
+          on_time: onTime,
+          on_time_pct: attendedDays ? Math.round((onTime / attendedDays) * 1000) / 10 : 0,
           days_since_last_seen: facts.daysSinceLastSeen,
+        },
+        trend: {
+          daily: rows.map((r) => ({
+            date: isoDate(r.date),
+            status: r.status ?? 'absent',
+            time_in: hhmm(r.time_in),
+          })),
+          weekly: weeklyBuckets(rows),
         },
       },
     });
@@ -376,11 +662,12 @@ export async function getDefaulters(
   try {
     const { academySlug } = req.academyUser!;
     const windowDays = clampWindow(req.query['window']);
+    const cohort = readCohort(req.query as Record<string, unknown>);
 
     const [open, aggs, streaks] = await Promise.all([
       getOpenDays(academySlug, windowDays),
-      aggregateStudents(academySlug, windowDays),
-      getStreaks(academySlug, windowDays),
+      aggregateStudents(academySlug, windowDays, undefined, cohort),
+      getStreaks(academySlug, windowDays, cohort),
     ]);
 
     const defaulters = aggs
@@ -544,15 +831,17 @@ export async function getOverallAttendance(
     const { academySlug } = req.academyUser!;
     const {
       academic_year_id,
-      course_id,
       student,        // free-text: id OR name
       from,           // range start 'YYYY-MM-DD' (inclusive)
       to,             // range end   'YYYY-MM-DD' (inclusive)
       status,         // present | absent
     } = req.query as Record<string, string>;
+    // course_ids / course_id are read via readCohort below.
 
     const yearId   = academic_year_id?.trim() || null;
-    const courseId = course_id?.trim() || null;
+    // Courses are multi-select on the Attendance Reports screen. `course_id` is
+    // still honoured so any older client keeps working.
+    const courseIds = readCohort(req.query as Record<string, unknown>).courseIds;
     const search   = student?.trim() || null;
     const fromDate = isoDateOrNull(from);
     const toDate   = isoDateOrNull(to);
@@ -575,9 +864,11 @@ export async function getOverallAttendance(
     const dateScope: string[] = [`a.status <> 'holiday'`]; // attendance-row predicates shared by both queries
 
     if (yearId)   { cohortParams.push(yearId);   cohort.push(`s.academic_year_id = $${cohortParams.length}`); }
-    if (courseId) { cohortParams.push(courseId); cohort.push(`EXISTS (
+    if (courseIds.length) { cohortParams.push(courseIds); cohort.push(`EXISTS (
         SELECT 1 FROM student_courses sc
-        WHERE sc.student_id = s.id AND sc.course_id = $${cohortParams.length} AND sc.status = 'active')`); }
+        WHERE sc.student_id = s.id
+          AND sc.course_id = ANY($${cohortParams.length}::uuid[])
+          AND sc.status = 'active')`); }
     if (search) {
       cohortParams.push(`%${search}%`);
       cohort.push(`(s.id ILIKE $${cohortParams.length}
@@ -669,47 +960,11 @@ export async function getOverallAttendance(
   } catch (err) { next(err); }
 }
 
-// ── Weekday buckets (for pattern detection on the detail screen) ─────────────────
-
-async function getWeekdayBuckets(
-  slug: string, windowDays: number, studentId: string,
-): Promise<WeekdayBuckets> {
-  // EXTRACT(DOW): 0=Sun..6=Sat. Remap to 0=Mon..6=Sun to match the pure core.
-  const rows = await academyQuery<{ dow: string; open_days: string; absences: string }>(
-    slug,
-    `
-    WITH open AS (
-      SELECT DISTINCT date FROM attendance
-      WHERE status <> 'holiday'
-        AND date >= CURRENT_DATE - MAKE_INTERVAL(days => $1)
-        AND date <= CURRENT_DATE
-    ),
-    present_dates AS (
-      SELECT DISTINCT date FROM attendance
-      WHERE student_id = $2 AND status IN ('present','late')
-        AND date >= CURRENT_DATE - MAKE_INTERVAL(days => $1)
-    )
-    SELECT EXTRACT(DOW FROM o.date)::int AS dow,
-           COUNT(*)::int AS open_days,
-           COUNT(*) FILTER (WHERE p.date IS NULL)::int AS absences
-    FROM open o
-    LEFT JOIN present_dates p ON p.date = o.date
-    GROUP BY EXTRACT(DOW FROM o.date)`,
-    [windowDays, studentId],
-  );
-
-  const buckets: WeekdayBuckets = {
-    absences: [0, 0, 0, 0, 0, 0, 0],
-    openDays: [0, 0, 0, 0, 0, 0, 0],
-  };
-  for (const r of rows) {
-    const sunFirst = parseInt(r.dow, 10);       // 0=Sun..6=Sat
-    const monFirst = (sunFirst + 6) % 7;         // 0=Mon..6=Sun
-    buckets.openDays[monFirst] = parseInt(r.open_days, 10);
-    buckets.absences[monFirst] = parseInt(r.absences, 10);
-  }
-  return buckets;
-}
+// Weekday buckets used to be fetched with a dedicated SQL query here. The
+// single-student report now derives them from its daily series in
+// `factsFromSeries`, which is the only caller that ever needed them and which
+// also guarantees the buckets agree with the counts and the trend chart drawn
+// from the same rows.
 
 // ── Small shared types/helpers ──────────────────────────────────────────────────
 
