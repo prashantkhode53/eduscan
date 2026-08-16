@@ -500,7 +500,7 @@ function isoDateOrNull(raw: unknown): string | null {
 const IST_OFFSET_MINS = 5 * 60 + 30;
 
 /**
- * 'HH:MM' in IST from a pg TIME string ('HH:MM:SS') or null.
+ * 'hh:mm AM/PM' in IST from a pg TIME string ('HH:MM:SS') or null.
  *
  * `attendance.time_in` / `time_out` are TIME columns with no timezone, written
  * from the server clock — UTC on both Render and the Hetzner container. Every
@@ -509,7 +509,13 @@ const IST_OFFSET_MINS = 5 * 60 + 30;
  * one path that returned the raw stored value, so First Check-In / Last
  * Check-Out read 5h30m early in both the grid and the Excel export.
  *
- * Wraps into the next day, so 20:00 UTC renders as 01:30 rather than 25:30.
+ * The 12-hour rendering matches `fmtTimeOfDay`, so the report now reads the
+ * same way as every other time in the app. Both the on-screen grid and the
+ * .xlsx consume this one field verbatim.
+ *
+ * Wraps into the next day, so 20:00 UTC renders as 01:30 AM rather than 25:30.
+ * Midnight and noon render as 12:00 AM / 12:00 PM, not 00:00.
+ *
  * Durations are unaffected: `duration_mins` is a difference of two times, and
  * shifting both ends by the same offset leaves it unchanged.
  */
@@ -522,9 +528,13 @@ function hhmm(t: string | null): string {
   const m = parseInt(parts[1], 10);
   if (Number.isNaN(h) || Number.isNaN(m)) return String(t);
 
-  const ist = (h * 60 + m + IST_OFFSET_MINS) % (24 * 60);
-  const pad = (n: number): string => String(n).padStart(2, '0');
-  return `${pad(Math.floor(ist / 60))}:${pad(ist % 60)}`;
+  const ist   = (h * 60 + m + IST_OFFSET_MINS) % (24 * 60);
+  const istH  = Math.floor(ist / 60);
+  const istM  = ist % 60;
+  const ampm  = istH >= 12 ? 'PM' : 'AM';
+  const h12   = istH % 12 === 0 ? 12 : istH % 12;
+  const pad   = (n: number): string => String(n).padStart(2, '0');
+  return `${pad(h12)}:${pad(istM)} ${ampm}`;
 }
 
 export async function getOverallAttendance(
