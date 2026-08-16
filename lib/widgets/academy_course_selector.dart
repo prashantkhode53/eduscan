@@ -41,6 +41,12 @@ class AcademyCourseSelector extends StatefulWidget {
   /// Subject IDs that are permanently enrolled and cannot be deselected.
   final Set<String> lockedSubjectIds;
 
+  /// Enrolled subject IDs whose fee a super admin has re-opened for editing.
+  /// These stay in [lockedSubjectIds] — they are still enrolled and still
+  /// guarded on deselect — but their fee renders as an editable field instead
+  /// of a frozen badge.
+  final Set<String> feeUnlockedSubjectIds;
+
   const AcademyCourseSelector({
     super.key,
     required this.loading,
@@ -58,6 +64,7 @@ class AcademyCourseSelector extends StatefulWidget {
     required this.onRetry,
     this.nextLabel,
     this.lockedSubjectIds = const {},
+    this.feeUnlockedSubjectIds = const {},
   });
 
   @override
@@ -313,6 +320,7 @@ class _AcademyCourseSelectorState extends State<AcademyCourseSelector> {
                     selectedSubjectFees: widget.selectedSubjectFees,
                     feeControllers: _ctrls,
                     lockedSubjectIds: widget.lockedSubjectIds,
+                    feeUnlockedSubjectIds: widget.feeUnlockedSubjectIds,
                     onExpand: () =>
                         widget.onCourseExpand(filtered[i]['id'] as String),
                     onSubjectToggle: widget.onSubjectToggle,
@@ -392,6 +400,7 @@ class _CourseCard extends StatelessWidget {
   final Map<String, double> selectedSubjectFees;
   final Map<String, TextEditingController> feeControllers;
   final Set<String> lockedSubjectIds;
+  final Set<String> feeUnlockedSubjectIds;
   final VoidCallback onExpand;
   final void Function(String subjectId, double defaultFee, bool selected) onSubjectToggle;
   final void Function(String subjectId, double fee) onSubjectFeeChanged;
@@ -407,6 +416,7 @@ class _CourseCard extends StatelessWidget {
     required this.selectedSubjectFees,
     required this.feeControllers,
     this.lockedSubjectIds = const {},
+    this.feeUnlockedSubjectIds = const {},
     required this.onExpand,
     required this.onSubjectToggle,
     required this.onSubjectFeeChanged,
@@ -562,6 +572,7 @@ class _CourseCard extends StatelessWidget {
                       subject: sub,
                       isSelected: isSelected,
                       isLocked: isLocked,
+                      isFeeUnlocked: feeUnlockedSubjectIds.contains(subId),
                       defaultFee: defaultFee,
                       feeController: feeControllers[subId],
                       onToggle: (selected) =>
@@ -584,6 +595,7 @@ class _SubjectRow extends StatelessWidget {
   final Map<String, dynamic> subject;
   final bool isSelected;
   final bool isLocked;
+  final bool isFeeUnlocked;
   final double defaultFee;
   final TextEditingController? feeController;
   final void Function(bool selected) onToggle;
@@ -593,6 +605,7 @@ class _SubjectRow extends StatelessWidget {
     required this.subject,
     required this.isSelected,
     this.isLocked = false,
+    this.isFeeUnlocked = false,
     required this.defaultFee,
     required this.feeController,
     required this.onToggle,
@@ -649,11 +662,39 @@ class _SubjectRow extends StatelessWidget {
                       ),
                     ),
                   ),
+                // Explains WHY an already-enrolled fee is editable, so the admin
+                // doesn't mistake it for a bug.
+                if (isLocked && isFeeUnlocked)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                    margin: const EdgeInsets.only(left: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.lock_open_outlined,
+                            size: 10, color: Colors.orange.shade800),
+                        const SizedBox(width: 2),
+                        Text(
+                          'Fee unlocked',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: Colors.orange.shade800,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
               ],
             ),
           ),
 
-          // Fee: read-only badge for locked enrolled subjects; editable for new selections
+          // Fee: read-only badge for locked enrolled subjects; editable for new
+          // selections AND for enrolled subjects a super admin has unlocked.
           if (!isSelected)
             Text(
               '₹${defaultFee.toStringAsFixed(0)}',
@@ -661,7 +702,7 @@ class _SubjectRow extends StatelessWidget {
                   fontSize: 13,
                   color: theme.colorScheme.onSurface.withValues(alpha: 0.5)),
             )
-          else if (isLocked)
+          else if (isLocked && !isFeeUnlocked)
             GestureDetector(
               onTap: () => ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(

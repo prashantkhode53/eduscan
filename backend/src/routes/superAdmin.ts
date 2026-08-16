@@ -16,6 +16,13 @@ import {
   getFaceThreshold,
   setFaceThreshold,
 } from '../controllers/superAdminController';
+import {
+  listAcademyYears,
+  listAcademyCourses,
+  listCourseUnlockRoster,
+  unlockCourseFees,
+  relockCourseFees,
+} from '../controllers/superAdminController.courseUnlocks';
 
 const router = Router();
 router.use(authMiddleware); // all routes require super admin JWT
@@ -33,6 +40,15 @@ router.patch ('/:slug/block-user',     blockAcademyUser);
 router.patch ('/:slug/reset-password', resetAcademyAdminPassword);
 router.get   ('/:slug/face-threshold', getFaceThreshold);
 router.put   ('/:slug/face-threshold', setFaceThreshold);
+
+// Course fee unlocks — let the academy admin edit a student's frozen subject fees.
+router.get   ('/:slug/academic-years',                listAcademyYears);
+router.get   ('/:slug/courses',                       listAcademyCourses);
+router.get   ('/:slug/courses/:courseId/students',    listCourseUnlockRoster);
+router.post  ('/:slug/course-unlocks',                unlockCourseFees);
+router.delete('/:slug/course-unlocks',                relockCourseFees);
+
+// Keep last: '/:slug' would otherwise swallow the more specific paths above.
 router.delete('/:slug',                deleteAcademy);
 
 export default router;

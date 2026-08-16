@@ -4,6 +4,7 @@ import 'package:path_provider/path_provider.dart';
 import '../services/super_admin_api_service.dart';
 import '../utils/file_opener.dart';
 import 'academy_students_screen.dart';
+import 'unlock_courses_screen.dart';
 
 class AcademyDetailScreen extends StatefulWidget {
   final Map<String, dynamic> academy;
@@ -617,6 +618,18 @@ class _AcademyDetailScreenState extends State<AcademyDetailScreen> {
                       context,
                       MaterialPageRoute(
                           builder: (_) => AcademyStudentsScreen(
+                              slug: _slug, academyName: _name)),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  _ActionButton(
+                    icon: Icons.lock_open_outlined,
+                    label: 'Unlock Courses',
+                    color: Colors.orange.shade700,
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => UnlockCoursesScreen(
                               slug: _slug, academyName: _name)),
                     ),
                   ),
