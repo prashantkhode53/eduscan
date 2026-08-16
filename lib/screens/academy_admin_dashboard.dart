@@ -566,7 +566,7 @@ class _HomeTabState extends State<_HomeTab> {
                 if (PlatformSupport.faceFeatures)
                   _QuickActionPrimary(
                     icon: Icons.face_outlined,
-                    label: 'Face Scan',
+                    label: 'Face Scan Attendance',
                     color: Colors.green,
                     onTap: () => Navigator.push(
                       context,
@@ -579,7 +579,7 @@ class _HomeTabState extends State<_HomeTab> {
                 // camera/ML-Kit dependency (server does all recognition).
                 _QuickActionPrimary(
                   icon: Icons.groups_2_outlined,
-                  label: 'One Click',
+                  label: 'One Click Attendance',
                   color: Colors.cyan.shade700,
                   onTap: () async {
                     await Navigator.push(
