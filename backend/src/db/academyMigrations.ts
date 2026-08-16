@@ -171,6 +171,23 @@ export async function reconcileAcademySchemas(): Promise<void> {
           ADD COLUMN IF NOT EXISTS locked_at TIMESTAMPTZ,
           ADD COLUMN IF NOT EXISTS locked_by TEXT
       `);
+      // course_fee_unlocks — super-admin grants that let the academy admin edit
+      // a student's already-assigned subject fees for ONE course. Absence of a
+      // row means locked, which is the default and the pre-existing behaviour.
+      await academyExec(slug, `
+        CREATE TABLE IF NOT EXISTS course_fee_unlocks (
+          id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          student_id  VARCHAR(20) REFERENCES students(id) ON DELETE CASCADE,
+          course_id   UUID REFERENCES courses(id) ON DELETE CASCADE,
+          unlocked_at TIMESTAMPTZ DEFAULT NOW(),
+          unlocked_by TEXT,
+          UNIQUE(student_id, course_id)
+        )
+      `);
+      await academyExec(slug, `
+        CREATE INDEX IF NOT EXISTS idx_cfu_student ON course_fee_unlocks(student_id);
+        CREATE INDEX IF NOT EXISTS idx_cfu_course  ON course_fee_unlocks(course_id)
+      `);
       // Receipt sequence + table for existing academies
       await academyExec(slug, `CREATE SEQUENCE IF NOT EXISTS fee_receipt_seq START 1 INCREMENT 1`);
       await academyExec(slug, `
@@ -649,6 +666,23 @@ export async function runAcademyMigrations(
       ALTER TABLE IF EXISTS courses
         ADD COLUMN IF NOT EXISTS fee_due_date DATE DEFAULT NULL
     `);
+
+    // ── Course fee unlocks ────────────────────────────────────────────────
+    // One row per (student, course) the super admin has opened up for fee
+    // editing. No row = locked, so every existing enrolment stays locked by
+    // default and nothing changes until a super admin grants an unlock.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS course_fee_unlocks (
+        id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        student_id  VARCHAR(20) REFERENCES students(id) ON DELETE CASCADE,
+        course_id   UUID REFERENCES courses(id) ON DELETE CASCADE,
+        unlocked_at TIMESTAMPTZ DEFAULT NOW(),
+        unlocked_by TEXT,
+        UNIQUE(student_id, course_id)
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_cfu_student ON course_fee_unlocks(student_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_cfu_course  ON course_fee_unlocks(course_id)`);
 
     await client.query('COMMIT');
     console.log(`[Migration] Schema "${slug}" created successfully`);

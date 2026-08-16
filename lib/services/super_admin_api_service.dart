@@ -172,4 +172,79 @@ class SuperAdminApiService {
     final data = _parse(res) as Map<String, dynamic>;
     return (data['face_threshold'] as num).toDouble();
   }
+
+  // ── Course fee unlocks ─────────────────────────────────────────────────────
+  // Let an academy admin edit a student's already-assigned subject fees for one
+  // course. The grant is per student AND per course, and persists until it is
+  // explicitly re-locked.
+
+  /// Academic years configured for [slug], newest first.
+  static Future<List<Map<String, dynamic>>> listAcademicYears(String slug) async {
+    final res = await _http
+        .get(Uri.parse('${ApiEndpoints.superAdminAcademies}/$slug/academic-years'),
+            headers: await _headers())
+        .timeout(_timeout);
+    return (_parse(res) as List).cast<Map<String, dynamic>>();
+  }
+
+  /// Active courses for [slug], optionally restricted to one academic year.
+  static Future<List<Map<String, dynamic>>> listCourses(
+    String slug, {
+    String? academicYearId,
+  }) async {
+    final uri = Uri.parse('${ApiEndpoints.superAdminAcademies}/$slug/courses').replace(
+      queryParameters: {
+        if (academicYearId != null && academicYearId.isNotEmpty)
+          'academic_year_id': academicYearId,
+      },
+    );
+    final res = await _http.get(uri, headers: await _headers()).timeout(_timeout);
+    return (_parse(res) as List).cast<Map<String, dynamic>>();
+  }
+
+  /// The course's active roster with each student's fee/unlock state.
+  ///
+  /// Returns `{course, students, count, unlocked}`; each student carries
+  /// `has_fees`, `is_unlocked`, `subject_count` and `total_fee`.
+  static Future<Map<String, dynamic>> listCourseUnlockRoster(
+    String slug,
+    String courseId,
+  ) async {
+    final res = await _http
+        .get(
+            Uri.parse(
+                '${ApiEndpoints.superAdminAcademies}/$slug/courses/$courseId/students'),
+            headers: await _headers())
+        .timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
+  /// Unlock [courseId] fee editing for [studentIds]. Returns the API payload
+  /// with `unlocked` and `skipped` id lists.
+  static Future<Map<String, dynamic>> unlockCourseFees(
+    String slug, {
+    required String courseId,
+    required List<String> studentIds,
+  }) async {
+    final res = await _http
+        .post(Uri.parse('${ApiEndpoints.superAdminAcademies}/$slug/course-unlocks'),
+            headers: await _headers(),
+            body: jsonEncode({'course_id': courseId, 'student_ids': studentIds}))
+        .timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
+
+  /// Re-lock [courseId] for [studentIds]. Fees already changed are left as-is.
+  static Future<Map<String, dynamic>> relockCourseFees(
+    String slug, {
+    required String courseId,
+    required List<String> studentIds,
+  }) async {
+    final res = await _http
+        .delete(Uri.parse('${ApiEndpoints.superAdminAcademies}/$slug/course-unlocks'),
+            headers: await _headers(),
+            body: jsonEncode({'course_id': courseId, 'student_ids': studentIds}))
+        .timeout(_timeout);
+    return _parse(res) as Map<String, dynamic>;
+  }
 }

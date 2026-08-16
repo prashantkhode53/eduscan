@@ -496,11 +496,35 @@ function isoDateOrNull(raw: unknown): string | null {
   return Number.isNaN(d.getTime()) ? null : s;
 }
 
-/** 'HH:MM' from a pg TIME string ('HH:MM:SS') or null. */
+/** IST is a fixed +05:30 from UTC — no DST, no historical drift. */
+const IST_OFFSET_MINS = 5 * 60 + 30;
+
+/**
+ * 'HH:MM' in IST from a pg TIME string ('HH:MM:SS') or null.
+ *
+ * `attendance.time_in` / `time_out` are TIME columns with no timezone, written
+ * from the server clock — UTC on both Render and the Hetzner container. Every
+ * other surface that shows these values already adds +05:30 on the way out
+ * (`fmtTimeOfDay` in the app, `to12Hour` for parent pushes); this report was the
+ * one path that returned the raw stored value, so First Check-In / Last
+ * Check-Out read 5h30m early in both the grid and the Excel export.
+ *
+ * Wraps into the next day, so 20:00 UTC renders as 01:30 rather than 25:30.
+ * Durations are unaffected: `duration_mins` is a difference of two times, and
+ * shifting both ends by the same offset leaves it unchanged.
+ */
 function hhmm(t: string | null): string {
   if (!t) return '';
   const parts = String(t).split(':');
-  return parts.length >= 2 ? `${parts[0]}:${parts[1]}` : String(t);
+  if (parts.length < 2) return String(t);
+
+  const h = parseInt(parts[0], 10);
+  const m = parseInt(parts[1], 10);
+  if (Number.isNaN(h) || Number.isNaN(m)) return String(t);
+
+  const ist = (h * 60 + m + IST_OFFSET_MINS) % (24 * 60);
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `${pad(Math.floor(ist / 60))}:${pad(ist % 60)}`;
 }
 
 export async function getOverallAttendance(

@@ -870,7 +870,23 @@ export async function getStudent(
       [id]
     );
 
-    res.json({ success: true, data: { ...student, enrolled_subjects: enrolledSubjects } });
+    // Courses a super admin has unlocked for this student. The edit screen uses
+    // these to decide which already-assigned subject fees are editable; every
+    // other enrolled course keeps its frozen, read-only fee.
+    const unlocks = await academyQuery<{ course_id: string }>(
+      academySlug,
+      `SELECT course_id FROM course_fee_unlocks WHERE student_id = $1`,
+      [id]
+    );
+
+    res.json({
+      success: true,
+      data: {
+        ...student,
+        enrolled_subjects:    enrolledSubjects,
+        fee_unlocked_courses: unlocks.map((u) => u.course_id),
+      },
+    });
   } catch (err) { next(err); }
 }
 
@@ -1057,13 +1073,32 @@ export async function updateStudent(
         const desiredIds   = selections.map(s => s.subject_id);
         const desiredIdSet = new Set(desiredIds);
 
-        // Upsert desired subjects — fee_amount is LOCKED after first assignment
+        // Has a super admin unlocked THIS course for THIS student? A row in
+        // course_fee_unlocks is the only thing that lets an existing
+        // fee_amount be rewritten. Checked per course inside the transaction,
+        // so a re-lock landing mid-request can't be raced past.
+        const { rows: unlockRows } = await client.query(
+          `SELECT 1 FROM course_fee_unlocks
+           WHERE student_id = $1 AND course_id = $2 LIMIT 1`,
+          [id, courseId]
+        );
+        const feesUnlocked = unlockRows.length > 0;
+
+        // Upsert desired subjects. fee_amount is LOCKED after first assignment
+        // — the DO UPDATE deliberately omits it — UNLESS the super admin has
+        // unlocked this course for this student, in which case the incoming
+        // fee overwrites the frozen one.
         for (const sel of selections) {
           await client.query(
-            `INSERT INTO student_subjects (student_id, subject_id, fee_amount, start_date, status)
-             VALUES ($1, $2, $3, CURRENT_DATE, 'active')
-             ON CONFLICT (student_id, subject_id) DO UPDATE
-               SET status = 'active', end_date = NULL`,
+            feesUnlocked
+              ? `INSERT INTO student_subjects (student_id, subject_id, fee_amount, start_date, status)
+                 VALUES ($1, $2, $3, CURRENT_DATE, 'active')
+                 ON CONFLICT (student_id, subject_id) DO UPDATE
+                   SET status = 'active', end_date = NULL, fee_amount = EXCLUDED.fee_amount`
+              : `INSERT INTO student_subjects (student_id, subject_id, fee_amount, start_date, status)
+                 VALUES ($1, $2, $3, CURRENT_DATE, 'active')
+                 ON CONFLICT (student_id, subject_id) DO UPDATE
+                   SET status = 'active', end_date = NULL`,
             [id, sel.subject_id, sel.fee_amount]
           );
         }

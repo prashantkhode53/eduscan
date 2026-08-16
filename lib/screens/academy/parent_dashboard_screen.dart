@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../config/app_mode.dart';
 import '../../providers/parent_auth_provider.dart';
 import '../../services/parent_api_service.dart';
 import '../../services/fcm_service.dart';
@@ -136,7 +137,10 @@ class _ParentDashboardScreenState extends State<ParentDashboardScreen> {
     if (!mounted) return;
     await context.read<ParentAuthProvider>().logout();
     if (!mounted) return;
-    Navigator.of(context).pushNamedAndRemoveUntil('/login', (_) => false);
+    // Parent APK -> '/parent/login'; Academy APK -> '/login'. Hardcoding
+    // '/login' sent the Parent build to the academy admin login on logout.
+    Navigator.of(context)
+        .pushNamedAndRemoveUntil(AppMode.loginRoute, (_) => false);
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────────

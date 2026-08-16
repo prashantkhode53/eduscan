@@ -62,6 +62,11 @@ class _AcademyStudentEditScreenState
   final Set<String> _expandedCourses = {};
   // Subject IDs permanently enrolled — cannot be deselected in the edit flow.
   final Set<String> _lockedSubjectIds = {};
+
+  // Enrolled subjects whose fee a super admin has re-opened for editing. These
+  // stay in _lockedSubjectIds (still enrolled, still guarded on deselect) — the
+  // only thing that changes is that their fee field is editable again.
+  final Set<String> _feeUnlockedSubjectIds = {};
   final Set<String> _subjectsLoadingFor = {};
   final Map<String, String> _subjectsError = {};
   bool _loadingCourses = false;
@@ -167,10 +172,21 @@ class _AcademyStudentEditScreenState
           .where((s) => s.status == 'active')
           .toList();
 
+      // Courses a super admin has unlocked for this student. Subject fees in
+      // these courses stay enrolled (badge, deselect guard) but become editable
+      // again — see Super Admin → Actions → Unlock Courses.
+      final unlockedCourseIds = ((studentData['fee_unlocked_courses'] as List?) ?? [])
+          .map((e) => e.toString())
+          .toSet();
+      final feeUnlockedSubjectIds = <String>{};
+
       final subjectFees = <String, double>{};
       final enrolledByCourse = <String, List<Map<String, dynamic>>>{};
       for (final s in enrolled) {
         subjectFees[s.subjectId] = s.feeAmount;
+        if (unlockedCourseIds.contains(s.courseId)) {
+          feeUnlockedSubjectIds.add(s.subjectId);
+        }
         enrolledByCourse.putIfAbsent(s.courseId, () => []).add({
           'id':          s.subjectId,
           'course_id':   s.courseId,
@@ -221,6 +237,9 @@ class _AcademyStudentEditScreenState
         _lockedSubjectIds
           ..clear()
           ..addAll(subjectFees.keys);
+        _feeUnlockedSubjectIds
+          ..clear()
+          ..addAll(feeUnlockedSubjectIds);
         _subjectsByCourse
           ..clear()
           ..addAll(enrolledByCourse);
@@ -885,6 +904,7 @@ class _AcademyStudentEditScreenState
             subjectsLoadingFor:  _subjectsLoadingFor,
             subjectsError:       _subjectsError,
             lockedSubjectIds:    _lockedSubjectIds,
+            feeUnlockedSubjectIds: _feeUnlockedSubjectIds,
             onCourseExpand:      _loadSubjects,
             onSubjectToggle: (subjectId, defaultFee, selected) async {
               if (!selected && _lockedSubjectIds.contains(subjectId)) {
